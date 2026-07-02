@@ -1,11 +1,17 @@
-# tailess
+<p align="center">
+  <img src="./assets/logo.svg" alt="tailess logo" width="120" height="120">
+</p>
 
-**Type-safe Tailwind CSS utility functions driven by your own config file.**
+<h1 align="center">tailess</h1>
 
-[![npm version](https://img.shields.io/npm/v/tailess.svg)](https://www.npmjs.com/package/tailess)
-[![minzipped size](https://img.shields.io/bundlephobia/minzip/tailess)](https://bundlephobia.com/package/tailess)
-[![CI](https://github.com/user01101111000/tailess/actions/workflows/ci.yml/badge.svg)](https://github.com/user01101111000/tailess/actions/workflows/ci.yml)
-[![license](https://img.shields.io/npm/l/tailess.svg)](./LICENSE)
+<p align="center"><strong>Type-safe Tailwind CSS utility functions driven by your own config file.</strong></p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/tailess"><img src="https://img.shields.io/npm/v/tailess.svg" alt="npm version"></a>
+  <a href="https://bundlejs.com/?q=tailess"><img src="https://img.shields.io/bundlejs/size/tailess" alt="bundle size"></a>
+  <a href="https://github.com/user01101111000/tailess/actions/workflows/ci.yml"><img src="https://github.com/user01101111000/tailess/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license"></a>
+</p>
 
 Tailwind v4 dropped the JS `tailwind.config` in favor of CSS-first `@theme`. `tailess`
 gives you back a tiny, framework-agnostic config (`tailess.config.ts`) whose values —
