@@ -27,6 +27,7 @@ helpers**. Declare a breakpoint once; get autocomplete and typo-checking at ever
 ## Contents
 
 - [Install](#install)
+- [Tailwind v4 setup (required)](#tailwind-v4-setup-required)
 - [Quick start](#quick-start)
 - [Config-driven type safety](#config-driven-type-safety)
 - [API](#api)
@@ -49,6 +50,60 @@ helpers**. Declare a breakpoint once; get autocomplete and typo-checking at ever
 npm install tailess
 # pnpm add tailess · yarn add tailess · bun add tailess
 ```
+
+## Tailwind v4 setup (required)
+
+> [!IMPORTANT]
+> On Tailwind v4 you **must** add the one-line integration below, or your prefixed
+> classes won't get any CSS. Skip it and `md:text-2xl`, `hover:opacity-100`, etc.
+> silently produce no styles.
+
+**Why.** Tailwind v4 generates CSS by scanning your source for **literal** class
+strings. `tailess` builds variant prefixes at runtime by concatenation, so
+`ss({ md: "text-2xl" })` becomes `"md:text-2xl"` only *when the code runs* — the
+full class `md:text-2xl` never appears literally in any file, so Tailwind never
+sees it and emits no CSS. (Unprefixed classes like `text-xl` still work, because
+those *do* appear literally.)
+
+**Fix.** Add the tailess PostCSS plugin to the `postcss.config.mjs` you already use
+for Tailwind, **before** `@tailwindcss/postcss`:
+
+```js
+// postcss.config.mjs
+export default {
+  plugins: {
+    "tailess/postcss": {},
+    "@tailwindcss/postcss": {},
+  },
+};
+```
+
+That's it — no CSS changes, no generated file, no scan command. On every build the
+plugin scans your source, enumerates the classes `tailess` produces, and injects
+them into Tailwind via `@source inline(...)`. It registers your source directories
+as watch dependencies, so new classes appear in dev without a restart.
+
+```js
+// Options (all optional):
+"tailess/postcss": {
+  content: ["./src", "./app"], // dirs/files to scan (default: cwd)
+  config: "./tailess.config.ts", // auto-detected otherwise
+  ignore: ["fixtures"],          // extra dir names to skip
+}
+```
+
+The plugin auto-detects a `tailess.config.{ts,js,mjs}` so custom state aliases
+(e.g. `groupHover → group-hover`) resolve correctly. Loading a **TypeScript** config
+needs [`jiti`](https://github.com/unjs/jiti) (`npm i -D jiti`); a `.js`/`.mjs`
+config needs nothing extra.
+
+> [!NOTE]
+> The scanner reads *literal* strings, so it deliberately over-approximates
+> ternaries and conditional objects (it emits every branch). It cannot recover
+> classes hidden behind a variable or an interpolated template
+> (`` ss({ md: `text-${size}` }) ``); for those, keep the class literal or add it to
+> a Tailwind [`@source inline(...)`](https://tailwindcss.com/docs/functions-and-directives#source-inline)
+> safelist.
 
 ## Quick start
 
