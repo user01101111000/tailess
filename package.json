@@ -1,0 +1,85 @@
+{
+  "name": "tailess",
+  "version": "0.0.0",
+  "description": "Type-safe Tailwind CSS utility functions driven by your own config file.",
+  "keywords": [
+    "tailwind",
+    "tailwindcss",
+    "utils",
+    "utilities",
+    "cn",
+    "clsx",
+    "tailwind-merge",
+    "responsive",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "user01101111000",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/user01101111000/tailess.git"
+  },
+  "homepage": "https://github.com/user01101111000/tailess#readme",
+  "bugs": {
+    "url": "https://github.com/user01101111000/tailess/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "check:exports": "attw --pack .",
+    "check:publish": "publint",
+    "prepublishOnly": "npm run build && npm run check:publish && npm run check:exports",
+    "release": "changeset publish",
+    "changeset": "changeset"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.3.1"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.4",
+    "@biomejs/biome": "^2.5.2",
+    "@changesets/cli": "^2.31.0",
+    "@types/node": "^26.1.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "publint": "^0.3.21",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
