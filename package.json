@@ -36,11 +36,28 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./postcss": {
+      "import": {
+        "types": "./dist/postcss/index.d.ts",
+        "default": "./dist/postcss/index.js"
+      },
+      "require": {
+        "types": "./dist/postcss/index.d.cts",
+        "default": "./dist/postcss/index.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "postcss": [
+        "./dist/postcss/index.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist"
   ],
@@ -57,7 +74,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "check:exports": "attw --pack .",
+    "check:exports": "attw --pack . --ignore-rules false-export-default",
     "check:publish": "publint",
     "prepublishOnly": "npm run build && npm run check:publish && npm run check:exports",
     "release": "changeset publish",
@@ -66,6 +83,14 @@
   "dependencies": {
     "clsx": "^2.1.1",
     "tailwind-merge": "^3.3.1"
+  },
+  "peerDependencies": {
+    "jiti": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "jiti": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.4",
