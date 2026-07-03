@@ -83,6 +83,12 @@ plugin scans your source, enumerates the classes `tailess` produces, and injects
 them into Tailwind via `@source inline(...)`. It registers your source directories
 as watch dependencies, so new classes appear in dev without a restart.
 
+**Custom breakpoints, too.** The plugin also mirrors your config's `screens` into
+an injected `@theme` block as `--breakpoint-<key>` values. So a **new** breakpoint
+(`3xl: "1600px"`) actually generates its `3xl:` / `max-3xl:` utilities, and
+**overriding** a default (`md: "867px"`) changes the media query Tailwind emits for
+every `md:` class. Breakpoints you don't set keep Tailwind's built-in defaults.
+
 ```js
 // Options (all optional):
 "tailess/postcss": {
@@ -143,7 +149,7 @@ Create a `tailess.config.ts` and register your custom keys with `defineConfig`:
 import { defineConfig } from "tailess";
 
 export default defineConfig({
-  screens: { xs: "480px", "3xl": "1600px" }, // additive to sm/md/lg/xl/2xl
+  screens: { xs: "480px", "3xl": "1600px" }, // add to sm/md/lg/xl/2xl (a matching key overrides)
   states: { groupHover: "group-hover" },     // additive to hover/focus/dark/...
   base: "antialiased",                        // always prepended by cn()
 });
@@ -173,8 +179,10 @@ st.cn("text-black");
 
 ## API
 
-All examples below use the top-level (default-config) helpers. A `createTailess(config)`
-instance exposes the same functions with your custom keys typed in.
+All examples below use the top-level (default-config) helpers — these autocomplete
+the standard breakpoint/state keys (`sm`…`2xl`, `hover`, `dark`, …). A
+`createTailess(config)` instance exposes the same functions with your custom keys
+typed in on top.
 
 ### `cn` — compose & merge
 

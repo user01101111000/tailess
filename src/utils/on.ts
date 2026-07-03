@@ -1,5 +1,6 @@
 import type { ClassValue } from "clsx";
 import type { ResolvedConfig } from "../config/types.js";
+import { ownOr } from "../internal/lookup.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
 
@@ -19,6 +20,6 @@ import { withPrefix } from "./prefix.js";
  */
 export function on(config: ResolvedConfig, state: string | string[], classes: ClassValue): string {
   const states = Array.isArray(state) ? state : [state];
-  const prefix = states.map((s) => config.states[s] ?? s).join(":");
+  const prefix = states.map((s) => ownOr(config.states, s, s)).join(":");
   return cn(withPrefix(prefix, classes));
 }

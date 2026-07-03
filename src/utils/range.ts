@@ -4,6 +4,10 @@ import { isDev } from "../internal/env.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
 
+/** Own-key membership test that ignores inherited `Object.prototype` members. */
+const hasScreen = (config: ResolvedConfig, key: string): boolean =>
+  Object.hasOwn(config.screens, key);
+
 function warnUnknown(fn: string, key: string): void {
   if (isDev) {
     console.warn(`[tailess] ${fn}(): breakpoint "${key}" is not defined in config.screens.`);
@@ -21,7 +25,7 @@ function warnUnknown(fn: string, key: string): void {
  * // => "max-md:hidden"  (applies below the md breakpoint)
  */
 export function until(config: ResolvedConfig, key: string, classes: ClassValue): string {
-  if (!(key in config.screens)) warnUnknown("until", key);
+  if (!hasScreen(config, key)) warnUnknown("until", key);
   return cn(withPrefix(`max-${key}`, classes));
 }
 
@@ -39,7 +43,7 @@ export function between(
   max: string,
   classes: ClassValue,
 ): string {
-  if (!(min in config.screens)) warnUnknown("between", min);
-  if (!(max in config.screens)) warnUnknown("between", max);
+  if (!hasScreen(config, min)) warnUnknown("between", min);
+  if (!hasScreen(config, max)) warnUnknown("between", max);
   return cn(withPrefix(`${min}:max-${max}`, classes));
 }

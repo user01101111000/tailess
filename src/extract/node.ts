@@ -60,6 +60,13 @@ export interface ScanResult {
   files: string[];
   /** Absolute root directories that were walked (for watch/dependency tracking). */
   dirs: string[];
+  /**
+   * Breakpoints declared in the user's config (raw, pre-merge). Only keys the
+   * user set are included — overrides of a default (e.g. `md`) and brand-new
+   * keys (e.g. `3xl`) — so a consumer can emit them as Tailwind `@theme`
+   * `--breakpoint-*` values while untouched keys keep Tailwind's defaults.
+   */
+  screens: Record<string, string>;
 }
 
 /** Recursively collect files under `root` whose extension is in `extensions`. */
@@ -159,5 +166,5 @@ export async function scanProject(options: ScanOptions = {}): Promise<ScanResult
     for (const cls of extractClasses(code, config)) classes.add(cls);
   }
 
-  return { classes: [...classes].sort(), files, dirs };
+  return { classes: [...classes].sort(), files, dirs, screens: config.screens ?? {} };
 }

@@ -1,4 +1,5 @@
 import { defaultStates } from "../config/defaults.js";
+import { ownOr } from "../internal/lookup.js";
 import { extractStrings, isArrayLiteral, parseObject, type RawCall, scanCalls } from "./scan.js";
 
 /**
@@ -38,7 +39,7 @@ function tokensFrom(argText: string | undefined): string[] {
  */
 export function extractClasses(code: string, options: ExtractOptions = {}): string[] {
   const states = { ...defaultStates, ...options.states } as Record<string, string>;
-  const resolveState = (key: string): string => states[key] ?? key;
+  const resolveState = (key: string): string => ownOr(states, key, key);
 
   const out = new Set<string>();
   const add = (prefix: string, tokens: string[]): void => {
