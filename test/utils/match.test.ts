@@ -26,4 +26,11 @@ describe("match", () => {
     const state = "off" as "off" | "on";
     expect(match(state, { off: false, on: "block" }, "fallback")).toBe("");
   });
+
+  it("falls back for Object.prototype keys instead of returning inherited members", () => {
+    // Regression: `key in options` matched inherited keys, so "toString" resolved
+    // to Object.prototype.toString rather than the fallback.
+    const key = "toString" as "primary";
+    expect(match(key, { primary: "bg-blue-600" }, "bg-gray-200")).toBe("bg-gray-200");
+  });
 });

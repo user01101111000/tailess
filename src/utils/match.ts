@@ -1,4 +1,5 @@
 import type { ClassValue } from "clsx";
+import { ownOr } from "../internal/lookup.js";
 import { cn } from "./cn.js";
 
 /**
@@ -22,6 +23,6 @@ export function match<K extends string>(
   options: Record<K, ClassValue>,
   fallback?: ClassValue,
 ): string {
-  const value = key in options ? options[key] : fallback;
-  return cn((value ?? fallback) as ClassValue);
+  const value = ownOr(options as Record<string, ClassValue>, key, fallback);
+  return cn(value ?? fallback);
 }
