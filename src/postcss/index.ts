@@ -1,3 +1,4 @@
+import type { TailessConfig } from "../config/types.js";
 import { scanProject } from "../extract/node.js";
 
 /**
@@ -6,24 +7,35 @@ import { scanProject } from "../extract/node.js";
 export interface TailessPostcssOptions {
   /** Files or directories to scan. Defaults to the current working directory. */
   content?: string[];
-  /** Path to your tailess config. Auto-detected (`tailess.config.*`) when omitted. */
-  config?: string;
+  /**
+   * Path to your tailess config, or an inline config object. Auto-detected
+   * (`tailess.config.*`) when omitted.
+   */
+  config?: string | TailessConfig;
   /** Extra directory names to skip while scanning. */
   ignore?: string[];
 }
 
 // Minimal structural types for the slice of the PostCSS API we use, so tailess
 // needs no dependency on `postcss` itself (the host build always provides it).
+interface Declaration {
+  prop: string;
+  value: string;
+}
 interface AtRule {
   name: string;
   params: string;
+  append(node: Declaration): void;
 }
 interface Root {
   prepend(node: AtRule): void;
 }
 interface Helpers {
   result: { messages: Array<Record<string, unknown>> };
-  postcss: { atRule(defaults: { name: string; params: string }): AtRule };
+  postcss: {
+    atRule(defaults: { name: string; params: string }): AtRule;
+    decl(defaults: { prop: string; value: string }): Declaration;
+  };
 }
 interface Plugin {
   postcssPlugin: string;
@@ -38,6 +50,12 @@ interface Plugin {
  * them. This plugin scans your source, enumerates those classes, and injects a
  * single `@source inline(...)` directive so Tailwind generates their CSS — with
  * no `@source` line, no generated file, and no separate scan step.
+ *
+ * It also mirrors any custom breakpoints from your tailess config into a
+ * `@theme` block (`--breakpoint-<key>`), so overriding a default (e.g.
+ * `md: "867px"`) or adding a new key (e.g. `3xl: "1600px"`) actually changes
+ * Tailwind's generated media queries. Breakpoints you don't set keep Tailwind's
+ * own defaults.
  *
  * Register it **before** `@tailwindcss/postcss`:
  *
@@ -55,7 +73,7 @@ const tailessPostcss = Object.assign(
   (options: TailessPostcssOptions = {}): Plugin => ({
     postcssPlugin: "tailess",
     async Once(root, helpers) {
-      const { classes, dirs } = await scanProject({
+      const { classes, dirs, screens } = await scanProject({
         paths: options.content,
         config: options.config,
         ignore: options.ignore,
@@ -68,6 +86,18 @@ const tailessPostcss = Object.assign(
             params: `inline(${JSON.stringify(classes.join(" "))})`,
           }),
         );
+      }
+
+      // Mirror config breakpoints into Tailwind's theme so overrides and custom
+      // keys take effect. Only user-set keys are emitted; the rest fall back to
+      // Tailwind's defaults.
+      const screenEntries = Object.entries(screens);
+      if (screenEntries.length > 0) {
+        const theme = helpers.postcss.atRule({ name: "theme", params: "" });
+        for (const [key, value] of screenEntries) {
+          theme.append(helpers.postcss.decl({ prop: `--breakpoint-${key}`, value }));
+        }
+        root.prepend(theme);
       }
 
       // Let the bundler watch source dirs so a new class in a `.tsx` retriggers
