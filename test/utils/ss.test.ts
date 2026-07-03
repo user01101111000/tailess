@@ -55,4 +55,12 @@ describe("ss", () => {
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
   });
+
+  it("treats Object.prototype keys as literal prefixes", () => {
+    // Regression: `config.states[key] ?? key` returned the inherited function
+    // for keys like "toString", producing a garbage prefix.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(ss(defaultConfig, { base: "flex", toString: "block" })).toBe("flex toString:block");
+    warn.mockRestore();
+  });
 });

@@ -27,4 +27,12 @@ describe("on", () => {
     const config = resolveConfig({ states: { groupHover: "group-hover" } });
     expect(on(config, ["dark", "groupHover"], "block")).toBe("dark:group-hover:block");
   });
+
+  it("treats Object.prototype keys as literal prefixes, not inherited members", () => {
+    // Regression: `config.states[key] ?? key` used to return the inherited
+    // function for keys like "toString"/"constructor", producing garbage.
+    expect(on(defaultConfig, "toString", "block")).toBe("toString:block");
+    expect(on(defaultConfig, "constructor", "block")).toBe("constructor:block");
+    expect(on(defaultConfig, ["dark", "toString"], "block")).toBe("dark:toString:block");
+  });
 });

@@ -1,6 +1,7 @@
 import type { ClassValue } from "clsx";
 import type { ResolvedConfig } from "../config/types.js";
 import { isDev } from "../internal/env.js";
+import { ownOr } from "../internal/lookup.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
 
@@ -52,7 +53,7 @@ export function ss(config: ResolvedConfig, input: SsInput): string {
   for (const key of Object.keys(config.states)) {
     if (known.has(key)) continue;
     known.add(key);
-    push(config.states[key] ?? key, input[key]);
+    push(ownOr(config.states, key, key), input[key]);
   }
 
   // Keys not registered in the config: still emit, but flag in dev — only when
@@ -66,7 +67,7 @@ export function ss(config: ResolvedConfig, input: SsInput): string {
         `[tailess] ss(): key "${key}" is not defined in config.screens or config.states.`,
       );
     }
-    push(config.states[key] ?? key, value);
+    push(ownOr(config.states, key, key), value);
   }
 
   return cn(...parts);
