@@ -1,5 +1,49 @@
 # tailess
 
+## 0.3.0
+
+### Minor Changes
+
+- 0c0471d: Config breakpoints now drive Tailwind's generated media queries.
+
+  Previously the `screens` values in your tailess config were only used as variant
+  prefix _keys_ — the pixel values were never emitted, so overriding a default
+  (`md: "867px"`) or adding a custom key (`3xl: "1600px"`) had no effect on the CSS
+  Tailwind produced.
+
+  The `tailess/postcss` plugin now mirrors your config's `screens` into a `@theme`
+  block as `--breakpoint-<key>` declarations. Keys you set win (override or add);
+  keys you don't set keep Tailwind's own defaults. The plugin's `config` option
+  also accepts an inline `TailessConfig` object, not just a path.
+
+### Patch Changes
+
+- 5ecf0d7: Fix variant keys that collide with `Object.prototype` members.
+
+  Resolving a state/variant key looked it up with `map[key] ?? key`, which returns
+  an inherited function for keys like `toString`, `constructor`, `valueOf`, or
+  `hasOwnProperty` instead of falling back. `on("toString", "block")` produced
+  `"function toString() { [native code] }:block"` rather than treating the key as a
+  literal prefix.
+
+  Lookups now read own properties only (`Object.hasOwn`), so any unregistered key —
+  including prototype names — behaves like a normal unknown key across `on`, `ss`,
+  `match`, the `until`/`between` warnings, and the class scanner.
+
+- 267b294: Fix missing autocomplete for breakpoint/state keys on the default helpers.
+
+  The top-level `ss`, `responsive`, `on`, `until`, and `between` are bound to the
+  zero-config instance, whose config type is the wide `Record<string, string>`.
+  `keyof` on that is `string`, so `"sm" | "md" | ... | string` collapsed to plain
+  `string` and every literal key suggestion was lost — you got no autocomplete and
+  unknown keys were silently accepted.
+
+  Key resolution now filters out the `string`/`number` index signature via a
+  `LiteralKeys` helper, so the default breakpoints (`sm`/`md`/`lg`/`xl`/`2xl`) and
+  states always autocomplete, and any custom keys from a `createTailess(config)`
+  instance are added on top. Unknown keys are now a compile-time error, matching
+  the existing dev-time runtime warning.
+
 ## 0.2.0
 
 ### Minor Changes
