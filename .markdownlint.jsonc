@@ -12,5 +12,9 @@
   "MD013": false,
   // The API-reference table has cells of very different lengths; padding every
   // row to the longest cell would hurt readability more than it helps.
-  "MD060": false
+  "MD060": false,
+
+  // CHANGELOG.md (changesets) repeats "Minor Changes"/"Patch Changes" under each
+  // version heading — legitimate, since they live under different parents.
+  "MD024": { "siblings_only": true }
 }
