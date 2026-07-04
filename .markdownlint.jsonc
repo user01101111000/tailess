@@ -1,0 +1,16 @@
+{
+  // markdownlint config — silences editor warnings that conflict with this
+  // project's intentional README style. See https://github.com/DavidAnson/markdownlint
+  "default": true,
+
+  // The centered title, logo, and status badges are raw HTML by design.
+  "MD033": false,
+  // ...which also means the file can't start with a Markdown H1.
+  "MD041": false,
+
+  // Prose, code samples, and the API table intentionally run past 80 columns.
+  "MD013": false,
+  // The API-reference table has cells of very different lengths; padding every
+  // row to the longest cell would hurt readability more than it helps.
+  "MD060": false
+}
