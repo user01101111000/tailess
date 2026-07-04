@@ -177,6 +177,54 @@ st.cn("text-black");
 // => "antialiased text-black"   (config.base is prepended)
 ```
 
+### Custom keys on the **top-level** helpers
+
+Prefer importing `ss`, `on`, `responsive`, `until`, `between` straight from
+`"tailess"` (no per-file instance)? Those are pre-built exports, so they can't read
+your runtime config on their own — teach them your keys in two one-time steps:
+
+**1. Register the types** — augment the `Register` interface once (any `.d.ts` on
+your `include` path):
+
+```ts
+// tailess.d.ts
+import type config from "./tailess.config";
+
+declare module "tailess" {
+  interface Register {
+    config: typeof config;
+  }
+}
+```
+
+**2. Register the runtime** — call `configureTailess` once at your app's entry, so
+the helpers apply your `base`, order custom breakpoints, and stop warning about
+custom keys:
+
+```ts
+// app entry (e.g. app/layout.tsx, main.tsx)
+import { configureTailess } from "tailess";
+import config from "./tailess.config";
+
+configureTailess(config);
+```
+
+Now the top-level helpers are fully wired to your config:
+
+```ts
+import { ss } from "tailess";
+
+ss({ base: "text-sm", xs: "block", "3xl": "text-2xl", groupHover: "underline" });
+// => "antialiased text-sm xs:block 3xl:text-2xl group-hover:underline"
+//    ✅ "xs" / "3xl" / "groupHover" autocompleted — ss({ "4xl": ... }) is a type error
+```
+
+> Skip either step and only the other half works: without the augmentation you lose
+> autocomplete/type-checking; without `configureTailess` the runtime falls back to
+> the default config (no `base`, custom keys emitted with a dev warning). The
+> `createTailess(config)` instance above needs neither — use it if you'd rather not
+> touch global state.
+
 ## API
 
 All examples below use the top-level (default-config) helpers — these autocomplete
@@ -194,6 +242,9 @@ import { cn } from "tailess";
 cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
 // => "py-1 bg-blue-500 px-4"   (px-2 dropped in favor of px-4)
 ```
+
+Once you set a `base` via `configureTailess` (or use an instance's `st.cn`), it is
+prepended to every `cn` call — the place to inject shared design-system tokens.
 
 ### `ss` — group by breakpoint/state
 
@@ -359,13 +410,14 @@ const config = defineConfig({ states: { groupHover: "group-hover" } });
 | `aria`                     | `(name, classes) => string`                          | Prefix classes with an `aria-*` attribute variant.                          |
 | `match`                    | `(key, options, fallback?) => string`                | Pick a class from a lookup keyed by a variant prop. Exhaustive at compile time. |
 | `createTailess`            | `(config?) => Tailess`                               | Factory returning all helpers bound to your config, plus `.config`.         |
+| `configureTailess`         | `(config) => Tailess`                                | Point the top-level helpers at a custom config at runtime (call once).      |
 | `defineConfig`             | `(config) => config`                                 | Type-safe identity helper for `tailess.config.ts`.                          |
 | `resolveConfig`            | `(config?) => ResolvedConfig`                        | Merge a user config onto the defaults (used internally).                    |
 | `withPrefix`               | `(prefix, value) => string`                          | Low-level: apply an arbitrary variant prefix to every token.                |
 | `st`                       | `Tailess`                                            | Default zero-config instance backing the top-level helpers.                 |
 
 Also exported: `defaultConfig`, `defaultScreens`, `defaultStates`, and the types
-`Tailess`, `TailessConfig`, `ResolvedConfig`, `Screens`, `States`, `ResponsiveMap`, `SsInput`.
+`Tailess`, `TailessConfig`, `ResolvedConfig`, `RegisteredConfig`, `Register`, `Screens`, `States`, `ResponsiveMap`, `SsInput`.
 
 ## TypeScript
 

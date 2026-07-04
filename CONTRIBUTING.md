@@ -29,7 +29,7 @@ You may contribute:
 
 Source lives in `src/`, tests mirror it in `test/`:
 
-```
+```text
 src/
   config/     # config types, defaults, resolve, defineConfig
   core/       # createTailess factory

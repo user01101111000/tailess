@@ -40,9 +40,19 @@ type SsInput<C extends TailessConfig> = { base?: ClassValue } & Partial<
  * breakpoint/state keys you declared are type-safe at every call site.
  */
 export interface Tailess<C extends TailessConfig = TailessConfig> {
-  /** The fully-resolved config powering this instance. */
+  /** The fully-resolved config powering this instance (screens, states, base). */
   readonly config: ResolvedConfig;
-  /** Join + Tailwind-merge class names, prepending `config.base`. */
+  /**
+   * Conditionally join class names (via `clsx`) and resolve Tailwind conflicts
+   * (via `tailwind-merge`), so the last utility in a conflicting group wins. This
+   * instance's `config.base` is always prepended, making it the place to inject
+   * shared design-system tokens.
+   *
+   * @example
+   * const st = createTailess({ base: "antialiased" });
+   * st.cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
+   * // => "antialiased py-1 bg-blue-500 px-4"  (px-2 dropped, base prepended)
+   */
   cn: (...inputs: ClassValue[]) => string;
   /**
    * Group Tailwind classes by breakpoint/state in a readable object instead of
@@ -60,27 +70,84 @@ export interface Tailess<C extends TailessConfig = TailessConfig> {
    * // => "flex text-sm md:text-base 3xl:text-2xl"
    */
   ss: (input: SsInput<C>) => string;
-  /** Build a mobile-first responsive class string. Keys are typed from config. */
+  /**
+   * Build a mobile-first responsive class string from a `base` value plus
+   * per-breakpoint overrides. Breakpoints are emitted in this instance's
+   * `config.screens` order and merged via `cn`. Breakpoint keys are typed from
+   * config, so custom keys autocomplete and typos fail at compile time.
+   *
+   * @example
+   * const st = createTailess({ screens: { "3xl": "1600px" } });
+   * st.responsive("text-sm", { md: "text-lg", "3xl": "text-2xl" });
+   * // => "text-sm md:text-lg 3xl:text-2xl"
+   */
   responsive: (base: ClassValue, variants?: Partial<Record<ScreenKey<C>, ClassValue>>) => string;
-  /** Prefix classes with one or more configured state variants. Keys are typed from config. */
+  /**
+   * Prefix classes with one or more configured state variants. State keys resolve
+   * through `config.states`, so aliases (e.g. `groupHover` -> `group-hover`) work.
+   * Passing an array stacks the variants in order to express compound variants
+   * like `dark:hover:`. Keys are typed from config.
+   *
+   * @example
+   * st.on("hover", "bg-blue-600 text-white"); // => "hover:bg-blue-600 hover:text-white"
+   * st.on(["dark", "hover"], "bg-black");     // => "dark:hover:bg-black"
+   */
   on: (state: StateKey<C> | StateKey<C>[], classes: ClassValue) => string;
-  /** Apply classes below a breakpoint (`max-*`). Keys are typed from config. */
+  /**
+   * Apply classes only *below* a breakpoint, using Tailwind's `max-*` variant —
+   * the complement of {@link Tailess.responsive} (which is min-width). The
+   * breakpoint key is typed from config.
+   *
+   * @example
+   * st.until("md", "hidden"); // => "max-md:hidden"  (applies below the md breakpoint)
+   */
   until: (key: ScreenKey<C>, classes: ClassValue) => string;
-  /** Apply classes between two breakpoints (inclusive min, exclusive max). Keys typed from config. */
+  /**
+   * Apply classes only *between* two breakpoints (inclusive of `min`, exclusive of
+   * `max`), by combining a min-width variant with a `max-*` variant. Both keys are
+   * typed from config.
+   *
+   * @example
+   * st.between("sm", "lg", "block"); // => "sm:max-lg:block"  (sm up to, not including, lg)
+   */
   between: (min: ScreenKey<C>, max: ScreenKey<C>, classes: ClassValue) => string;
-  /** Pick a class from a lookup keyed by a variant prop. Exhaustive at compile time. */
+  /**
+   * Pick a class value from a lookup keyed by a discriminant (a variant prop,
+   * size, tone...). `options` must cover every possible value of `key`, so the
+   * mapping is exhaustive at compile time; an unmatched `key` at runtime falls
+   * back to `fallback` (or `""`). The result runs through `cn`.
+   *
+   * @example
+   * st.match(size, { sm: "text-sm", md: "text-base", lg: "text-lg" });
+   * // size === "md" => "text-base"
+   * st.match(tone, { primary: "bg-blue-600", danger: "bg-red-600" }, "bg-gray-200");
+   */
   match: <K extends string>(
     key: K,
     options: Record<K, ClassValue>,
     fallback?: ClassValue,
   ) => string;
-  /** Prefix classes with a `data-*` attribute variant. */
+  /**
+   * Prefix classes with a `data-*` attribute variant. Pass a `value` for the
+   * `data-[name=value]:` form (common with headless UI libraries like Radix), or
+   * pass `null`/`undefined` for the attribute-presence form `data-[name]:`.
+   *
+   * @example
+   * st.data("state", "open", "opacity-100");      // => "data-[state=open]:opacity-100"
+   * st.data("disabled", null, "pointer-events-none"); // => "data-[disabled]:pointer-events-none"
+   */
   data: (
     name: string,
     value: string | number | boolean | null | undefined,
     classes: ClassValue,
   ) => string;
-  /** Prefix classes with an `aria-*` attribute variant. */
+  /**
+   * Prefix classes with an `aria-*` attribute variant, e.g. `aria-expanded:`,
+   * `aria-selected:`, `aria-checked:`.
+   *
+   * @example
+   * st.aria("expanded", "rotate-180"); // => "aria-expanded:rotate-180"
+   */
   aria: (name: string, classes: ClassValue) => string;
 }
 

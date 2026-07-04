@@ -1,0 +1,13 @@
+# Normalize all text files to LF in the repo and working tree, so tooling
+# (Biome, etc.) behaves the same on Windows and CI. Without this, Windows
+# checkouts with core.autocrlf=true get CRLF and `npm run lint` reports every
+# file as a format error even though CI (LF) is clean.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.svg text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
