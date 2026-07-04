@@ -1,5 +1,5 @@
 import type { TailessConfig } from "../config/types.js";
-import { scanProject } from "../extract/node.js";
+import { scanProject, writeConfigDts } from "../extract/node.js";
 
 /**
  * Options for the tailess PostCSS plugin.
@@ -14,6 +14,16 @@ export interface TailessPostcssOptions {
   config?: string | TailessConfig;
   /** Extra directory names to skip while scanning. */
   ignore?: string[];
+  /**
+   * Auto-generate a `.d.ts` that teaches the top-level `"tailess"` helpers your
+   * config's custom keys, so `import { ss } from "tailess"` autocompletes and
+   * type-checks them with no hand-written `declare module`.
+   *
+   * `true` (default) writes `tailess-env.d.ts` in the project root; pass a path
+   * string to change the location, or `false` to disable. Add the file to
+   * `.gitignore` (or commit it) — it is regenerated on every build.
+   */
+  types?: boolean | string;
 }
 
 // Minimal structural types for the slice of the PostCSS API we use, so tailess
@@ -73,11 +83,20 @@ const tailessPostcss = Object.assign(
   (options: TailessPostcssOptions = {}): Plugin => ({
     postcssPlugin: "tailess",
     async Once(root, helpers) {
-      const { classes, dirs, screens } = await scanProject({
+      const { classes, dirs, screens, states } = await scanProject({
         paths: options.content,
         config: options.config,
         ignore: options.ignore,
       });
+
+      // Generate the type-augmentation so `import { ss } from "tailess"` knows the
+      // config's custom keys. Best-effort: a write failure never breaks the build.
+      if (options.types !== false) {
+        await writeConfigDts(
+          { screens, states },
+          typeof options.types === "string" ? options.types : undefined,
+        ).catch(() => {});
+      }
 
       if (classes.length > 0) {
         root.prepend(

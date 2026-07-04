@@ -142,10 +142,12 @@ import { cn, responsive, on, until, between, match, data, aria } from "tailess";
 
 ## Config-driven type safety
 
-Create a `tailess.config.ts` and register your custom keys with `defineConfig`:
+**Write only your config. The PostCSS plugin does the rest** — `import { ss } from "tailess"`
+picks up every custom key you declare, autocompleted and typo-checked, with nothing
+else to write.
 
 ```ts
-// tailess.config.ts
+// tailess.config.ts — the entire setup you write
 import { defineConfig } from "tailess";
 
 export default defineConfig({
@@ -155,36 +157,64 @@ export default defineConfig({
 });
 ```
 
-Build a configured instance with `createTailess` — the keys you declared become
-**type-safe, autocompleted arguments**, and typos fail at compile time:
+On the next dev/build run, the [PostCSS plugin](#tailwind-v4-setup-required) (already
+in your setup) reads that config and generates a `tailess-env.d.ts` for you — a
+`Register` augmentation that teaches the top-level helpers your keys:
 
-```ts
-// lib/st.ts
-import { createTailess } from "tailess";
-import config from "../tailess.config";
+```tsx
+// page.tsx — the exact import you'd expect, now config-aware
+import { ss } from "tailess";
 
-export const st = createTailess(config);
+ss({ base: "text-sm", xs: "block", "3xl": "text-2xl", groupHover: "underline" });
+//    ✅ "xs" / "3xl" / "groupHover" autocompleted — ss({ "4xl": ... }) is a type error
 ```
 
+- Reading a **TypeScript** config needs `jiti` (`npm i -D jiti`); a `.js`/`.mjs`
+  config needs nothing. Same requirement as the plugin's `@theme` mirroring.
+- Add `tailess-env.d.ts` to `.gitignore` (or commit it — your call). It regenerates
+  on every build. Disable with `"tailess/postcss": { types: false }`, or relocate it
+  with `types: "types/tailess.d.ts"`.
+- **Runtime:** custom breakpoints work as-is. To also apply your `base` and resolve
+  state aliases at runtime, call `configureTailess(config)` once at your app entry
+  (see below) — the generated file only handles *types*.
+
+### Alternative — no plugin, no codegen
+
+Prefer not to rely on the plugin for types (or don't use PostCSS)? `defineConfig`
+returns a fully-typed instance, so your config file doubles as your tailess module:
+
 ```ts
-import { st } from "@/lib/st";
+// tailess.config.ts
+import { defineConfig } from "tailess";
 
-st.ss({ base: "text-sm", "3xl": "text-2xl", groupHover: "underline" });
-// => "antialiased text-sm 3xl:text-2xl group-hover:underline"
-//    ✅ "3xl" / "groupHover" autocompleted — st.ss({ "4xl": ... }) is a type error
-
-st.cn("text-black");
-// => "antialiased text-black"   (config.base is prepended)
+export default defineConfig({ screens: { xs: "480px", "3xl": "1600px" } });
 ```
 
-### Custom keys on the **top-level** helpers
+```tsx
+// import the default and call its helpers — typed straight from the config
+import t from "@/tailess.config";
 
-Prefer importing `ss`, `on`, `responsive`, `until`, `between` straight from
-`"tailess"` (no per-file instance)? Those are pre-built exports, so they can't read
-your runtime config on their own — teach them your keys in two one-time steps:
+t.ss({ base: "text-sm", xs: "block", "3xl": "text-2xl" });
+// Prefer bare `ss`? Re-export from the config file:
+//   export const { ss, on, cn } = defineConfig({ ... });
+```
 
-**1. Register the types** — augment the `Register` interface once (any `.d.ts` on
-your `include` path):
+### Advanced — wire the runtime by hand
+
+The generated types cover the compile-time side. For the runtime side (applying
+`base`, resolving state aliases, silencing dev warnings on custom keys), register the
+config once at your app's entry:
+
+```ts
+// app entry (e.g. app/layout.tsx, main.tsx)
+import { configureTailess } from "tailess";
+import config from "./tailess.config";
+
+configureTailess(config);
+```
+
+Not using the plugin at all? You can also hand-write the same type augmentation the
+plugin generates:
 
 ```ts
 // tailess.d.ts
@@ -196,34 +226,6 @@ declare module "tailess" {
   }
 }
 ```
-
-**2. Register the runtime** — call `configureTailess` once at your app's entry, so
-the helpers apply your `base`, order custom breakpoints, and stop warning about
-custom keys:
-
-```ts
-// app entry (e.g. app/layout.tsx, main.tsx)
-import { configureTailess } from "tailess";
-import config from "./tailess.config";
-
-configureTailess(config);
-```
-
-Now the top-level helpers are fully wired to your config:
-
-```ts
-import { ss } from "tailess";
-
-ss({ base: "text-sm", xs: "block", "3xl": "text-2xl", groupHover: "underline" });
-// => "antialiased text-sm xs:block 3xl:text-2xl group-hover:underline"
-//    ✅ "xs" / "3xl" / "groupHover" autocompleted — ss({ "4xl": ... }) is a type error
-```
-
-> Skip either step and only the other half works: without the augmentation you lose
-> autocomplete/type-checking; without `configureTailess` the runtime falls back to
-> the default config (no `base`, custom keys emitted with a dev warning). The
-> `createTailess(config)` instance above needs neither — use it if you'd rather not
-> touch global state.
 
 ## API
 
