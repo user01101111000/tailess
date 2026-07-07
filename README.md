@@ -29,7 +29,7 @@ helpers**. Declare a breakpoint once; get autocomplete and typo-checking at ever
 - [Install](#install)
 - [Tailwind v4 setup (required)](#tailwind-v4-setup-required)
 - [Quick start](#quick-start)
-- [Config-driven type safety](#config-driven-type-safety)
+- [Custom breakpoints & states](#custom-breakpoints--states)
 - [API](#api)
   - [`cn` — compose & merge](#cn--compose--merge)
   - [`ss` — group by breakpoint/state](#ss--group-by-breakpointstate)
@@ -140,92 +140,50 @@ Every helper is available at the top level, bound to a zero-config default insta
 import { cn, responsive, on, until, between, match, data, aria } from "tailess";
 ```
 
-## Config-driven type safety
+## Custom breakpoints & states
 
-**Write only your config. The PostCSS plugin does the rest** — `import { ss } from "tailess"`
-picks up every custom key you declare, autocompleted and typo-checked, with nothing
-else to write.
+Need keys beyond Tailwind's defaults? Write a `tailess.config.ts` with `defineConfig`
+and **re-export its helpers**. That one file is the whole setup — no generated files,
+no global wiring, no `declare module`:
 
 ```ts
 // tailess.config.ts — the entire setup you write
 import { defineConfig } from "tailess";
 
-export default defineConfig({
+const t = defineConfig({
   screens: { xs: "480px", "3xl": "1600px" }, // add to sm/md/lg/xl/2xl (a matching key overrides)
   states: { groupHover: "group-hover" },     // additive to hover/focus/dark/...
   base: "antialiased",                        // always prepended by cn()
 });
+
+export default t;                       // the PostCSS plugin reads this for @theme + scanning
+export const { ss, on, cn, responsive, until, between } = t; // fully-typed helpers
 ```
 
-On the next dev/build run, the [PostCSS plugin](#tailwind-v4-setup-required) (already
-in your setup) reads that config and generates a `tailess-env.d.ts` for you — a
-`Register` augmentation that teaches the top-level helpers your keys:
-
 ```tsx
-// page.tsx — the exact import you'd expect, now config-aware
-import { ss } from "tailess";
+// page.tsx — import your helpers from the config file
+import { ss } from "@/tailess.config";
 
 ss({ base: "text-sm", xs: "block", "3xl": "text-2xl", groupHover: "underline" });
 //    ✅ "xs" / "3xl" / "groupHover" autocompleted — ss({ "4xl": ... }) is a type error
+//       "base", ordering, and state aliases are all handled by the instance
 ```
 
-- Reading a **TypeScript** config needs `jiti` (`npm i -D jiti`); a `.js`/`.mjs`
-  config needs nothing. Same requirement as the plugin's `@theme` mirroring.
-- Add `tailess-env.d.ts` to `.gitignore` (or commit it — your call). It regenerates
-  on every build. Disable with `"tailess/postcss": { types: false }`, or relocate it
-  with `types: "types/tailess.d.ts"`.
-- **Runtime:** custom breakpoints work as-is. To also apply your `base` and resolve
-  state aliases at runtime, call `configureTailess(config)` once at your app entry
-  (see below) — the generated file only handles *types*.
+`defineConfig` returns your config **and** a fully-typed tailess instance in one
+value: the raw `screens`/`states`/`base` sit on top level (so the PostCSS plugin can
+read the default export), while `.ss`, `.on`, … are bound to the resolved config —
+custom keys typed in, `base` applied, aliases resolved. There is nothing else to wire.
 
-### Alternative — no plugin, no codegen
+- The [PostCSS plugin](#tailwind-v4-setup-required) auto-detects `tailess.config.{ts,js,mjs}`
+  to mirror your custom breakpoints into `@theme` and resolve state aliases while scanning.
+  Reading a **TypeScript** config needs [`jiti`](https://github.com/unjs/jiti) (`npm i -D jiti`);
+  a `.js`/`.mjs` config needs nothing extra.
+- Prefer not to keep helpers in the config file? Call `createTailess(config)` wherever
+  you like — it returns the same typed instance.
 
-Prefer not to rely on the plugin for types (or don't use PostCSS)? `defineConfig`
-returns a fully-typed instance, so your config file doubles as your tailess module:
-
-```ts
-// tailess.config.ts
-import { defineConfig } from "tailess";
-
-export default defineConfig({ screens: { xs: "480px", "3xl": "1600px" } });
-```
-
-```tsx
-// import the default and call its helpers — typed straight from the config
-import t from "@/tailess.config";
-
-t.ss({ base: "text-sm", xs: "block", "3xl": "text-2xl" });
-// Prefer bare `ss`? Re-export from the config file:
-//   export const { ss, on, cn } = defineConfig({ ... });
-```
-
-### Advanced — wire the runtime by hand
-
-The generated types cover the compile-time side. For the runtime side (applying
-`base`, resolving state aliases, silencing dev warnings on custom keys), register the
-config once at your app's entry:
-
-```ts
-// app entry (e.g. app/layout.tsx, main.tsx)
-import { configureTailess } from "tailess";
-import config from "./tailess.config";
-
-configureTailess(config);
-```
-
-Not using the plugin at all? You can also hand-write the same type augmentation the
-plugin generates:
-
-```ts
-// tailess.d.ts
-import type config from "./tailess.config";
-
-declare module "tailess" {
-  interface Register {
-    config: typeof config;
-  }
-}
-```
+> The bare `import { ss } from "tailess"` always stays available for the zero-config
+> defaults (`sm`…`2xl`, `hover`, `dark`, …). It is intentionally typed to the defaults
+> only; custom keys live on your `defineConfig`/`createTailess` instance.
 
 ## API
 
@@ -245,8 +203,9 @@ cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
 // => "py-1 bg-blue-500 px-4"   (px-2 dropped in favor of px-4)
 ```
 
-Once you set a `base` via `configureTailess` (or use an instance's `st.cn`), it is
-prepended to every `cn` call — the place to inject shared design-system tokens.
+Set a `base` on a `defineConfig`/`createTailess` instance and it is prepended to every
+`cn` (and `ss`) call on that instance — the place to inject shared design-system tokens.
+The bare top-level `cn` has no `base` (it is the zero-config instance).
 
 ### `ss` — group by breakpoint/state
 
@@ -394,8 +353,12 @@ import { createTailess, defineConfig } from "tailess";
 const st = createTailess({ screens: { "3xl": "1600px" } });
 st.responsive("text-sm", { "3xl": "text-2xl" }); // "3xl" fully typed
 
-// defineConfig is an identity helper that preserves literal keys for a config file
-const config = defineConfig({ states: { groupHover: "group-hover" } });
+// defineConfig returns the config AND a typed instance in one value, so a single
+// tailess.config.ts is the whole setup: default-export it for the PostCSS plugin,
+// and re-export its helpers for your app.
+const t = defineConfig({ states: { groupHover: "group-hover" } });
+t.on("groupHover", "underline"); // => "group-hover:underline"  ("groupHover" typed)
+export const { ss, on, cn } = t;
 ```
 
 ## API reference
@@ -412,14 +375,13 @@ const config = defineConfig({ states: { groupHover: "group-hover" } });
 | `aria`                     | `(name, classes) => string`                          | Prefix classes with an `aria-*` attribute variant.                          |
 | `match`                    | `(key, options, fallback?) => string`                | Pick a class from a lookup keyed by a variant prop. Exhaustive at compile time. |
 | `createTailess`            | `(config?) => Tailess`                               | Factory returning all helpers bound to your config, plus `.config`.         |
-| `configureTailess`         | `(config) => Tailess`                                | Point the top-level helpers at a custom config at runtime (call once).      |
-| `defineConfig`             | `(config) => config`                                 | Type-safe identity helper for `tailess.config.ts`.                          |
+| `defineConfig`             | `(config) => config & Tailess`                       | Config for `tailess.config.ts` that doubles as a fully-typed instance.      |
 | `resolveConfig`            | `(config?) => ResolvedConfig`                        | Merge a user config onto the defaults (used internally).                    |
 | `withPrefix`               | `(prefix, value) => string`                          | Low-level: apply an arbitrary variant prefix to every token.                |
 | `st`                       | `Tailess`                                            | Default zero-config instance backing the top-level helpers.                 |
 
 Also exported: `defaultConfig`, `defaultScreens`, `defaultStates`, and the types
-`Tailess`, `TailessConfig`, `ResolvedConfig`, `RegisteredConfig`, `Register`, `Screens`, `States`, `ResponsiveMap`, `SsInput`.
+`Tailess`, `TailessConfig`, `ResolvedConfig`, `Screens`, `States`, `ResponsiveMap`, `SsInput`.
 
 ## TypeScript
 
