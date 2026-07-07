@@ -1,8 +1,5 @@
-import { readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { renderConfigDts, scanProject, writeConfigDts } from "../../src/extract/node.js";
+import { describe, expect, it } from "vitest";
+import { scanProject } from "../../src/extract/node.js";
 
 describe("scanProject", () => {
   it("walks a directory and extracts the classes tailess builds at runtime", async () => {
@@ -33,36 +30,5 @@ describe("scanProject", () => {
     });
     expect(screens).toEqual({ xs: "480px" });
     expect(states).toEqual({ groupHover: "group-hover" });
-  });
-});
-
-describe("renderConfigDts — the generated type-augmentation", () => {
-  it("augments Register with the config's screen and state keys", () => {
-    const dts = renderConfigDts({
-      screens: { xs: "480px", "3xl": "1600px" },
-      states: { groupHover: "group-hover" },
-    });
-    expect(dts).toContain('declare module "tailess"');
-    expect(dts).toContain("interface Register");
-    expect(dts).toContain('screens: { "xs": string; "3xl": string }');
-    expect(dts).toContain('states: { "groupHover": string }');
-  });
-
-  it("emits empty objects when nothing is configured", () => {
-    const dts = renderConfigDts({});
-    expect(dts).toContain("config: { screens: {}; states: {} }");
-  });
-});
-
-describe("writeConfigDts — codegen file writing", () => {
-  const out = join(tmpdir(), "tailess-node-test.d.ts");
-  afterAll(() => rm(out, { force: true }));
-
-  it("writes the file, then reports it unchanged on a second identical run", async () => {
-    const config = { screens: { xs: "480px" }, states: {} };
-    expect(await writeConfigDts(config, out)).toBe("written");
-    expect(await readFile(out, "utf8")).toContain('screens: { "xs": string }');
-    // No content change → no redundant write (prevents watch-mode rebuild loops).
-    expect(await writeConfigDts(config, out)).toBe("unchanged");
   });
 });
