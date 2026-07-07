@@ -1,6 +1,6 @@
 {
   "name": "tailess",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Type-safe Tailwind CSS utility functions driven by your own config file.",
   "keywords": [
     "tailwind",
