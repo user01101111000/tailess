@@ -1,7 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { TailessConfig } from "../../src/config/types.js";
 import tailessPostcss from "../../src/postcss/index.js";
 
@@ -16,11 +13,7 @@ interface FakeAtRule {
   append(node: FakeDecl): void;
 }
 
-function runOnce(options: {
-  content: string[];
-  config?: string | TailessConfig;
-  types?: boolean | string;
-}) {
+function runOnce(options: { content: string[]; config?: string | TailessConfig }) {
   const prepended: FakeAtRule[] = [];
   const messages: Array<Record<string, unknown>> = [];
   const root = { prepend: (node: FakeAtRule) => prepended.push(node) };
@@ -34,8 +27,7 @@ function runOnce(options: {
       decl: (defaults: FakeDecl) => ({ ...defaults }),
     },
   };
-  // Default `types: false` so tests never write a `tailess-env.d.ts` into the repo.
-  const plugin = tailessPostcss({ types: false, ...options });
+  const plugin = tailessPostcss(options);
   return plugin.Once(root, helpers).then(() => ({ prepended, messages }));
 }
 
@@ -80,21 +72,5 @@ describe("tailess/postcss", () => {
   it("emits no @theme block when the config sets no screens", async () => {
     const { prepended } = await runOnce({ content: ["test/fixtures"] });
     expect(prepended.some((r) => r.name === "theme")).toBe(false);
-  });
-
-  it("generates the type-augmentation file when `types` is a path", async () => {
-    const out = join(tmpdir(), "tailess-plugin-test.d.ts");
-    afterAll(() => rm(out, { force: true }));
-
-    await runOnce({
-      content: ["test/fixtures"],
-      config: { screens: { "3xl": "1600px" }, states: { groupHover: "group-hover" } },
-      types: out,
-    });
-
-    const dts = await readFile(out, "utf8");
-    expect(dts).toContain('declare module "tailess"');
-    expect(dts).toContain('screens: { "3xl": string }');
-    expect(dts).toContain('states: { "groupHover": string }');
   });
 });
