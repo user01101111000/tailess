@@ -33,4 +33,18 @@ describe("match", () => {
     const key = "toString" as "primary";
     expect(match(key, { primary: "bg-blue-600" }, "bg-gray-200")).toBe("bg-gray-200");
   });
+
+  it("accepts more cases than the key's narrowed type", () => {
+    // Regression: TypeScript narrows this `const` to "sm" at the call site, and a
+    // `Record<K, …>` parameter then rejected `lg` as an excess property — which made
+    // the ordinary `const size: "sm" | "lg" = "sm"` spelling a compile error.
+    const size: "sm" | "lg" = "sm";
+    expect(match(size, { sm: "p-2", lg: "p-8" })).toBe("p-2");
+  });
+
+  it("still requires every case of the key to be covered", () => {
+    const size = "sm" as "sm" | "lg";
+    // @ts-expect-error "lg" is missing from the lookup.
+    expect(match(size, { sm: "p-2" })).toBe("p-2");
+  });
 });
