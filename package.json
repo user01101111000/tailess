@@ -1,7 +1,7 @@
 {
   "name": "tailess",
-  "version": "0.5.0",
   "description": "Write Tailwind classes as a readable object, grouped by breakpoint and state — fully typed, and wired into Tailwind so it actually works.",
+  "version": "0.6.0",
   "keywords": [
     "tailwind",
     "tailwindcss",
