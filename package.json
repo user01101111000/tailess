@@ -1,7 +1,7 @@
 {
   "name": "tailess",
   "version": "0.5.0",
-  "description": "Type-safe Tailwind CSS utility functions driven by your own config file.",
+  "description": "Write Tailwind classes as a readable object, grouped by breakpoint and state — fully typed, and wired into Tailwind so it actually works.",
   "keywords": [
     "tailwind",
     "tailwindcss",
@@ -11,6 +11,10 @@
     "clsx",
     "tailwind-merge",
     "responsive",
+    "breakpoints",
+    "variants",
+    "vite",
+    "postcss",
     "typescript"
   ],
   "license": "MIT",
@@ -46,6 +50,16 @@
         "default": "./dist/postcss/index.cjs"
       }
     },
+    "./vite": {
+      "import": {
+        "types": "./dist/vite/index.d.ts",
+        "default": "./dist/vite/index.js"
+      },
+      "require": {
+        "types": "./dist/vite/index.d.cts",
+        "default": "./dist/vite/index.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
@@ -55,6 +69,9 @@
     "*": {
       "postcss": [
         "./dist/postcss/index.d.ts"
+      ],
+      "vite": [
+        "./dist/vite/index.d.ts"
       ]
     }
   },
@@ -84,23 +101,19 @@
     "clsx": "^2.1.1",
     "tailwind-merge": "^3.3.1"
   },
-  "peerDependencies": {
-    "jiti": ">=2"
-  },
-  "peerDependenciesMeta": {
-    "jiti": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.4",
     "@biomejs/biome": "^2.5.2",
     "@changesets/cli": "^2.31.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.1.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "postcss": "^8.5.26",
     "publint": "^0.3.21",
+    "tailwindcss": "^4.3.3",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
+    "vite": "^8.2.1",
     "vitest": "^4.1.9"
   },
   "publishConfig": {

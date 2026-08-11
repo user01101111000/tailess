@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "postcss/index": "src/postcss/index.ts",
+    "vite/index": "src/vite/index.ts",
   },
   format: ["esm", "cjs"],
   tsconfig: "tsconfig.build.json",

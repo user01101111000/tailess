@@ -1,9 +1,10 @@
-import { type ClassValue, clsx } from "clsx";
+import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { ClassValue } from "../types.js";
 
 /**
- * Conditionally join class names (via `clsx`) and resolve Tailwind conflicts
- * (via `tailwind-merge`), so the last utility in a conflicting group wins.
+ * Conditionally join class names (via `clsx`) and resolve Tailwind conflicts (via
+ * `tailwind-merge`), so the last utility in a conflicting group wins.
  *
  * @example
  * cn("px-2 py-1", isActive && "bg-blue-500", "px-4");

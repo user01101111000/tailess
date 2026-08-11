@@ -4,7 +4,7 @@
 
 <h1 align="center">tailess</h1>
 
-<p align="center"><strong>Type-safe Tailwind CSS utility functions driven by your own config file.</strong></p>
+<p align="center"><strong>Write Tailwind classes as a readable object, grouped by breakpoint and state.</strong></p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/tailess"><img src="https://img.shields.io/npm/v/tailess.svg" alt="npm version"></a>
@@ -13,389 +13,422 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license"></a>
 </p>
 
-Tailwind v4 dropped the JS `tailwind.config` in favor of CSS-first `@theme`. `tailess`
-gives you back a tiny, framework-agnostic config (`tailess.config.ts`) whose values —
-custom breakpoints, state variants, base tokens — **flow automatically into fully-typed
-helpers**. Declare a breakpoint once; get autocomplete and typo-checking at every call site.
+A long Tailwind `className` is hard to read: base classes, breakpoints and states all
+interleaved in one string. `tailess` lets you group them in an object instead — every
+key autocompleted, every typo a compile error.
 
-- 🎯 **Type-safe** — every custom breakpoint/state key you declare is autocompleted and validated at the call site.
+```tsx
+// ❌ everything jumbled together
+<div className="text-xl flex sm:block md:text-2xl hover:opacity-100 dark:bg-black" />
+
+// ✅ grouped and readable
+<div className={ss({
+  base: "text-xl flex",
+  sm: "block",
+  md: "text-2xl",
+  hover: "opacity-100",
+  dark: "bg-black",
+})} />
+```
+
+- 🎯 **Typed against Tailwind itself** — its own breakpoints and state variants autocomplete inside `ss({ … })`, and every key is verified against the Tailwind compiler in CI.
+- 🔌 **One line of setup** — a Vite or PostCSS plugin. It is **required**, and [there is a reason](#why-the-plugin-is-required) it can't be avoided.
+- 🧯 **No silent failures** — forget the plugin and you get a console message naming the fix, not unstyled elements.
+- ♻️ **Instant in dev** — a class you add shows up without restarting the dev server; a class you delete stops being emitted.
 - 🪶 **Tiny** — ESM + CJS, tree-shakeable, `sideEffects: false`. Only `clsx` + `tailwind-merge`.
-- ⚙️ **Config-driven** — one config object powers every helper.
-- 🧩 **Zero-config too** — sensible Tailwind defaults out of the box, no setup required.
-- 🧠 **Readable markup** — group classes by breakpoint/state instead of interleaving prefixes.
 
 ## Contents
 
+- [Requirements](#requirements)
 - [Install](#install)
-- [Tailwind v4 setup (required)](#tailwind-v4-setup-required)
-- [Quick start](#quick-start)
-- [Custom breakpoints & states](#custom-breakpoints--states)
+- [Setup](#setup)
+  - [Vite](#vite)
+  - [Next.js](#nextjs)
+  - [Why the plugin is required](#why-the-plugin-is-required)
+  - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
+  - [Troubleshooting](#troubleshooting)
 - [API](#api)
-  - [`cn` — compose & merge](#cn--compose--merge)
   - [`ss` — group by breakpoint/state](#ss--group-by-breakpointstate)
-    - [Conditional classes](#conditional-classes)
+  - [`cn` — compose & merge](#cn--compose--merge)
   - [`responsive` — mobile-first](#responsive--mobile-first)
   - [`until` / `between` — max-width ranges](#until--between--max-width-ranges)
   - [`on` — state variants](#on--state-variants)
   - [`data` / `aria` — attribute variants](#data--aria--attribute-variants)
   - [`match` — variant selection](#match--variant-selection)
-  - [`createTailess` / `defineConfig`](#createtailess--defineconfig)
+  - [`withPrefix` — anything else](#withprefix--anything-else)
+- [Keys](#keys)
+- [Plugin options](#plugin-options)
 - [API reference](#api-reference)
-- [TypeScript](#typescript)
+- [Verified on](#verified-on)
 - [License](#license)
+
+## Requirements
+
+- **Tailwind CSS v4** — v3 is not supported.
+- **Node 18+** for the build plugin.
+- A bundler with either the Tailwind Vite plugin (`@tailwindcss/vite`) or the Tailwind
+  PostCSS plugin (`@tailwindcss/postcss`). Both are covered below.
 
 ## Install
 
 ```bash
 npm install tailess
-# pnpm add tailess · yarn add tailess · bun add tailess
 ```
 
-## Tailwind v4 setup (required)
+## Setup
 
-> [!IMPORTANT]
-> On Tailwind v4 you **must** add the one-line integration below, or your prefixed
-> classes won't get any CSS. Skip it and `md:text-2xl`, `hover:opacity-100`, etc.
-> silently produce no styles.
+Install, then add one line to the config file you already have for Tailwind. There is
+no `tailess.config` file, nothing to add to your CSS, and no generated file to commit.
 
-**Why.** Tailwind v4 generates CSS by scanning your source for **literal** class
-strings. `tailess` builds variant prefixes at runtime by concatenation, so
-`ss({ md: "text-2xl" })` becomes `"md:text-2xl"` only *when the code runs* — the
-full class `md:text-2xl` never appears literally in any file, so Tailwind never
-sees it and emits no CSS. (Unprefixed classes like `text-xl` still work, because
-those *do* appear literally.)
+### Vite
 
-**Fix.** Add the tailess PostCSS plugin to the `postcss.config.mjs` you already use
-for Tailwind, **before** `@tailwindcss/postcss`:
+React, Vue, Svelte, Solid, Astro — anything on Vite.
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
+import tailess from "tailess/vite";
+
+export default defineConfig({
+  plugins: [tailwindcss(), tailess()],
+});
+```
+
+Position in the array doesn't matter — the hook is registered `order: "pre"`, so it
+always runs before Tailwind wherever you put it.
+
+> **Using Tailwind through PostCSS in Vite?** If you have a `postcss.config.*` with
+> `@tailwindcss/postcss` instead of `@tailwindcss/vite`, use the PostCSS plugin below.
+> Don't use `tailess/postcss` together with `@tailwindcss/vite`: Tailwind compiles CSS
+> before Vite's PostCSS stage, so a PostCSS plugin can never reach it.
+
+### Next.js
+
+Add the plugin to the `postcss.config.mjs` that `create-next-app` already generated,
+**before** `@tailwindcss/postcss`:
 
 ```js
 // postcss.config.mjs
-export default {
+const config = {
   plugins: {
     "tailess/postcss": {},
     "@tailwindcss/postcss": {},
   },
 };
+
+export default config;
 ```
 
-That's it — no CSS changes, no generated file, no scan command. On every build the
-plugin scans your source, enumerates the classes `tailess` produces, and injects
-them into Tailwind via `@source inline(...)`. It registers your source directories
-as watch dependencies, so new classes appear in dev without a restart.
+Works with both Turbopack and webpack, in `dev` and `build`. The same file works for
+any other PostCSS-based setup (Remix, Astro-with-PostCSS, plain PostCSS CLI, …).
 
-**Custom breakpoints, too.** The plugin also mirrors your config's `screens` into
-an injected `@theme` block as `--breakpoint-<key>` values. So a **new** breakpoint
-(`3xl: "1600px"`) actually generates its `3xl:` / `max-3xl:` utilities, and
-**overriding** a default (`md: "867px"`) changes the media query Tailwind emits for
-every `md:` class. Breakpoints you don't set keep Tailwind's built-in defaults.
-
-```js
-// Options (all optional):
-"tailess/postcss": {
-  content: ["./src", "./app"], // dirs/files to scan (default: cwd)
-  config: "./tailess.config.ts", // auto-detected otherwise
-  ignore: ["fixtures"],          // extra dir names to skip
-}
-```
-
-The plugin auto-detects a `tailess.config.{ts,js,mjs}` so custom state aliases
-(e.g. `groupHover → group-hover`) resolve correctly. Loading a **TypeScript** config
-needs [`jiti`](https://github.com/unjs/jiti) (`npm i -D jiti`); a `.js`/`.mjs`
-config needs nothing extra.
-
-> [!NOTE]
-> The scanner reads *literal* strings, so it deliberately over-approximates
-> ternaries and conditional objects (it emits every branch). It cannot recover
-> classes hidden behind a variable or an interpolated template
-> (`` ss({ md: `text-${size}` }) ``); for those, keep the class literal or add it to
-> a Tailwind [`@source inline(...)`](https://tailwindcss.com/docs/functions-and-directives#source-inline)
-> safelist.
-
-## Quick start
-
-Zero config required — import a helper and go. Instead of interleaving prefixes into one
-hard-to-scan string, group classes by breakpoint/state with **`ss`**:
+That's the whole setup. Import a helper anywhere and go:
 
 ```tsx
-// ❌ conventional Tailwind — everything jumbled together
-<div className="text-xl flex sm:block md:text-2xl hover:opacity-100" />
-
-// ✅ tailess — grouped and readable
 import { ss } from "tailess";
-
-<div
-  className={ss({
-    base: "text-xl flex",
-    sm: "block",
-    md: "text-2xl",
-    hover: "opacity-100",
-  })}
-/>
-// => "text-xl flex sm:block md:text-2xl hover:opacity-100"
 ```
 
-Every helper is available at the top level, bound to a zero-config default instance:
+### Why the plugin is required
 
-```ts
-import { cn, responsive, on, until, between, match, data, aria } from "tailess";
+Tailwind v4 generates CSS by scanning your source for **literal** class strings.
+`tailess` builds variant prefixes by concatenation at runtime, so
+`ss({ md: "text-2xl" })` only becomes `"md:text-2xl"` *when the code runs*. That full
+class never appears in any file, so Tailwind never sees it and emits no CSS for it.
+(Unprefixed classes like `text-xl` do appear literally, so those always work — which is
+exactly why the failure is confusing: some of your classes work and some don't.)
+
+So the choice is between the object syntax and zero setup; you can't have both. The
+plugin is what buys the syntax: on every build it scans your source, enumerates the
+classes `tailess` can produce, and hands them to Tailwind through its own
+[`@source inline(...)`](https://tailwindcss.com/docs/functions-and-directives#source)
+safelist — the same pipeline as classes found in your source, so variants and theme
+values resolve identically.
+
+The list is written to a small generated stylesheet under `node_modules` which your
+entry `@import`s, and your source files are registered as build dependencies. Together
+those are what make dev instant: Tailwind only re-reads a safelist when a file it
+tracks changes, and that generated stylesheet is such a file.
+
+Your entry is found automatically, including when Tailwind is imported one level down:
+
+```css
+/* app.css — this works too */
+@import "./styles/tailwind.css";   /* which contains @import "tailwindcss"; */
 ```
 
-## Custom breakpoints & states
+Stylesheets Tailwind doesn't emit utilities into — plain CSS, partials, `@reference`d
+CSS modules — are left completely untouched.
 
-Need keys beyond Tailwind's defaults? Write a `tailess.config.ts` with `defineConfig`
-and **re-export its helpers**. That one file is the whole setup — no generated files,
-no global wiring, no `declare module`:
+### What the scanner can and cannot see
 
-```ts
-// tailess.config.ts — the entire setup you write
-import { defineConfig } from "tailess";
-
-const t = defineConfig({
-  screens: { xs: "480px", "3xl": "1600px" }, // add to sm/md/lg/xl/2xl (a matching key overrides)
-  states: { groupHover: "group-hover" },     // additive to hover/focus/dark/...
-  base: "antialiased",                        // always prepended by cn()
-});
-
-export default t;                       // the PostCSS plugin reads this for @theme + scanning
-export const { ss, on, cn, responsive, until, between } = t; // fully-typed helpers
-```
+The scanner reads *literal* strings, and deliberately over-approximates: it emits every
+branch, since any of them may run.
 
 ```tsx
-// page.tsx — import your helpers from the config file
-import { ss } from "@/tailess.config";
-
-ss({ base: "text-sm", xs: "block", "3xl": "text-2xl", groupHover: "underline" });
-//    ✅ "xs" / "3xl" / "groupHover" autocompleted — ss({ "4xl": ... }) is a type error
-//       "base", ordering, and state aliases are all handled by the instance
+ss({ md: isActive ? "text-2xl" : "text-xs" })   // ✅ both emitted
+ss({ md: isActive && "text-2xl" })              // ✅
+ss({ md: { "text-2xl": a, "text-xs": b } })     // ✅ both
+ss({ lg: ["gap-4", a && "grid-cols-3"] })       // ✅ both
 ```
 
-`defineConfig` returns your config **and** a fully-typed tailess instance in one
-value: the raw `screens`/`states`/`base` sit on top level (so the PostCSS plugin can
-read the default export), while `.ss`, `.on`, … are bound to the resolved config —
-custom keys typed in, `base` applied, aliases resolved. There is nothing else to wire.
+It cannot recover a class that isn't written down anywhere:
 
-- The [PostCSS plugin](#tailwind-v4-setup-required) auto-detects `tailess.config.{ts,js,mjs}`
-  to mirror your custom breakpoints into `@theme` and resolve state aliases while scanning.
-  Reading a **TypeScript** config needs [`jiti`](https://github.com/unjs/jiti) (`npm i -D jiti`);
-  a `.js`/`.mjs` config needs nothing extra.
-- Prefer not to keep helpers in the config file? Call `createTailess(config)` wherever
-  you like — it returns the same typed instance.
+```tsx
+ss({ md: size })                 // ✗ a variable
+ss({ md: `text-${size}` })       // ✗ an interpolated template
+ss({ ...shared })                // ✗ a spread
+import { ss as sx } from "tailess"; // ✗ renamed on import, so the call isn't recognised
+```
 
-> The bare `import { ss } from "tailess"` always stays available for the zero-config
-> defaults (`sm`…`2xl`, `hover`, `dark`, …). It is intentionally typed to the defaults
-> only; custom keys live on your `defineConfig`/`createTailess` instance.
+This is the one case that still fails quietly, so prefer keeping classes literal —
+[`match`](#match--variant-selection) exists for exactly this, since all of its classes
+are literal:
+
+```tsx
+// ✗ invisible to the scanner        // ✅ visible
+ss({ md: `text-${size}` })           match(size, { sm: "text-sm", lg: "text-lg" })
+```
+
+Otherwise, add the class to a Tailwind `@source inline(...)` safelist in your CSS
+yourself.
+
+### Troubleshooting
+
+**None of my `md:` / `hover:` classes have any CSS.** The plugin isn't running. Check
+that it's registered (above), that on PostCSS it comes **before**
+`@tailwindcss/postcss`, and that you're using `tailess/vite` — not `tailess/postcss` —
+with `@tailwindcss/vite`. In development the console also tells you this directly.
+
+**One specific class has no CSS, the rest are fine.** Its value almost certainly isn't
+a literal string — see [above](#what-the-scanner-can-and-cannot-see).
+
+**I get the console warning but my styles do work.** Something else is supplying the
+CSS (your own safelist, for instance). Declare the marker yourself to silence it:
+
+```css
+:root { --tailess: 1; }
+```
+
+**My classes live outside the scanned root** (a monorepo package, a shared UI folder).
+Point `content` at them — see [Plugin options](#plugin-options).
+
+**How do I check for myself?** Build, then look for the class in the output CSS. Use a
+fixed-string search (`-F`), because Tailwind escapes `:` in selectors — `md:text-2xl` is
+written `.md\:text-2xl`:
+
+```bash
+grep -rF 'md\:text-2xl' dist
+```
+
+A class starting with a digit is escaped further still: `2xl:flex` becomes
+`.\32 xl\:flex` (note the space), so search for `\32 xl\:flex`.
 
 ## API
 
-All examples below use the top-level (default-config) helpers — these autocomplete
-the standard breakpoint/state keys (`sm`…`2xl`, `hover`, `dark`, …). A
-`createTailess(config)` instance exposes the same functions with your custom keys
-typed in on top.
+Every helper is a plain function import. No factory, no instance, no config object.
+
+```ts
+import { ss, cn, responsive, on, until, between, match, data, aria, withPrefix } from "tailess";
+```
+
+### `ss` — group by breakpoint/state
+
+The main event. `base` holds unprefixed classes; every other key is a Tailwind
+breakpoint, a `max-*` range, or a state variant.
+
+```ts
+ss({ base: "text-xl flex", sm: "block", md: "text-2xl" });
+// => "text-xl flex sm:block md:text-2xl"
+
+ss({ base: "opacity-0", hover: "opacity-100", dark: "bg-black" });
+// => "opacity-0 hover:opacity-100 dark:bg-black"
+
+ss({ base: "grid", "max-md": "gap-2", "group-hover": "underline" });
+// => "grid max-md:gap-2 group-hover:underline"
+```
+
+Output order is always `base` → breakpoints mobile-first → `max-*` largest-first →
+states, whatever order you wrote the keys in, and the result runs through
+[`cn`](#cn--compose--merge).
+
+Every value is a `clsx`-style `ClassValue`, so conditions go inline. A bucket whose
+value is falsy is dropped entirely, prefix and all:
+
+```ts
+ss({ base: "text-sm", md: isActive && "text-2xl", lg: disabled && "hidden" });
+// isActive => "text-sm md:text-2xl"
+
+ss({ base: ["flex", isActive && "bg-blue-500"], md: { "text-2xl": isActive } });
+// => "flex bg-blue-500 md:text-2xl"
+```
 
 ### `cn` — compose & merge
 
-`clsx` for conditional joining + `tailwind-merge` for conflict resolution (last utility wins).
+`clsx` for conditional joining plus `tailwind-merge` for conflict resolution, so the
+last utility in a conflicting group wins.
 
 ```ts
-import { cn } from "tailess";
-
 cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
 // => "py-1 bg-blue-500 px-4"   (px-2 dropped in favor of px-4)
 ```
 
-Set a `base` on a `defineConfig`/`createTailess` instance and it is prepended to every
-`cn` (and `ss`) call on that instance — the place to inject shared design-system tokens.
-The bare top-level `cn` has no `base` (it is the zero-config instance).
-
-### `ss` — group by breakpoint/state
-
-The flagship helper. Pass an object with a `base` bucket plus one entry per breakpoint or
-state key. Output is emitted in a stable, mobile-first order and run through `cn`.
-
-```ts
-import { ss } from "tailess";
-
-ss({
-  base: "text-xl flex",
-  sm: "block",
-  md: "text-2xl",
-});
-// => "text-xl flex sm:block md:text-2xl"
-
-// breakpoints and states can be mixed freely
-ss({ base: "opacity-0", hover: "opacity-100", dark: "bg-black" });
-// => "opacity-0 hover:opacity-100 dark:bg-black"
-```
-
-#### Conditional classes
-
-Every bucket accepts a `clsx`-style `ClassValue` — a string, an array, an object, or a
-falsy value — so conditions go inline, no separate syntax. A bucket whose value resolves to
-falsy (`false` / `null` / `undefined`) is skipped entirely, prefix and all.
-
-```ts
-const isActive = true;
-const disabled = false;
-
-// 1) `&&` — drop the whole bucket (prefix included) when the condition is false
-ss({ base: "text-sm", md: isActive && "text-2xl", lg: disabled && "hidden" });
-// => "text-sm md:text-2xl"
-
-// 2) ternary — choose between two values
-ss({ base: "flex", hover: isActive ? "opacity-100" : "opacity-50" });
-// => "flex hover:opacity-100"
-
-// 3) array with conditions inside a single bucket
-ss({ base: ["flex", isActive && "bg-blue-500", disabled && "opacity-50"] });
-// => "flex bg-blue-500"
-
-// 4) object form — { "class": condition }
-ss({ base: "p-2", md: { "text-2xl": isActive, "text-xs": disabled } });
-// => "p-2 md:text-2xl"
-
-// 5) mix static + conditional tokens in a breakpoint bucket
-ss({ base: "grid", lg: ["gap-4", isActive && "grid-cols-3"] });
-// => "grid lg:gap-4 lg:grid-cols-3"
-```
-
-The same `ClassValue` rules apply to every helper argument (`cn`, `responsive` variants,
-`on`, …), since each one ultimately runs through `cn`.
-
 ### `responsive` — mobile-first
 
-A `base` value plus per-breakpoint (min-width) overrides. Breakpoints are emitted in config
-order, not argument order.
+A base value plus per-breakpoint (min-width) overrides.
 
 ```ts
-import { responsive } from "tailess";
-
 responsive("text-sm", { md: "text-lg", xl: "text-2xl" });
 // => "text-sm md:text-lg xl:text-2xl"
 ```
 
 ### `until` / `between` — max-width ranges
 
-The complement of `responsive`. `until` applies classes *below* a breakpoint (`max-*`);
-`between` applies them within a range (inclusive of `min`, exclusive of `max`).
+The complement of `responsive`. `until` applies classes *below* a breakpoint;
+`between` applies them within a range (inclusive `min`, exclusive `max`).
 
 ```ts
-import { until, between } from "tailess";
-
-until("md", "hidden");
-// => "max-md:hidden"       (applies below the md breakpoint)
-
-between("sm", "lg", "block");
-// => "sm:max-lg:block"     (applies from sm up to, but not including, lg)
+until("md", "hidden");           // => "max-md:hidden"
+between("sm", "lg", "block");    // => "sm:max-lg:block"
 ```
 
 ### `on` — state variants
 
-Prefix classes with one or more state variants from `config.states`. Pass an array to stack
-compound variants like `dark:hover:`.
+Prefix classes with one or more state variants. An array stacks them into a compound
+variant.
 
 ```ts
-import { on } from "tailess";
-
-on("hover", "bg-blue-600 text-white");
-// => "hover:bg-blue-600 hover:text-white"
-
-on(["dark", "hover"], "bg-black");
-// => "dark:hover:bg-black"
+on("hover", "bg-blue-600 text-white");   // => "hover:bg-blue-600 hover:text-white"
+on(["dark", "hover"], "bg-black");       // => "dark:hover:bg-black"
 ```
 
 ### `data` / `aria` — attribute variants
 
-Perfect for headless UI libraries (Radix, Ark, React Aria). `data` builds a
-`data-[name=value]:` variant — or the attribute-presence form `data-[name]:` when the value
-is `null`/`undefined`. `aria` builds an `aria-*:` variant.
+For headless UI libraries (Radix, Ark, React Aria). `data` builds
+`data-[name=value]:`, or the presence form `data-[name]:` when the value is
+`null`/`undefined`.
 
 ```ts
-import { data, aria } from "tailess";
-
-data("state", "open", "opacity-100");
-// => "data-[state=open]:opacity-100"
-
-data("disabled", null, "pointer-events-none");
-// => "data-[disabled]:pointer-events-none"
-
-aria("expanded", "rotate-180");
-// => "aria-expanded:rotate-180"
+data("state", "open", "opacity-100");              // => "data-[state=open]:opacity-100"
+data("disabled", null, "pointer-events-none");     // => "data-[disabled]:pointer-events-none"
+aria("expanded", "rotate-180");                    // => "aria-expanded:rotate-180"
 ```
 
 ### `match` — variant selection
 
-Map a discriminant (a variant prop, size, tone…) to a class value. The lookup must cover
-every possible value of the key, so the mapping is exhaustive at compile time. An optional
-`fallback` handles values with no entry at runtime.
+Map a discriminant (a variant prop, size, tone…) to a class value. Every possible value
+of the key must be covered, so a missing case is a compile error. Extra cases are fine.
 
 ```ts
-import { match } from "tailess";
-
 function Button({ size }: { size: "sm" | "md" | "lg" }) {
   const sizing = match(size, {
     sm: "px-2 py-1 text-sm",
     md: "px-3 py-2 text-base",
     lg: "px-4 py-3 text-lg",
   });
-  // size === "md" => "px-3 py-2 text-base"
-  // omitting a size (e.g. only sm/md) is a compile-time error
+  // omitting a size is a compile-time error
 }
 
 match(tone, { primary: "bg-blue-600", danger: "bg-red-600" }, "bg-gray-200");
 // unknown tone at runtime => "bg-gray-200"
 ```
 
-### `createTailess` / `defineConfig`
+### `withPrefix` — anything else
+
+The escape hatch for variants tailess doesn't model as keys — arbitrary selectors,
+`supports-*`, `has-*`, compound `group-[...]`:
 
 ```ts
-import { createTailess, defineConfig } from "tailess";
-
-const st = createTailess({ screens: { "3xl": "1600px" } });
-st.responsive("text-sm", { "3xl": "text-2xl" }); // "3xl" fully typed
-
-// defineConfig returns the config AND a typed instance in one value, so a single
-// tailess.config.ts is the whole setup: default-export it for the PostCSS plugin,
-// and re-export its helpers for your app.
-const t = defineConfig({ states: { groupHover: "group-hover" } });
-t.on("groupHover", "underline"); // => "group-hover:underline"  ("groupHover" typed)
-export const { ss, on, cn } = t;
+withPrefix("supports-[display:grid]", "grid");  // => "supports-[display:grid]:grid"
+withPrefix("has-[:checked]", "bg-blue-50");     // => "has-[:checked]:bg-blue-50"
 ```
+
+## Keys
+
+`ss` accepts `base` plus Tailwind's built-in keys — nothing else, so autocomplete is
+exhaustive and a typo can't compile:
+
+| Group | Keys |
+| ----- | ---- |
+| Breakpoints | `sm` `md` `lg` `xl` `2xl` |
+| Max-width ranges | `max-sm` `max-md` `max-lg` `max-xl` `max-2xl` |
+| Pseudo-classes | `hover` `focus` `focus-within` `focus-visible` `active` `visited` `target` `first` `last` `only` `odd` `even` `first-of-type` `last-of-type` `only-of-type` `empty` `disabled` `enabled` `checked` `indeterminate` `default` `optional` `required` `valid` `invalid` `user-valid` `user-invalid` `in-range` `out-of-range` `placeholder-shown` `details-content` `autofill` `read-only` |
+| Pseudo-elements | `before` `after` `first-letter` `first-line` `marker` `selection` `file` `backdrop` `placeholder` |
+| Media & features | `dark` `motion-safe` `motion-reduce` `contrast-more` `contrast-less` `forced-colors` `inverted-colors` `portrait` `landscape` `print` `noscript` `pointer-fine` `pointer-coarse` `pointer-none` `any-pointer-fine` `any-pointer-coarse` `any-pointer-none` |
+| Direction & state | `rtl` `ltr` `open` `inert` `starting` |
+| `group-*` | `group-hover` `group-focus` `group-focus-within` `group-focus-visible` `group-active` `group-disabled` `group-checked` `group-open` `group-first` `group-last` `group-odd` `group-even` |
+| `peer-*` | `peer-hover` `peer-focus` `peer-focus-within` `peer-focus-visible` `peer-active` `peer-disabled` `peer-checked` `peer-open` `peer-invalid` `peer-required` `peer-placeholder-shown` |
+
+Every one of these is compiled by real Tailwind in the test suite, so an autocompleted
+key always resolves to a real variant. Anything outside the list goes through
+[`withPrefix`](#withprefix--anything-else).
+
+> **Custom breakpoints and state aliases are not supported in this version.** For an
+> extra breakpoint, define it in your CSS `@theme` and use
+> `withPrefix("3xl", "text-2xl")` plus your own `@source inline(...)` entry.
+
+## Plugin options
+
+Everything is optional. Both plugins share `content`, `ignore` and `extensions`:
+
+```ts
+tailess({
+  content: ["./src"],      // dirs/files to scan
+  ignore: ["fixtures"],    // extra directory names to skip
+  extensions: ["tsx"],     // file extensions to scan, without the dot
+});
+```
+
+| Option | Default | Notes |
+| ------ | ------- | ----- |
+| `content` | Vite's `root` / `process.cwd()` | Narrow this in a monorepo, or point it at packages outside the project root. |
+| `ignore` | — | Added on top of the built-in list. |
+| `extensions` | `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro` | Replaces the default list. |
+| `cacheDir` | `node_modules/.cache` | **PostCSS plugin only.** Where the generated stylesheet goes. The Vite plugin uses Vite's own `cacheDir` (`node_modules/.vite`). |
+
+By default the whole project is scanned, skipping dependencies, build output (`dist`,
+`build`, `out`, `.next`, `.output`, …) and caches. Dot-directories are *not* skipped
+wholesale, so classes in something like `.storybook/preview.tsx` are still found.
+Scanning is cached per file by mtime — a warm rescan of a 2,000-file project takes
+about 20 ms.
 
 ## API reference
 
-| Export                     | Signature                                            | Description                                                                 |
-| -------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------- |
-| `cn`                       | `(...inputs: ClassValue[]) => string`                | Join classes (`clsx`) and resolve Tailwind conflicts (`tailwind-merge`).    |
-| `ss`                       | `(input: { base?, ...keys }) => string`              | Group classes by breakpoint/state in a readable object.                     |
-| `responsive`               | `(base, variants?) => string`                        | Mobile-first responsive string from a breakpoint→classes map.               |
-| `until`                    | `(key, classes) => string`                           | Apply classes below a breakpoint (`max-*`).                                 |
-| `between`                  | `(min, max, classes) => string`                      | Apply classes between two breakpoints (inclusive min, exclusive max).       |
-| `on`                       | `(state \| state[], classes) => string`              | Prefix classes with one or more state variants (`hover`, `dark`, custom…).  |
-| `data`                     | `(name, value \| null, classes) => string`           | Prefix classes with a `data-*` attribute variant.                           |
-| `aria`                     | `(name, classes) => string`                          | Prefix classes with an `aria-*` attribute variant.                          |
-| `match`                    | `(key, options, fallback?) => string`                | Pick a class from a lookup keyed by a variant prop. Exhaustive at compile time. |
-| `createTailess`            | `(config?) => Tailess`                               | Factory returning all helpers bound to your config, plus `.config`.         |
-| `defineConfig`             | `(config) => config & Tailess`                       | Config for `tailess.config.ts` that doubles as a fully-typed instance.      |
-| `resolveConfig`            | `(config?) => ResolvedConfig`                        | Merge a user config onto the defaults (used internally).                    |
-| `withPrefix`               | `(prefix, value) => string`                          | Low-level: apply an arbitrary variant prefix to every token.                |
-| `st`                       | `Tailess`                                            | Default zero-config instance backing the top-level helpers.                 |
+| Export | Signature | Description |
+| ------ | --------- | ----------- |
+| `ss` | `(input: SsInput) => string` | Group classes by breakpoint/state in a readable object. |
+| `cn` | `(...inputs: ClassValue[]) => string` | Join classes (`clsx`) and resolve Tailwind conflicts (`tailwind-merge`). |
+| `responsive` | `(base, variants?) => string` | Mobile-first string from a breakpoint→classes map. |
+| `until` | `(key, classes) => string` | Apply classes below a breakpoint (`max-*`). |
+| `between` | `(min, max, classes) => string` | Apply classes between two breakpoints. |
+| `on` | `(state \| state[], classes) => string` | Prefix classes with one or more state variants. |
+| `data` | `(name, value \| null, classes) => string` | Prefix classes with a `data-*` variant. |
+| `aria` | `(name, classes) => string` | Prefix classes with an `aria-*` variant. |
+| `match` | `(key, options, fallback?) => string` | Pick a class from an exhaustive lookup. |
+| `withPrefix` | `(prefix, classes) => string` | Apply an arbitrary variant prefix to every token. |
+| `screens` | `Record<ScreenKey, string>` | Breakpoint → min-width, e.g. for `matchMedia`. |
+| `screenKeys` / `maxScreenKeys` / `stateKeys` | `readonly string[]` | The key sets above, at runtime. |
 
-Also exported: `defaultConfig`, `defaultScreens`, `defaultStates`, and the types
-`Tailess`, `TailessConfig`, `ResolvedConfig`, `Screens`, `States`, `ResponsiveMap`, `SsInput`.
+Types: `SsInput`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`, `ResponsiveMap`,
+`ClassValue`. Entry points: `tailess`, `tailess/vite`, `tailess/postcss`.
 
-## TypeScript
+## Verified on
 
-`tailess` ships its own type declarations for both ESM and CJS consumers (verified in CI with
-[`publint`](https://publint.dev) and [`arethetypeswrong`](https://arethetypeswrong.github.io)).
-Custom keys are preserved via `const` type parameters, so an instance created from your config
-knows exactly which breakpoint and state keys are valid:
+Every setup below is checked by building a real project from the official scaffolder
+and asserting the generated CSS actually contains the rules — including adding and
+removing a class while the dev server runs, from a cold start:
 
-```ts
-const st = createTailess({ screens: { "3xl": "1600px" } });
+| Setup | Integration | Build | Dev + live edit |
+| ----- | ----------- | ----- | --------------- |
+| `create-vite` (react-ts, Vite 8) + `@tailwindcss/vite` | `tailess/vite` | ✅ | ✅ |
+| `create-next-app` (TypeScript, Next 16) + Turbopack | `tailess/postcss` | ✅ | ✅ |
+| `create-next-app` (TypeScript, Next 16) + webpack | `tailess/postcss` | ✅ | ✅ |
+| Vite with a split CSS entry (`@import` chain) | `tailess/vite` | ✅ | ✅ |
+| Vite via `@tailwindcss/postcss` | `tailess/postcss` | ✅ | ✅ |
 
-st.ss({ "3xl": "text-2xl" }); // ✅ ok
-st.ss({ "4xl": "text-2xl" }); // ✗ Type error: "4xl" is not a valid key
-```
+Tested against Tailwind CSS 4.3.3. CI additionally runs lint, typecheck, the full test
+suite, [`publint`](https://publint.dev) and
+[`arethetypeswrong`](https://arethetypeswrong.github.io) on every push.
 
 ## License
 
