@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { compile } from "tailwindcss";
+import { __unstable__loadDesignSystem, compile } from "tailwindcss";
 import { describe, expect, it } from "vitest";
 import { maxScreenKeys, screenKeys, screens, stateKeys } from "../src/constants.js";
 import { hasRule } from "./helpers/css.js";
@@ -14,6 +14,21 @@ const loadStylesheet = async (id: string, base: string) => {
   if (id === "tailwindcss") return { base, path: "index.css", content: tailwindIndex };
   throw new Error(`unexpected stylesheet: ${id}`);
 };
+
+const design = await __unstable__loadDesignSystem(`@import "tailwindcss";`, {
+  base: process.cwd(),
+  loadStylesheet,
+});
+
+/** Every static variant Tailwind registers, minus the breakpoints we model separately. */
+const plain = [...design.variants.entries()]
+  .filter(([, variant]) => variant.kind === "static")
+  .map(([name]) => name)
+  .filter((name) => !(screenKeys as readonly string[]).includes(name));
+
+/** The plain variants Tailwind lets you compound onto `group` / `peer`. */
+const compoundable = (prefix: "group" | "peer"): string[] =>
+  plain.filter((name) => design.variants.compoundsWith(prefix, name));
 
 /** Compile a stylesheet that safelists `candidates`, and return the CSS. */
 async function build(candidates: readonly string[]): Promise<string> {
@@ -62,6 +77,30 @@ describe("built-in keys are real Tailwind variants", () => {
         new RegExp(`\\(\\s*(?:width >= ${screens[key]}|min-width:\\s*${screens[key]})\\s*\\)`),
       );
     }
+  });
+});
+
+/**
+ * The check above only proves every key we ship is real. It cannot notice a
+ * variant Tailwind supports that we forgot — and a forgotten one is a compile
+ * error for the consumer on a class that would have worked. So ask Tailwind's own
+ * variant registry what exists and compare both directions.
+ */
+describe("built-in keys cover every static Tailwind variant", () => {
+  const expected = [
+    ...plain,
+    ...compoundable("group").map((name) => `group-${name}`),
+    ...compoundable("peer").map((name) => `peer-${name}`),
+  ].sort();
+
+  it("lists exactly the variants Tailwind registers — no more, no fewer", () => {
+    expect([...stateKeys].sort()).toEqual(expected);
+  });
+
+  it("keeps the group-* and peer-* families symmetric", () => {
+    // Tailwind compounds both with the same set, so a name in one and not the
+    // other is always an oversight.
+    expect(compoundable("group")).toEqual(compoundable("peer"));
   });
 });
 

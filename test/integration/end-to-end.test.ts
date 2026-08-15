@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import tailwindcss from "@tailwindcss/postcss";
 import postcss from "postcss";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearCache } from "../../src/extract/collect.js";
 import tailess from "../../src/postcss/index.js";
 import tailessVite from "../../src/vite/index.js";
@@ -220,6 +220,52 @@ describe("PostCSS integration (Next.js and any PostCSS setup)", () => {
   });
 });
 
+describe("markup files reach the compiler too", () => {
+  /**
+   * The `.tsx` fixture above is parseable as JavaScript from top to bottom. Most
+   * scanned files are not: in `.vue`, `.svelte`, `.html` and `.astro` a quote is an
+   * attribute delimiter or an apostrophe in prose. Reading those as JavaScript used
+   * to open a string that swallowed every call after it — Vue and HTML lost all of
+   * their candidates, and the failure was invisible because the class still reached
+   * the element. Assert on real compiled CSS, since that is the only thing that
+   * would have caught it.
+   */
+  it("emits CSS for calls in Vue, Svelte, HTML and Markdown, apostrophes and all", async () => {
+    await writeFile(
+      join(dir, "Card.vue"),
+      `<template>
+  <div :class="ss({ base: 'flex', md: 'grid-cols-3' })">It's here</div>
+  <span :class="on('hover', 'underline')">Don't miss it</span>
+</template>`,
+    );
+    await writeFile(
+      join(dir, "Panel.svelte"),
+      `<div class={ss({ base: "flex", lg: "tracking-tight" })}>Let's go</div>
+<b class={on("focus", "ring-4")}>y</b>`,
+    );
+    await writeFile(
+      join(dir, "page.html"),
+      `<p>It's fine</p>\n<div class="\${ss({ xl: 'leading-loose' })}">x</div>`,
+    );
+    await writeFile(
+      join(dir, "guide.md"),
+      `# Guide\n\nHere's how you don't break it.\n\n<Demo class={ss({ sm: "font-mono" })} />`,
+    );
+
+    const css = await compileWithPostcss(`@import "tailwindcss";`);
+    expect(
+      missingRules(css, [
+        "md:grid-cols-3",
+        "hover:underline",
+        "lg:tracking-tight",
+        "focus:ring-4",
+        "xl:leading-loose",
+        "sm:font-mono",
+      ]),
+    ).toEqual([]);
+  });
+});
+
 describe("Vite integration", () => {
   const entryId = () => join(dir, "index.css");
 
@@ -370,11 +416,153 @@ describe("Vite integration", () => {
     expect(await sidecarOf(second?.code ?? "")).toContain("@source inline(");
   });
 
+  it("inlines the list rather than failing the build when the sidecar can't be written", async () => {
+    // A locked or read-only cache directory — transient on Windows, permanent in
+    // some sandboxed CI. Throwing here would take down the whole CSS transform over
+    // something inlining handles fine, so this path has to degrade, not fail.
+    const blocked = join(dir, "blocked");
+    await writeFile(blocked, "not a directory");
+
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: blocked });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      entryId(),
+    );
+
+    // No `@import` of a sidecar that does not exist — the list is inlined instead.
+    expect(result?.code).not.toMatch(/@import "[^"]*tailess\.css"/);
+    expect(result?.code).toContain("@source inline(");
+    expect(result?.code).toMatch(/--tailess:\s*1/);
+    expect(result?.code.endsWith(`@import "tailwindcss";`)).toBe(true);
+    expect(warn).toHaveBeenCalled();
+
+    // And the inlined CSS still compiles to every rule.
+    const compiled = await postcss([tailwindcss({ base: dir, optimize: false })]).process(
+      result?.code ?? "",
+      { from: entryId() },
+    );
+    expect(missingRules(compiled.css, expected)).toEqual([]);
+    warn.mockRestore();
+  });
+
   it("handles the query-suffixed ids Vite actually passes", async () => {
     const { run } = makePlugin();
     for (const suffix of ["?direct", "?used", ""]) {
       const result = await run(`@import "tailwindcss";`, `${entryId()}${suffix}`);
       expect(result?.code, suffix).toContain("@import");
     }
+  });
+});
+
+describe("plugin ordering", () => {
+  it("says so when it runs after Tailwind instead of failing silently", async () => {
+    // Getting the order wrong is the one setup mistake with no other signal: the
+    // build succeeds and every runtime-built class quietly loses its CSS.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await postcss([
+      tailwindcss({ base: dir, optimize: false }),
+      tailess({ content: [dir], cacheDir: join(dir, ".cache") }),
+    ]).process(`@import "tailwindcss";`, { from: join(dir, "app.css") });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("ran after");
+    // And it still leaves Tailwind's output alone rather than corrupting it.
+    expect(result.css).not.toContain("@source");
+    expect(missingRules(result.css, expected).sort()).toEqual([...expected].sort());
+    warn.mockRestore();
+  });
+
+  it("stays quiet in the correct order", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await compileWithPostcss(`@import "tailwindcss";`);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe("Vite: content paths and server lifecycle", () => {
+  const entryId = () => join(dir, "index.css");
+
+  it("resolves a relative content path against Vite's root, not the cwd", async () => {
+    // `vite build apps/web`, a monorepo task run from the workspace root, or a
+    // `--config` elsewhere all leave cwd !== root. Resolving against cwd then walks a
+    // directory that does not exist: the scan finds nothing, the sidecar still gets
+    // its marker so the runtime check reports success, and every class silently
+    // loses its CSS. The README documents these paths as root-relative.
+    const nested = join(dir, "app");
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, "page.tsx"), source);
+    // Nothing named "app" exists under the real cwd, so a cwd-relative read finds none.
+    expect(process.cwd()).not.toBe(dir);
+
+    const plugin = tailessVite({ content: ["app"] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const result = await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      entryId(),
+    );
+
+    const specifier = /@import "([^"]+tailess\.css)"/.exec(result?.code ?? "")?.[1] ?? "";
+    expect(await readFile(join(dir, specifier), "utf8")).toContain("md:text-2xl");
+  });
+
+  it("leaves an absolute content path alone", async () => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const result = await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      entryId(),
+    );
+    const specifier = /@import "([^"]+tailess\.css)"/.exec(result?.code ?? "")?.[1] ?? "";
+    expect(await readFile(join(dir, specifier), "utf8")).toContain("md:text-2xl");
+  });
+
+  it("warns when an explicit content option matches nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const plugin = tailessVite({ content: ["does-not-exist"] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      entryId(),
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("matched no files");
+    warn.mockRestore();
+  });
+
+  it("registers listeners again on a restarted server", async () => {
+    // Vite calls configureServer once per server, and reuses a plugin instance
+    // supplied through inlineConfig across a restart. A latch on the instance would
+    // leave the new watcher with no tailess listeners, and new classes would stop
+    // reaching Tailwind with nothing logged.
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+
+    const makeServer = () => {
+      const events: string[] = [];
+      return {
+        events,
+        server: { watcher: { on: (event: string) => events.push(event), emit: () => true } },
+      };
+    };
+
+    const first = makeServer();
+    plugin.configureServer(first.server);
+    expect(first.events).toEqual(["change", "add", "unlink"]);
+
+    const second = makeServer();
+    plugin.configureServer(second.server);
+    expect(second.events).toEqual(["change", "add", "unlink"]);
+
+    // ...but the same watcher twice must not double-register.
+    plugin.configureServer(second.server);
+    expect(second.events).toEqual(["change", "add", "unlink"]);
   });
 });

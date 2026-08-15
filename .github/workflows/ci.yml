@@ -8,6 +8,42 @@ on:
 
 jobs:
   verify:
+    # The build integrations touch the file system directly, so they are exercised
+    # on Windows and macOS too — path separators, case sensitivity and atomic
+    # renames all differ there.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: [20, 22, 24]
+        include:
+          - os: windows-latest
+            node: 20
+          - os: macos-latest
+            node: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+  package:
+    # Lint and the packaging checks are platform-independent, so run them once.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,12 +59,6 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm run test:coverage
-
       - name: Build
         run: npm run build
 
@@ -37,3 +67,44 @@ jobs:
 
       - name: Validate types (are-the-types-wrong)
         run: npm run check:exports
+
+  engines:
+    # `engines` claims Node >= 18, but the test runner itself needs 20+. Build on a
+    # supported Node, then load the published artifact on the oldest one we promise,
+    # so the claim is verified rather than asserted.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Import the built package on the oldest supported Node
+        run: |
+          node --input-type=module -e "
+            import assert from 'node:assert/strict';
+            const { cn, ss, on } = await import('./dist/index.js');
+            const { createRequire } = await import('node:module');
+            const require = createRequire(process.cwd() + '/x.js');
+
+            assert.equal(cn('px-2', 'px-4'), 'px-4');
+            assert.equal(ss({ base: 'flex', md: 'grid', hover: 'underline' }), 'flex md:grid hover:underline');
+            assert.equal(on(['dark', 'hover'], 'bg-black'), 'dark:hover:bg-black');
+
+            assert.equal(require('./dist/index.cjs').cn('p-2', 'p-4'), 'p-4');
+            assert.equal(typeof (await import('./dist/vite/index.js')).default, 'function');
+            assert.equal(typeof require('./dist/postcss/index.cjs'), 'function');
+            console.log('ok on ' + process.version);
+          "

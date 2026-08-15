@@ -1,7 +1,11 @@
 export type {
+  ElementStateKey,
+  GroupStateKey,
   MaxScreenKey,
+  PeerStateKey,
   ScreenKey,
   SsKey,
+  StandaloneStateKey,
   StateKey,
 } from "./constants.js";
 export { maxScreenKeys, screenKeys, screens, stateKeys } from "./constants.js";

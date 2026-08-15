@@ -5,19 +5,25 @@ import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceChunks } from "../integration/inject.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 
-/** Options for the tailess PostCSS plugin. */
+/**
+ * Options for the tailess PostCSS plugin.
+ *
+ * Each is `| undefined` so that passing one conditionally — `content: isCI ? […] :
+ * undefined` — compiles under `exactOptionalPropertyTypes`, which is what the
+ * implementation already accepts.
+ */
 export interface TailessPostcssOptions {
   /** Files or directories to scan. Defaults to the current working directory. */
-  content?: string[];
+  content?: string[] | undefined;
   /** Extra directory names to skip while scanning. */
-  ignore?: string[];
+  ignore?: string[] | undefined;
   /** File extensions to scan, without the dot. Defaults to the usual source types. */
-  extensions?: string[];
+  extensions?: string[] | undefined;
   /**
    * Where to write the generated stylesheet tailess `@import`s. Defaults to
    * `node_modules/.cache/tailess`.
    */
-  cacheDir?: string;
+  cacheDir?: string | undefined;
 }
 
 // Minimal structural types for the slice of the PostCSS API we use, so tailess
@@ -40,6 +46,8 @@ interface AtRule {
   params: string;
 }
 interface Root {
+  /** Only ever read to spot Tailwind's banner — see {@link ranAfterTailwind}. */
+  first?: { type: string; text?: string } | undefined;
   prepend(...nodes: Array<Rule | AtRule>): void;
   walkAtRules(callback: (rule: AtRule) => false | undefined): void;
 }
@@ -113,6 +121,22 @@ async function isTailwindStylesheet(root: Root, from: string | undefined): Promi
  * };
  * ```
  */
+/**
+ * True when this stylesheet is Tailwind's *output* rather than its input — which
+ * means `@tailwindcss/postcss` was listed first and has already compiled.
+ *
+ * Order is the one thing a consumer has to get right, and getting it wrong is
+ * otherwise completely silent: the build succeeds, and every runtime-built class
+ * loses its CSS. Tailwind puts its licence banner at the very top of what it emits,
+ * so recognising it costs one property read — no stringifying the compiled AST.
+ */
+function ranAfterTailwind(root: Root): boolean {
+  const first = root.first;
+  return first?.type === "comment" && (first.text ?? "").startsWith("! tailwindcss");
+}
+
+let warnedAboutOrder = false;
+
 const tailessPostcss = Object.assign(
   (options: TailessPostcssOptions = {}): Plugin => {
     const sidecar = createSidecar(
@@ -126,9 +150,19 @@ const tailessPostcss = Object.assign(
 
         // Injecting into a stylesheet Tailwind doesn't compile would leak our
         // directives into the output, so bail unless utilities land here.
-        if (!(await isTailwindStylesheet(root, from))) return;
+        if (!(await isTailwindStylesheet(root, from))) {
+          if (!warnedAboutOrder && ranAfterTailwind(root)) {
+            warnedAboutOrder = true;
+            console.warn(
+              '[tailess] "tailess/postcss" ran after "@tailwindcss/postcss", so Tailwind ' +
+                "had already compiled and no md:/hover:/dark: class will have any CSS. " +
+                'List "tailess/postcss" first in your postcss config.',
+            );
+          }
+          return;
+        }
 
-        const { classes, files, roots } = await collect({
+        const { classes, files, roots, extensions } = await collect({
           roots: options.content?.length ? options.content : [process.cwd()],
           ignore: options.ignore,
           extensions: options.extensions,
@@ -171,13 +205,17 @@ const tailessPostcss = Object.assign(
           helpers.result.messages.push({ type: "dependency", plugin: "tailess", file, parent });
         }
 
-        // Directory watching covers files created after this run.
+        // Directory watching covers files created after this run. Scope the glob
+        // to the extensions actually scanned: `**/*` makes the bundler watch every
+        // file under the root — `node_modules` and build output included — which on
+        // a large project costs far more than the scan it is guarding.
+        const glob = extensions.length > 0 ? `**/*.{${extensions.join(",")}}` : "**/*";
         for (const dir of roots) {
           helpers.result.messages.push({
             type: "dir-dependency",
             plugin: "tailess",
             dir,
-            glob: "**/*",
+            glob,
             parent,
           });
         }
