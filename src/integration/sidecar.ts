@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { buildPrelude } from "./inject.js";
 
@@ -41,31 +41,95 @@ export function importSpecifier(from: string, to: string): string | null {
   return posix.startsWith("./") || posix.startsWith("../") ? posix : `./${posix}`;
 }
 
+/**
+ * Windows refuses a rename onto a file another handle has open, and reports it as
+ * `EPERM`/`EACCES`/`EBUSY` rather than as the transient condition it usually is:
+ * Tailwind reading the sidecar, a virus scanner, or the file indexer, all of which
+ * let go within a few milliseconds. Retrying briefly turns a spurious build failure
+ * — or, in our callers, an unnecessary fall back to inlining — into a normal write.
+ *
+ * The delays are short and few, so a genuinely unwritable path still fails fast.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const delays = [1, 5, 15, 40, 80];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+      const delay = delays[attempt];
+      if (!retryable || delay === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 /** Create a sidecar writer rooted at `cacheDir`. */
 export function createSidecar(cacheDir: string): Sidecar {
   const path = join(resolve(cacheDir), "tailess", "tailess.css");
   let written: string | null = null;
+  let serial = 0;
+
+  /**
+   * Refreshes are serialized. Both integrations can ask for one from several
+   * places at once — a build with many stylesheets transforms them in parallel,
+   * and in dev a watcher tick can land mid-transform — and two overlapping writes
+   * to one path can interleave into a stylesheet that parses as neither list.
+   */
+  let queue: Promise<void> = Promise.resolve();
+
+  async function write(css: string): Promise<void> {
+    const directory = dirname(path);
+    await mkdir(directory, { recursive: true });
+
+    // Write beside the target and rename over it. Rename is atomic, so Tailwind
+    // reading the sidecar concurrently sees either the old list or the new one,
+    // never a truncated file mid-write.
+    serial += 1;
+    const temporary = join(directory, `.tailess.${process.pid}.${serial}.tmp`);
+    try {
+      await writeFile(temporary, css, "utf8");
+      await renameWithRetry(temporary, path);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
+  async function refreshNow(
+    classes: readonly string[],
+  ): Promise<{ css: string; changed: boolean }> {
+    const css = buildPrelude(classes);
+
+    // Confirm the file is still there rather than trusting `written` alone: cache
+    // directories get wiped between runs (`vite --force`, a clean script), and a
+    // stale "already written" would leave the entry importing nothing.
+    const unchanged =
+      css === written &&
+      (await stat(path).then(
+        () => true,
+        () => false,
+      ));
+    if (unchanged) return { css, changed: false };
+
+    await write(css);
+    written = css;
+    return { css, changed: true };
+  }
 
   return {
     path,
-    async refresh(classes) {
-      const css = buildPrelude(classes);
-
-      // Confirm the file is still there rather than trusting `written` alone: cache
-      // directories get wiped between runs (`vite --force`, a clean script), and a
-      // stale "already written" would leave the entry importing nothing.
-      const unchanged =
-        css === written &&
-        (await stat(path).then(
-          () => true,
-          () => false,
-        ));
-      if (unchanged) return { css, changed: false };
-
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, css, "utf8");
-      written = css;
-      return { css, changed: true };
+    refresh(classes) {
+      const result = queue.then(() => refreshNow(classes));
+      // The caller owns the error through `result`; the chain itself must stay
+      // settled so one failed refresh can't reject every later one.
+      queue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     },
   };
 }

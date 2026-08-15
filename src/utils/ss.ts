@@ -1,15 +1,10 @@
+import { clsx } from "clsx";
 import { rankOf, unknownRank } from "../constants.js";
 import { isDev } from "../internal/env.js";
+
 import type { ClassValue, SsInput } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
-
-interface Bucket {
-  rank: number;
-  seq: number;
-  key: string;
-  value: ClassValue;
-}
 
 /**
  * Group Tailwind classes by breakpoint/state in a readable object instead of
@@ -36,16 +31,22 @@ interface Bucket {
  */
 export function ss(input: SsInput): string {
   const source = input as Record<string, ClassValue>;
-  const buckets: Bucket[] = [];
-  let seq = 0;
+  const names = Object.keys(source);
 
-  for (const key of Object.keys(source)) {
+  // Parallel arrays rather than one object per key: `ss` sits in the render path
+  // of every component that uses it, and the per-call garbage was most of its cost.
+  const keys: string[] = [];
+  const values: ClassValue[] = [];
+  const ranks: number[] = [];
+
+  for (let i = 0; i < names.length; i += 1) {
+    const key = names[i] as string;
     const value = source[key];
-    const at = seq++;
     if (value == null || value === false || value === "") continue;
 
-    const rank = rankOf(key);
+    let rank = rankOf(key);
     if (rank === undefined) {
+      rank = unknownRank;
       if (isDev) {
         console.warn(
           `[tailess] ss(): "${key}" is not a Tailwind breakpoint or state variant. ` +
@@ -53,19 +54,41 @@ export function ss(input: SsInput): string {
             `use withPrefix("${key}", ...) if that's intentional.`,
         );
       }
-      buckets.push({ rank: unknownRank, seq: at, key, value });
-      continue;
     }
-    buckets.push({ rank, seq: at, key, value });
+    keys.push(key);
+    values.push(value);
+    ranks.push(rank);
   }
 
-  // Stable: known keys by their canonical rank, unknown keys in author order.
-  buckets.sort((a, b) => a.rank - b.rank || a.seq - b.seq);
-
-  const parts: ClassValue[] = [];
-  for (const bucket of buckets) {
-    parts.push(bucket.key === "base" ? bucket.value : withPrefix(bucket.key, bucket.value));
+  // Insertion sort: an `ss` call has a handful of keys, and being stable is what
+  // keeps unknown keys — which all share `unknownRank` — in the order written.
+  for (let i = 1; i < ranks.length; i += 1) {
+    const key = keys[i] as string;
+    const value = values[i] as ClassValue;
+    const rank = ranks[i] as number;
+    let j = i - 1;
+    while (j >= 0 && (ranks[j] as number) > rank) {
+      keys[j + 1] = keys[j] as string;
+      values[j + 1] = values[j] as ClassValue;
+      ranks[j + 1] = ranks[j] as number;
+      j -= 1;
+    }
+    keys[j + 1] = key;
+    values[j + 1] = value;
+    ranks[j + 1] = rank;
   }
 
-  return cn(...parts);
+  // Concatenate as we go instead of collecting parts for a variadic `cn`: every
+  // piece is already a flat class string, so the extra array and `clsx` pass over
+  // it would only re-join what we just built.
+  let joined = "";
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i] as string;
+    const value = values[i] as ClassValue;
+    const part = key === "base" ? clsx(value) : withPrefix(key, value);
+    if (part === "") continue;
+    joined = joined === "" ? part : `${joined} ${part}`;
+  }
+
+  return cn(joined);
 }

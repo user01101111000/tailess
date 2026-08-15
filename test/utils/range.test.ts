@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { between, until } from "../../src/utils/range.js";
 
 describe("until", () => {
@@ -26,5 +26,31 @@ describe("between", () => {
 
   it("returns an empty string for empty classes", () => {
     expect(between("sm", "lg", null)).toBe("");
+  });
+});
+
+describe("between — an empty range", () => {
+  it("warns when min is not narrower than max", () => {
+    // `lg:max-sm:` compiles to real CSS that no viewport can ever satisfy, so it
+    // passes every other check and silently styles nothing.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(between("lg", "sm", "block")).toBe("lg:max-sm:block");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('between("sm", "lg"');
+    warn.mockRestore();
+  });
+
+  it("warns when both breakpoints are the same", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    between("md", "md", "block");
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("stays quiet for a real range", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(between("sm", "lg", "block")).toBe("sm:max-lg:block");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

@@ -116,3 +116,25 @@ describe("integration check", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe("server-side rendering", () => {
+  it("does not spend the one-shot check on a render that had no document", async () => {
+    // SSR reaches withPrefix too. If the server pass claimed the flag, the browser
+    // pass — the only one that can observe the marker — would never warn, and a
+    // missing integration would go back to being silent. That is the exact failure
+    // this check exists to catch, so it must survive a server render first.
+    const withPrefix = await loadWithPrefix();
+
+    withPrefix("md", "text-lg"); // no window/document stubbed yet
+    await vi.runAllTimersAsync();
+    expect(warn).not.toHaveBeenCalled();
+
+    // Now the same module reaches a browser without the marker.
+    setupDom("");
+    withPrefix("md", "text-lg");
+    await vi.runAllTimersAsync();
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]?.[0])).toContain("[tailess]");
+  });
+});
