@@ -57,7 +57,7 @@ you get a console message naming the fix instead of a silently broken page.
 - 🔌 **One line of setup** — a Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
 - 🧯 **No silent failures** — the whole reason this package exists.
 - ♻️ **Instant in dev** — add a class and it appears without restarting; delete it and it stops being emitted.
-- 🪶 **Tiny** — 2.4 kB min+gzip, ESM + CJS, tree-shakeable. Only `clsx` and `tailwind-merge`.
+- 🪶 **Small** — 2.4 kB of its own code, ESM + CJS, tree-shakeable. [See what the badge counts](#bundle-size).
 - ⚡ **Fast** — `ss()` with three groups costs ~385 ns.
 
 ## Contents
@@ -71,7 +71,7 @@ you get a console message naming the fix instead of a silently broken page.
 - [Framework examples](#framework-examples)
 - [Keys](#keys)
 - [Plugin options](#plugin-options)
-- [Performance](#performance)
+- [Performance](#performance) · [Bundle size](#bundle-size)
 - [Troubleshooting](#troubleshooting)
 - [Verified on](#verified-on)
 - [FAQ](#faq)
@@ -478,9 +478,29 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 | `cn("px-2 py-1", …, "px-4")` | ~123 ns |
 | `ss()` with 3 groups | ~385 ns |
 | `ss()` with 8 groups | ~970 ns |
-| Runtime entry, min+gzip | **2.4 kB** (excl. `clsx` + `tailwind-merge`) |
 | Cold scan, 2,000-file project | ~98 ms |
 | Warm rescan, same project | ~17 ms |
+
+### Bundle size
+
+The badge at the top reads ~10.8 kB because it measures the whole dependency tree.
+That number is real, but almost none of it is tailess:
+
+| | min+gzip |
+| --- | --- |
+| `tailwind-merge` | ~8.3 kB |
+| tailess itself | **~2.4 kB** |
+| `clsx` | ~0.2 kB |
+| **Total** | **~10.8 kB** |
+
+`clsx` + `tailwind-merge` is what a `cn()` helper is in essentially every Tailwind
+codebase, so if you already have one, adding tailess costs the 2.4 kB — not the 10.8.
+If you don't, you're getting `cn()` in the same install.
+
+About a fifth of tailess' own 2.4 kB is the text of its development-time warnings.
+That text can't be dead-code-eliminated without either risking a crash when the package
+is loaded unbundled or putting a `process.env` read on the render path; both were
+measured and rejected, and the reasoning is in `src/internal/env.ts`.
 
 The build plugin caches extraction per file by mtime and size, coalesces concurrent scans,
 and only rewrites the sidecar when the class list actually changed — so an unrelated
@@ -563,7 +583,8 @@ workflow cannot publish unless all of them pass.
 ## FAQ
 
 **Does this replace `clsx` / `tailwind-merge`?** No — it uses both. `cn` is exactly
-`twMerge(clsx(...))`, so you can drop tailess into a codebase that already has one.
+`twMerge(clsx(...))`, so you can drop tailess into a codebase that already has one, and
+those two make up most of the [bundle-size badge](#bundle-size).
 
 **Does it work without the plugin?** The unprefixed `base` classes and `match()` do,
 because those are literals Tailwind finds by itself. Anything with a variant prefix
