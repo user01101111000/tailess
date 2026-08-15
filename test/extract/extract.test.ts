@@ -94,9 +94,39 @@ describe("extractClasses", () => {
     expect(extractClasses("ss({ [key]: 'flex' })")).toEqual([]);
   });
 
-  it("ignores calls in strings and comments", () => {
-    expect(extractClasses(`// ss({ md: "flex" })`)).toEqual([]);
-    expect(extractClasses(`const doc = 'ss({ md: "flex" })'`)).toEqual([]);
+  // Over-approximating on purpose: a candidate that matches no utility is
+  // dropped by `@source inline(...)`, while a missed one costs a real style.
+  // See the note on `scanCalls` for why context tracking can't be trusted in the
+  // markup-ish files this scans.
+  it("also picks up calls written inside strings and comments", () => {
+    expect(extractClasses(`// ss({ md: "flex" })`)).toEqual(["md:flex"]);
+    expect(extractClasses(`const doc = 'ss({ md: "flex" })'`)).toEqual(["md:flex"]);
+  });
+
+  it("never loses a call to an apostrophe in surrounding markup", () => {
+    // `Let's` is not a string literal, but a JS-only scanner reads it as one and
+    // swallows everything up to the next quote — including the call below it.
+    expect(extractClasses(`<p>Let's go</p>\n<div class={ss({ md: "grid" })}>x</div>`)).toEqual([
+      "md:grid",
+    ]);
+    expect(
+      extractClasses(`<h2>Here's what's new</h2>\n<b class={on("hover", "underline")}>y</b>`),
+    ).toEqual(["hover:underline"]);
+  });
+
+  it("reads calls inside quoted markup attributes (Vue, HTML, Alpine)", () => {
+    expect(
+      extractClasses(`<div :class="ss({ base: 'flex', md: 'grid' })">It's here</div>`),
+    ).toEqual(["md:grid"]);
+    expect(extractClasses(`<div v-bind:class="on('hover', 'underline')" />`)).toEqual([
+      "hover:underline",
+    ]);
+  });
+
+  it("keeps reading after a call it cannot parse", () => {
+    // An unbalanced or malformed call must not take the rest of the file with it.
+    expect(extractClasses(`ss({ md: "flex"\n\nss({ lg: "grid" })`)).toContain("lg:grid");
+    expect(extractClasses(`const s = "oops;\nss({ md: "flex" })`)).toContain("md:flex");
   });
 
   it("ignores cn() and match(), whose classes are already literal in source", () => {

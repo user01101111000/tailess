@@ -1,17 +1,27 @@
 /// <reference types="node" />
-import { join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, defaultExtensions, isScannable } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
+import { buildPrelude } from "../integration/inject.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 
-/** Options for the tailess Vite plugin. */
+/**
+ * Options for the tailess Vite plugin.
+ *
+ * Each is `| undefined` so that passing one conditionally — `content: isCI ? […] :
+ * undefined` — compiles under `exactOptionalPropertyTypes`, which is what the
+ * implementation already accepts.
+ */
 export interface TailessViteOptions {
-  /** Files or directories to scan. Defaults to Vite's `root`. */
-  content?: string[];
+  /**
+   * Files or directories to scan. Relative paths resolve against Vite's `root`,
+   * which is also the default.
+   */
+  content?: string[] | undefined;
   /** Extra directory names to skip while scanning. */
-  ignore?: string[];
+  ignore?: string[] | undefined;
   /** File extensions to scan, without the dot. Defaults to the usual source types. */
-  extensions?: string[];
+  extensions?: string[] | undefined;
 }
 
 /** The slice of Vite's transform context we use. */
@@ -87,21 +97,85 @@ export function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
 
   /** Tailwind entry stylesheets we've injected into, by absolute path. */
   const entries = new Set<string>();
-  let watching = false;
+
+  /**
+   * Watchers already wired up. Scoped to the watcher rather than to this closure
+   * because Vite calls `configureServer` again on every restart, and a plugin
+   * instance passed through `inlineConfig.plugins` is reused across one — a latch
+   * on the instance would leave the new server with no listeners, and new classes
+   * would quietly stop reaching Tailwind until the process was restarted.
+   */
+  const watched = new WeakSet<object>();
 
   const extensions = new Set<string>(options.extensions ?? defaultExtensions);
 
-  const roots = (): string[] => (options.content?.length ? options.content : [root]);
+  /**
+   * `content` resolved against Vite's root, not the working directory.
+   *
+   * The two are the same only when the build runs from the project it builds.
+   * `vite build apps/web`, a monorepo task launched from the workspace root, or a
+   * `--config` pointing elsewhere all break that assumption, and a relative
+   * `content` would then name a directory that does not exist. The scan finds
+   * nothing, the sidecar still gets its marker, and every runtime-built class
+   * silently loses its CSS — with the integration check reporting success.
+   */
+  let contentRoots: string[] | undefined;
 
-  /** Re-scan and refresh the sidecar, returning the files that were read. */
-  async function refresh(): Promise<{ files: string[]; css: string; changed: boolean }> {
+  const roots = (): string[] => contentRoots ?? [root];
+
+  let warnedAboutSidecar = false;
+  let warnedAboutEmptyScan = false;
+
+  /**
+   * Re-scan and refresh the sidecar, returning the files that were read and
+   * whether the sidecar is usable.
+   *
+   * A failed write is reported rather than thrown. It means a locked or read-only
+   * cache directory — transient on Windows, permanent in a sandboxed CI — and
+   * failing the whole CSS transform over it would take the build down when
+   * inlining the list would have worked.
+   */
+  async function refresh(): Promise<{
+    files: string[];
+    css: string;
+    changed: boolean;
+    wrote: boolean;
+  }> {
+    const scanned = roots();
     const { classes, files } = await collect({
-      roots: roots(),
+      roots: scanned,
       ignore: options.ignore,
       extensions: options.extensions,
     });
-    const { css, changed } = await sidecar.refresh(classes);
-    return { files, css, changed };
+
+    // An explicit `content` that matches nothing is always a mistake — a wrong path,
+    // or an extension list that excludes the project's own files. Left quiet it looks
+    // exactly like a project that uses no tailess at all, right up until the page
+    // renders unstyled.
+    if (files.length === 0 && options.content?.length && !warnedAboutEmptyScan) {
+      warnedAboutEmptyScan = true;
+      console.warn(
+        `[tailess] the "content" option matched no files, so no variant class will ` +
+          `have CSS. Scanned: ${scanned.join(", ")}. Paths are resolved against Vite's ` +
+          `root (${root}).`,
+      );
+    }
+
+    try {
+      const { css, changed } = await sidecar.refresh(classes);
+      return { files, css, changed, wrote: true };
+    } catch (error) {
+      if (!warnedAboutSidecar) {
+        warnedAboutSidecar = true;
+        console.warn(
+          `[tailess] could not write ${sidecar.path}, so the class list is being ` +
+            "inlined into your stylesheet instead. Builds are unaffected; in dev, a " +
+            "brand-new variant may need a restart to pick up.",
+          error,
+        );
+      }
+      return { files, css: buildPrelude(classes), changed: false, wrote: false };
+    }
   }
 
   return {
@@ -112,12 +186,15 @@ export function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
 
     configResolved(config) {
       if (config.root) root = config.root;
+      contentRoots = options.content?.length
+        ? options.content.map((path) => (isAbsolute(path) ? path : resolve(root, path)))
+        : undefined;
       sidecar = createSidecar(config.cacheDir ?? join(root, "node_modules", ".vite"));
     },
 
     configureServer(server) {
-      if (watching) return;
-      watching = true;
+      if (watched.has(server.watcher)) return;
+      watched.add(server.watcher);
 
       let timer: ReturnType<typeof setTimeout> | undefined;
       const scanRoots = roots().map((path) => resolve(path));
@@ -167,16 +244,17 @@ export function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
 
         entries.add(entry);
 
-        const { files, css } = await refresh();
+        const { files, css, wrote } = await refresh();
         // Watch the sources so `build --watch` retriggers, and so Vite's watcher is
         // listening on them in dev even outside its own module graph.
         for (const dependency of files) this.addWatchFile(dependency);
-        this.addWatchFile(sidecar.path);
+        if (wrote) this.addWatchFile(sidecar.path);
 
-        const specifier = importSpecifier(entry, sidecar.path);
-        // No relative path exists only when the two sit on different Windows drives
-        // (a `cacheDir` pointed at another volume). Inline the list instead: still
-        // correct, it just loses the mtime signal that makes Tailwind rebuild in dev.
+        const specifier = wrote ? importSpecifier(entry, sidecar.path) : null;
+        // No relative path exists when the two sit on different Windows drives (a
+        // `cacheDir` pointed at another volume), and there is nothing to import if
+        // the write failed. Inline the list instead: still correct, it just loses
+        // the mtime signal that makes Tailwind rebuild in dev.
         if (specifier === null) return { code: `${css}${code}`, map: null };
 
         return { code: `@import "${specifier}";\n${code}`, map: null };

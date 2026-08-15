@@ -73,6 +73,11 @@ export interface CollectResult {
   files: string[];
   /** Absolute roots that were walked. */
   roots: string[];
+  /**
+   * The extensions that were scanned, normalized (lower-case, no leading dot).
+   * Callers use it to describe the same file set to a bundler's watcher.
+   */
+  extensions: string[];
 }
 
 interface CacheEntry {
@@ -206,5 +211,5 @@ async function run(options: CollectOptions): Promise<CollectResult> {
     for (const cls of list) classes.add(cls);
   }
 
-  return { classes: [...classes].sort(), files, roots };
+  return { classes: [...classes].sort(), files, roots, extensions: [...extensions] };
 }

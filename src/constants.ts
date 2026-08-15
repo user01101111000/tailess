@@ -33,18 +33,15 @@ export const maxScreenKeys = ["max-2xl", "max-xl", "max-lg", "max-md", "max-sm"]
 export type MaxScreenKey = (typeof maxScreenKeys)[number];
 
 /**
- * Every Tailwind variant that needs no value of its own — pseudo-classes,
- * pseudo-elements, media queries, and the static `group-*` / `peer-*` pairs.
+ * Variants describing the state of the element itself — the ones Tailwind also
+ * lets you compound onto a parent (`group-*`) or a sibling (`peer-*`).
  *
- * Variants that take a value (`data-*`, `aria-*`, `supports-*`, `has-*`, `not-*`,
- * `min-*`/`max-*` with an arbitrary length, …) are not listed: use the
- * {@link data} / {@link aria} helpers, or `withPrefix` for anything else.
- *
- * Every entry here is verified against Tailwind's compiler in the test suite, so
- * an autocompleted key always resolves to a real variant.
+ * This list is the single source of both compound families below. Writing the
+ * three out by hand is how they drift: Tailwind compounds `group` and `peer`
+ * with exactly the same set, so any name present in one and missing from the
+ * other was an oversight, never a rule.
  */
-export const stateKeys = [
-  // Pseudo-classes
+const elementStates = [
   "hover",
   "focus",
   "focus-within",
@@ -75,10 +72,20 @@ export const stateKeys = [
   "in-range",
   "out-of-range",
   "placeholder-shown",
-  "details-content",
   "autofill",
   "read-only",
+  "open",
+  "inert",
+  "rtl",
+  "ltr",
+] as const;
 
+/**
+ * Static variants that describe something other than the element's own state —
+ * pseudo-elements, media and feature queries, and the child combinators. None of
+ * these compound with `group-*` / `peer-*`.
+ */
+const standaloneStates = [
   // Pseudo-elements
   "before",
   "after",
@@ -89,6 +96,7 @@ export const stateKeys = [
   "file",
   "backdrop",
   "placeholder",
+  "details-content",
 
   // Media & feature queries
   "dark",
@@ -108,44 +116,48 @@ export const stateKeys = [
   "any-pointer-fine",
   "any-pointer-coarse",
   "any-pointer-none",
-
-  // Direction & element state
-  "rtl",
-  "ltr",
-  "open",
-  "inert",
   "starting",
 
-  // Parent state (`group`)
-  "group-hover",
-  "group-focus",
-  "group-focus-within",
-  "group-focus-visible",
-  "group-active",
-  "group-disabled",
-  "group-checked",
-  "group-open",
-  "group-first",
-  "group-last",
-  "group-odd",
-  "group-even",
-
-  // Sibling state (`peer`)
-  "peer-hover",
-  "peer-focus",
-  "peer-focus-within",
-  "peer-focus-visible",
-  "peer-active",
-  "peer-disabled",
-  "peer-checked",
-  "peer-open",
-  "peer-invalid",
-  "peer-required",
-  "peer-placeholder-shown",
+  // Children: `*` for direct children, `**` for all descendants.
+  "*",
+  "**",
 ] as const;
 
+/** A state variant that also has `group-*` and `peer-*` forms. */
+export type ElementStateKey = (typeof elementStates)[number];
+
+/** A static variant with no `group-*` / `peer-*` form. */
+export type StandaloneStateKey = (typeof standaloneStates)[number];
+
+/** A parent-state variant, e.g. `group-hover`. */
+export type GroupStateKey = `group-${ElementStateKey}`;
+
+/** A sibling-state variant, e.g. `peer-checked`. */
+export type PeerStateKey = `peer-${ElementStateKey}`;
+
 /** A built-in Tailwind state variant key. */
-export type StateKey = (typeof stateKeys)[number];
+export type StateKey = ElementStateKey | StandaloneStateKey | GroupStateKey | PeerStateKey;
+
+/**
+ * Every Tailwind variant that needs no value of its own — pseudo-classes,
+ * pseudo-elements, media queries, the child combinators, and the static
+ * `group-*` / `peer-*` pairs.
+ *
+ * Variants that take a value (`data-*`, `aria-*`, `supports-*`, `has-*`, `not-*`,
+ * `in-*`, `min-*`/`max-*` with an arbitrary length, …) are not listed: use the
+ * {@link data} / {@link aria} helpers, or `withPrefix` for anything else.
+ *
+ * The test suite enumerates Tailwind's own variant registry and asserts this list
+ * matches it exactly — in both directions — so an autocompleted key always
+ * resolves to a real variant, and a real variant is never missing from
+ * autocomplete.
+ */
+export const stateKeys: readonly StateKey[] = [
+  ...elementStates,
+  ...standaloneStates,
+  ...elementStates.map((state): GroupStateKey => `group-${state}`),
+  ...elementStates.map((state): PeerStateKey => `peer-${state}`),
+];
 
 /** Every key {@link ss} accepts besides `base`. */
 export type SsKey = ScreenKey | MaxScreenKey | StateKey;

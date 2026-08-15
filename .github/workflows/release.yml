@@ -26,6 +26,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # CI runs on this same push, but nothing makes the release job wait for it,
+      # so re-verify here. Otherwise a regression can publish while CI is still red,
+      # and an npm version cannot be unpublished once it is out.
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
       - name: Build
         run: npm run build
 

@@ -24,9 +24,14 @@ let started = false;
  */
 export function verifyIntegration(): void {
   if (started || !isDev) return;
-  started = true;
 
+  // Claim the flag only once there is a document to check. A server-side render
+  // reaches this too, and consuming the flag there would leave the browser pass —
+  // the only one that can actually observe the marker — permanently silent. That
+  // warning is this package's guarantee against unstyled elements, so it must not
+  // be spendable by a call that was never able to perform the check.
   if (typeof window === "undefined" || typeof document === "undefined") return;
+  started = true;
 
   const check = (): void => {
     const value = getComputedStyle(document.documentElement)

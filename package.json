@@ -82,7 +82,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/postbuild.mjs",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -91,7 +91,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "check:exports": "attw --pack . --ignore-rules false-export-default",
+    "check:exports": "attw --pack .",
     "check:publish": "publint",
     "prepublishOnly": "npm run build && npm run check:publish && npm run check:exports",
     "release": "changeset publish",
@@ -108,6 +108,7 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.1.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "esbuild": "^0.27.7",
     "postcss": "^8.5.26",
     "publint": "^0.3.21",
     "tailwindcss": "^4.3.3",

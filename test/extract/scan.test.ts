@@ -24,12 +24,27 @@ describe("scanCalls", () => {
     expect(scanCalls(`process(); myss("x"); across("y")`)).toEqual([]);
   });
 
-  it("ignores calls inside string and template literals", () => {
-    expect(scanCalls(`const x = "on(\\"hover\\", 'a')"; const y = \`ss({a:1})\`;`)).toEqual([]);
+  // Matching a call inside a string or comment is the deliberate cost of never
+  // desyncing on markup — see the note on `scanCalls`.
+  it("matches calls inside strings and comments too", () => {
+    expect(scanCalls(`// on("hover", "a")`)).toEqual([{ name: "on", args: ['"hover"', '"a"'] }]);
+    expect(scanCalls(`/* ss({ md: "b" }) */`)).toEqual([{ name: "ss", args: ['{ md: "b" }'] }]);
   });
 
-  it("ignores calls inside comments", () => {
-    expect(scanCalls(`// on("hover", "a")\n/* ss({ md: "b" }) */`)).toEqual([]);
+  it("finds a call inside a quoted markup attribute", () => {
+    expect(scanCalls(`<div :class="ss({ md: 'grid' })">`)).toEqual([
+      { name: "ss", args: ["{ md: 'grid' }"] },
+    ]);
+  });
+
+  it("does not let an apostrophe in prose swallow the next call", () => {
+    expect(scanCalls(`<p>Let's go</p>\n<b class={on("hover", "a")} />`)).toEqual([
+      { name: "on", args: ['"hover"', '"a"'] },
+    ]);
+  });
+
+  it("stops an unclosed argument list at the end of input", () => {
+    expect(scanCalls(`ss({ md: "b"`)).toEqual([{ name: "ss", args: ['{ md: "b"'] }]);
   });
 
   it("finds multiple and nested calls", () => {
