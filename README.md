@@ -38,6 +38,32 @@ autocompleted, every typo a compile error.
 Same output, same runtime cost profile as any `clsx` + `tailwind-merge` setup — but the
 structure is visible, and the compiler checks it.
 
+And one call is the whole `className`. Conditions, a caller's `className`, and compound
+variants all go **inside** it — no wrapper helper, no second `ss()`:
+
+```tsx
+// ❌ a wrapper, and ss() again for every condition
+className={cn(
+  ss({ base: "rounded-lg border p-4", md: "p-6" }),
+  ss({ dark: "border-neutral-800" }),
+  isDisabled && ss({ base: "opacity-50", sm: "bg-red-500" }),
+  className,
+)}
+
+// ✅ one call
+className={ss(
+  {
+    base: "rounded-lg border p-4",
+    md:   "p-6",
+    dark: { base: "border-neutral-800", hover: "border-neutral-700" },
+  },
+  isDisabled && { base: "opacity-50", sm: "bg-red-500" },
+  className,
+)}
+```
+
+`ss` is a strict superset of a `cn()` helper: hand it plain strings and it *is* `cn`.
+
 ## Why this isn't just a formatting trick
 
 Building `md:` at runtime is easy. Making Tailwind **emit CSS** for it is the hard part,
@@ -57,24 +83,20 @@ you get a console message naming the fix instead of a silently broken page.
 - 🔌 **One line of setup** — a Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
 - 🧯 **No silent failures** — the whole reason this package exists.
 - ♻️ **Instant in dev** — add a class and it appears without restarting; delete it and it stops being emitted.
-- 🪶 **Small** — 2.4 kB of its own code, ESM + CJS, tree-shakeable. [See what the badge counts](#bundle-size).
-- ⚡ **Fast** — `ss()` with three groups costs ~385 ns.
+- 🪶 **Small** — 2.6 kB of its own code, ESM + CJS, tree-shakeable. [See what the badge counts](#bundle-size).
+- ⚡ **Fast** — `ss()` with three groups costs ~385 ns, one `tailwind-merge` pass whatever the shape.
 
 ## Contents
 
-- [Requirements](#requirements)
-- [Install](#install)
-- [Setup](#setup) · [Vite](#vite) · [Next.js](#nextjs) · [Other PostCSS setups](#other-postcss-setups)
+- [Requirements](#requirements) · [Install](#install)
+- [Setup](#setup) — [Vite](#vite) · [Next.js](#nextjs) · [Other PostCSS setups](#other-postcss-setups)
 - [How it works](#how-it-works)
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
-- [API](#api)
-- [Framework examples](#framework-examples)
-- [Keys](#keys)
-- [Plugin options](#plugin-options)
+- [API](#api) — [`ss`](#ss--group-by-breakpoint-and-state) · [composing](#many-arguments-one-call) · [nesting](#nested-groups-for-compound-variants) · [the other helpers](#cn--compose-and-merge)
+- [Upgrading from 0.6](#upgrading-from-06)
+- [Framework examples](#framework-examples) · [Keys](#keys) · [Plugin options](#plugin-options)
 - [Performance](#performance) · [Bundle size](#bundle-size)
-- [Troubleshooting](#troubleshooting)
-- [Verified on](#verified-on)
-- [FAQ](#faq)
+- [Troubleshooting](#troubleshooting) · [Verified on](#verified-on) · [FAQ](#faq)
 - [Contributing](#contributing) · [License](#license)
 
 ## Requirements
@@ -112,7 +134,8 @@ export default defineConfig({
 ```
 
 Order in the array doesn't matter — the hook is registered `order: "pre"`, so it always
-runs before Tailwind wherever you put it.
+runs before Tailwind wherever you put it. A CommonJS config works the same way:
+`require("tailess/vite")` is the plugin itself.
 
 ### Next.js
 
@@ -201,8 +224,11 @@ costs you the style.
 ss({ md: "text-2xl", hover: "underline" })          // literals
 ss({ md: isWide ? "grid-cols-3" : "grid-cols-1" })  // both branches
 ss({ md: ["flex", cond && "gap-4"] })               // arrays
-ss({ md: { "text-lg": cond } })                     // clsx object form
+ss({ md: [{ "text-lg": cond }] })                   // clsx object form, in an array
 ss({ md: "text-lg", /* both survive */ lg: "xl" })  // comments anywhere
+ss({ dark: { hover: "bg-black" } })                 // nested — dark:hover:bg-black
+ss(a, cond && { sm: "bg-red-500" })                 // a map behind a condition
+ss(a, open ? { md: "p-6" } : { md: "p-2" })         // both branches, as maps
 on(["dark", "hover"], "bg-black")                   // compound variants
 data("state", open ? "open" : "closed", "p-2")      // both values
 ```
@@ -214,7 +240,18 @@ const size = "text-2xl";
 ss({ md: size });                    // a variable
 ss({ md: `text-${scale}` });         // an interpolated template
 ss({ ...spread });                   // a spread
+ss({ md: { [key]: "grid" } });       // a computed key
 withPrefix(dynamicPrefix, "grid");   // a computed prefix
+```
+
+The scanner also finds helpers by **name**, so a renamed import hides them:
+
+```tsx
+import { ss as tw } from "tailess";
+tw({ md: "p-6" });                   // ✗ not found — nothing supplies md:p-6
+
+import * as t from "tailess";
+t.ss({ md: "p-6" });                 // ✓ a namespace import is fine
 ```
 
 If you need one of those, put the literal somewhere the scanner can reach it — usually by
@@ -237,10 +274,25 @@ Every helper is a plain function. No factory, no instance, no config object.
 import { ss, cn, responsive, on, until, between, data, aria, match, withPrefix } from "tailess";
 ```
 
+| | | needs the plugin |
+| --- | --- | :---: |
+| [`ss`](#ss--group-by-breakpoint-and-state) | groups, composition, nesting — the whole `className` | ✅ |
+| [`cn`](#cn--compose-and-merge) | join and merge, nothing else | — |
+| [`responsive`](#responsive--mobile-first) | a base plus min-width overrides | ✅ |
+| [`until`](#until--between--max-width-ranges) / [`between`](#until--between--max-width-ranges) | max-width ranges | ✅ |
+| [`on`](#on--state-variants) | one state variant, or a stack of them | ✅ |
+| [`data`](#data--aria--attribute-variants) / [`aria`](#data--aria--attribute-variants) | attribute variants, for headless UI | ✅ |
+| [`match`](#match--exhaustive-variant-selection) | exhaustive lookup by a discriminant | — |
+| [`withPrefix`](#withprefix--the-escape-hatch) | any variant tailess doesn't model | ✅ |
+
+"Needs the plugin" means the helper builds a variant prefix at runtime, so Tailwind never
+sees the finished class in your source. `cn` and `match` only ever pass through classes
+you already wrote as literals.
+
 ### `ss` — group by breakpoint and state
 
-The main event. `base` holds unprefixed classes; every other key is a breakpoint, a
-`max-*` range, or a state variant.
+The main event. `base` holds classes with no further prefix; every other key is a
+breakpoint, a `max-*` range, or a state variant.
 
 ```ts
 ss({ base: "text-xl flex", sm: "block", md: "text-2xl" });
@@ -250,8 +302,8 @@ ss({ base: "grid", "max-md": "gap-2", "group-hover": "underline" });
 // → "grid max-md:gap-2 group-hover:underline"
 ```
 
-Output order is always `base` → breakpoints mobile-first → `max-*` largest-first →
-states, **whatever order you wrote the keys in**, and the result runs through
+Keys are emitted `base` → breakpoints mobile-first → `max-*` largest-first → states,
+**whatever order you wrote them in**, and the result runs through
 [`cn`](#cn--compose-and-merge). Stable order is what keeps `tailwind-merge`'s
 "last one wins" predictable.
 
@@ -263,9 +315,72 @@ ss({ base: "text-sm", md: isActive && "text-2xl" });
 // isActive === false → "text-sm"
 ```
 
+#### Many arguments, one call
+
+`ss` is variadic, and an argument is anything a bucket accepts: another map, a class
+string, a `clsx` array, or a condition that produces one. This is what a `className`
+looks like in practice — and why nothing needs to wrap it:
+
+```ts
+ss(
+  { base: "rounded-lg border p-4", md: "p-6" },
+  isDisabled && { base: "opacity-50", sm: "bg-red-500" },
+  match(tone, { info: "bg-blue-50", danger: "bg-red-50" }),
+  className,
+);
+```
+
+**Keys are sorted inside each map; the arguments themselves are never reordered.**
+That is what makes the last argument win, exactly as it does in `cn`:
+
+```ts
+ss({ base: "p-4", md: "p-6" }, "md:p-10");   // → "p-4 md:p-10"
+ss({ base: "p-4" }, { base: "p-8" });        // → "p-8"
+```
+
+Sorting a bare string into the `base` bucket instead would put a caller's
+`className="md:p-10"` *ahead* of your own `md:p-6` and quietly lose to it. It doesn't.
+
+Given only class values, `ss` is `cn`:
+
+```ts
+ss("px-2 py-1", isActive && "bg-blue-500", "px-4");  // → "py-1 bg-blue-500 px-4"
+```
+
+#### Nested groups, for compound variants
+
+A bucket's value can be another map, which stacks the prefixes. Each breakpoint gets its
+own group, with the same keys and the same rules:
+
+```ts
+ss({
+  base: "text-black p-4",
+  md: {
+    base:     "p-6",     // → md:p-6
+    hover:    "p-8",     // → md:hover:p-8
+    "max-lg": "grid",    // → md:max-lg:grid
+  },
+  dark: {
+    base:  "text-white",       // → dark:text-white
+    hover: "text-blue-300",    // → dark:hover:text-blue-300
+  },
+});
+```
+
+`md: "p-6"` and `md: { base: "p-6" }` mean the same thing, so nothing has to change to
+start nesting. A falsy nested bucket drops, prefix included, like any other.
+
+> [!NOTE]
+> A plain object is *always* a nested map, and an array is *always* `clsx` classes.
+> Nothing is decided by looking at your key names, so the same source always means the
+> same thing. Put a `clsx` dictionary inside an array — `md: [{ "text-lg": cond }]` —
+> where there is nothing to confuse it with.
+
 ### `cn` — compose and merge
 
-`clsx` for conditional joining, `tailwind-merge` for conflict resolution.
+`clsx` for conditional joining, `tailwind-merge` for conflict resolution. `ss` is a
+strict superset of it, so reach for `cn` when there are no breakpoints or states in
+sight and you'd rather say so.
 
 ```ts
 cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
@@ -292,6 +407,21 @@ between("sm", "lg", "block");   // → "sm:max-lg:block"    (sm up to, not incl.
 on("hover", "bg-blue-600 text-white");  // → "hover:bg-blue-600 hover:text-white"
 on(["dark", "hover"], "bg-black");      // → "dark:hover:bg-black"
 ```
+
+#### Each of these is a shape of `ss`
+
+Now that `ss` is variadic and nests, every helper above is one of its forms. They are
+staying — each reads better on its own, and an unused one costs nothing — but if you'd
+rather write everything one way, here is the translation:
+
+| helper | the `ss` form |
+| --- | --- |
+| `responsive("text-sm", { md: "text-lg" })` | `ss({ base: "text-sm", md: "text-lg" })` |
+| `on("hover", x)` | `ss({ hover: x })` |
+| `on(["dark", "hover"], x)` | `ss({ dark: { hover: x } })` |
+| `until("md", x)` | `ss({ "max-md": x })` |
+| `between("sm", "lg", x)` | `ss({ sm: { "max-lg": x } })` |
+| `cn(a, cond && b)` | `ss(a, cond && b)` |
 
 ### `data` / `aria` — attribute variants
 
@@ -351,8 +481,35 @@ import { screens, screenKeys, maxScreenKeys, stateKeys } from "tailess";
 window.matchMedia(`(min-width: ${screens.md})`).matches;  // "48rem"
 ```
 
-Types: `SsInput`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`, `ResponsiveMap`,
-`ClassValue`.
+Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
+`ResponsiveMap`, `ClassValue`.
+
+## Upgrading from 0.6
+
+Two things changed, and **TypeScript catches both** — neither can turn into a style that
+quietly stops appearing. Everything else is untouched: every existing `ss({ … })` call,
+`cn`, and all seven other helpers behave exactly as before.
+
+**1. A `clsx` dictionary as a bucket value now goes in an array,** because a bare object
+is a nested map:
+
+```ts
+ss({ md: { "text-lg": cond } })      // 0.6
+ss({ md: [{ "text-lg": cond }] })    // 0.7
+```
+
+**2. `tailess/vite` is exported only as a default,** matching `tailess/postcss`:
+
+```js
+import tailess from "tailess/vite";      // ✅ unchanged — the only documented form
+const tailess = require("tailess/vite"); // ✅ now the plugin itself, so a .cjs config works
+
+import { tailess } from "tailess/vite";  // ✗ removed
+require("tailess/vite").default;         // ✗ removed
+```
+
+Both plugin entries now have one shape: `require()` hands you the plugin creator. Before
+this, a `vite.config.cjs` got a namespace object that Vite rejects.
 
 ## Framework examples
 
@@ -360,20 +517,32 @@ Types: `SsInput`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`, `ResponsiveM
 <summary><strong>React</strong></summary>
 
 ```tsx
-import { cn, ss, match, on } from "tailess";
+import { ss, match } from "tailess";
 
-export function Card({ tone, wide }: { tone: "info" | "danger"; wide: boolean }) {
+export function Card({
+  tone,
+  wide,
+  disabled,
+  className,
+}: {
+  tone: "info" | "danger";
+  wide: boolean;
+  disabled: boolean;
+  className?: string;
+}) {
   return (
     <div
-      className={cn(
-        ss({
+      className={ss(
+        {
           base: "rounded-lg border p-4",
           md: wide && "p-6",
-          dark: "border-neutral-800",
+          dark: { base: "border-neutral-800", hover: "border-neutral-700" },
           hover: "shadow-md",
-        }),
+          "focus-visible": "ring-2 ring-offset-2",
+        },
+        disabled && { base: "opacity-50 pointer-events-none" },
         match(tone, { info: "bg-blue-50", danger: "bg-red-50" }),
-        on("focus-visible", "ring-2 ring-offset-2"),
+        className,
       )}
     />
   );
@@ -392,7 +561,12 @@ const props = defineProps<{ active: boolean }>();
 </script>
 
 <template>
-  <div :class="ss({ base: 'rounded p-4', md: 'p-6', hover: 'shadow-md' })">
+  <div
+    :class="ss(
+      { base: 'rounded p-4', md: 'p-6', dark: { hover: 'bg-neutral-800' } },
+      props.active && { base: 'ring-2' },
+    )"
+  >
     It's fine to write prose with apostrophes here.
   </div>
 </template>
@@ -409,7 +583,12 @@ const props = defineProps<{ active: boolean }>();
   let { active = false } = $props();
 </script>
 
-<div class={ss({ base: "rounded p-4", md: "p-6", hover: "shadow-md" })}>
+<div
+  class={ss(
+    { base: "rounded p-4", md: "p-6", dark: { hover: "bg-neutral-800" } },
+    active && { base: "ring-2" },
+  )}
+>
   Let's go — apostrophes in markup are fine.
 </div>
 ```
@@ -419,7 +598,8 @@ const props = defineProps<{ active: boolean }>();
 ## Keys
 
 `ss` accepts `base` plus Tailwind's own keys — **149 in total**, and nothing else, so
-autocomplete is exhaustive and a typo can't compile.
+autocomplete is exhaustive and a typo can't compile. The same 149 are available inside a
+nested group, which is how a compound variant is spelled.
 
 | Group | Count | Keys |
 | ----- | ----- | ---- |
@@ -481,23 +661,29 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 | Cold scan, 2,000-file project | ~98 ms |
 | Warm rescan, same project | ~17 ms |
 
+A single-map `ss({ … })` call takes a dedicated path with no argument loop, so it costs
+what it did before variadic arguments existed — re-measured after that change and within
+noise of the number above. Each further argument is one more map walk, a nested group
+costs the same as a top-level one, and there is exactly one `tailwind-merge` pass per
+call whatever the shape. Passing only class strings costs about what `cn` does.
+
 ### Bundle size
 
-The badge at the top reads ~10.8 kB because it measures the whole dependency tree.
+The badge at the top reads ~11.1 kB because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
 | `tailwind-merge` | ~8.3 kB |
-| tailess itself | **~2.4 kB** |
+| tailess itself | **~2.6 kB** |
 | `clsx` | ~0.2 kB |
-| **Total** | **~10.8 kB** |
+| **Total** | **~11.1 kB** |
 
 `clsx` + `tailwind-merge` is what a `cn()` helper is in essentially every Tailwind
-codebase, so if you already have one, adding tailess costs the 2.4 kB — not the 10.8.
+codebase, so if you already have one, adding tailess costs the 2.6 kB — not the 11.1.
 If you don't, you're getting `cn()` in the same install.
 
-About a fifth of tailess' own 2.4 kB is the text of its development-time warnings.
+About a fifth of tailess' own 2.6 kB is the text of its development-time warnings.
 That text can't be dead-code-eliminated without either risking a crash when the package
 is loaded unbundled or putting a `process.env` read on the render path; both were
 measured and rejected, and the reasoning is in `src/internal/env.ts`.
@@ -571,10 +757,16 @@ add-a-class / delete-a-class dev cycle, the inline fallback path, and every one 
 
 | | |
 | --- | --- |
-| Tests | 241, across 22 files |
+| Tests | 298, across 23 files |
 | Coverage | 95% statements, 90% branches |
 | Tailwind | 4.3.3 |
-| Manually verified | `create-vite` + `@tailwindcss/vite`, `create-next-app` (Turbopack and webpack) |
+| Manually verified | Vite 8 + `@tailwindcss/vite` 4, Next.js 16 (Turbopack and webpack) |
+
+One suite is worth calling out. `test/extract/runtime-parity.test.ts` hands the scanner a
+source string, then *evaluates that same string* with the real helpers, and asserts every
+prefixed class the runtime produced is in the candidates the scanner found. The two halves
+of the bridge are checked against each other rather than each against a hand-written list,
+so they cannot drift apart in the one direction that matters.
 
 CI additionally runs lint, typecheck, [`publint`](https://publint.dev) and
 [`arethetypeswrong`](https://arethetypeswrong.github.io) on every push, and the release
@@ -585,6 +777,15 @@ workflow cannot publish unless all of them pass.
 **Does this replace `clsx` / `tailwind-merge`?** No — it uses both. `cn` is exactly
 `twMerge(clsx(...))`, so you can drop tailess into a codebase that already has one, and
 those two make up most of the [bundle-size badge](#bundle-size).
+
+**`ss` or `cn`?** `ss` does everything `cn` does, so either works. The habit worth having
+is `cn` while a `className` is only plain strings, and `ss` the moment a breakpoint or a
+state shows up — at which point everything, conditions included, moves inside the one
+call.
+
+**Do I have to migrate to nested groups?** No. `md: "p-6"` and `md: { base: "p-6" }` are
+the same thing. Nesting is there for compound variants like `dark:hover:` and for
+grouping a breakpoint's own states; a flat object stays perfectly idiomatic.
 
 **Does it work without the plugin?** The unprefixed `base` classes and `match()` do,
 because those are literals Tailwind finds by itself. Anything with a variant prefix

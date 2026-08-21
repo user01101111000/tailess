@@ -48,16 +48,29 @@ describe.runIf(built)("built plugin entry points", () => {
     expect(namespace.default.postcss).toBe(true);
   });
 
-  it("exposes the Vite plugin as a callable default from both module systems", async () => {
+  it("exposes the Vite plugin as module.exports itself, like the PostCSS one", () => {
+    // Same reasoning as above, one step less severe: a `vite.config.cjs` doing
+    // `require("tailess/vite")` has to receive the plugin creator, not a namespace
+    // object Vite would reject. Keeping both entries on one shape also keeps
+    // Rollup's CJS writer from having to guess, which is what made every build
+    // print a mixed-exports warning.
+    const plugin = require(dist("vite/index.cjs"));
+    expect(typeof plugin).toBe("function");
+    expect(plugin().name).toBe("tailess");
+    expect(plugin.default).toBeUndefined();
+  });
+
+  it("exposes the Vite plugin as a callable default from ESM", async () => {
     const esm = await import(pathToFileURL(dist("vite/index.js")).href);
     expect(typeof esm.default).toBe("function");
-    expect(typeof esm.tailess).toBe("function");
+    expect(esm.default().name).toBe("tailess");
 
-    // The Vite plugin has a named export as well, so its CJS build is a namespace
-    // object — and its types say `.default`, matching.
-    const cjs = require(dist("vite/index.cjs"));
-    expect(typeof cjs.default).toBe("function");
-    expect(cjs.default().name).toBe("tailess");
+    // And through Node's ESM-importing-CJS interop, which fills `.default` with the
+    // whole `module.exports` — so the documented `import tailess from "tailess/vite"`
+    // works whichever build the resolver picks.
+    const namespace = await import(pathToFileURL(dist("vite/index.cjs")).href);
+    expect(typeof namespace.default).toBe("function");
+    expect(namespace.default().name).toBe("tailess");
   });
 
   it("keeps Node built-ins out of the browser entry", async () => {
