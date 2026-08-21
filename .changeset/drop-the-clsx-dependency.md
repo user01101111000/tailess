@@ -15,9 +15,16 @@ measures slightly faster, and `cn` and `ss` are unchanged end to end.
 A drop-in replacement is only worth having if it is genuinely identical, so `clsx` stays
 a devDependency and serves as the test oracle rather than being removed outright.
 `test/internal/join.test.ts` asserts the two produce byte-identical output across every
-shape — strings, numbers, `bigint` (which `clsx` types but drops at runtime), nested
-arrays, dictionaries, inherited enumerable keys — plus two thousand generated cases from
-a seeded PRNG, so a failure can be reproduced.
+shape, including the ones nobody writes on purpose: null-prototype objects, Proxies,
+boxed primitives, frozen objects, a getter that throws, symbol keys, `bigint` (which
+`clsx` types but drops at runtime), inherited enumerable keys, 200-deep nesting, and the
+circular array that overflows the stack in both — parity on a throw counts too. On top of
+that, 50,000 generated cases from a seeded PRNG, so any failure replays exactly.
+
+A second suite puts every public helper — `cn`, `ss`, `withPrefix`, `on`, `responsive`,
+`data`, `aria`, `until`, `between` — through twenty hostile values each and asserts none
+of them throws, because a crash during a render is worse than a wrong class. `join.ts`
+ends up at 100% statement, branch and function coverage.
 
 `ClassValue` is now declared by tailess instead of re-exported from `clsx`, with the same
 structure, so importing the type from `tailess` keeps working. `ClassArray` and

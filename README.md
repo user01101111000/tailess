@@ -766,7 +766,7 @@ add-a-class / delete-a-class dev cycle, the inline fallback path, and every one 
 
 | | |
 | --- | --- |
-| Tests | 327, across 24 files |
+| Tests | 339, across 24 files |
 | Coverage | 95% statements, 90% branches |
 | Tailwind | 4.3.3 |
 | Manually verified | Vite 8 + `@tailwindcss/vite` 4, Next.js 16 (Turbopack and webpack) |
