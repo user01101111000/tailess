@@ -671,19 +671,19 @@ call whatever the shape. Passing only class strings costs about what `cn` does.
 
 ### Bundle size
 
-The badge at the top reads ~11 kB because it measures the whole dependency tree.
+The badge at the top reads **11.1 kB** because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
-| `tailwind-merge` | ~8.3 kB |
+| `tailwind-merge` | ~8.4 kB |
 | tailess itself | **~2.7 kB** |
-| **Total** | **~11 kB** |
+| **Total** | **~11.1 kB** |
 
 `tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
 already pull it in. If yours is one of them, your bundler keeps the single shared copy
-and adding tailess costs the 2.7 kB, not the 11.
+and adding tailess costs the 2.7 kB, not the 11.1.
 
 The `clsx` half of that pairing is not a dependency: [`src/internal/join.ts`](./src/internal/join.ts)
 does the same job in about forty lines. That was worth doing because the code compresses
