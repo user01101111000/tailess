@@ -1,7 +1,7 @@
-import { type ClassValue, clsx } from "clsx";
 import { isDev } from "../internal/env.js";
-
+import { join } from "../internal/join.js";
 import { verifyIntegration } from "../internal/verify.js";
+import type { ClassValue } from "../types.js";
 
 const unicodeSpace = /\s/;
 
@@ -61,7 +61,7 @@ const unicodeSpaceGlobal = /\s/g;
 export function withPrefix(prefix: string, value: ClassValue): string {
   // `clsx` returns a string unchanged, so skip the call for the common case of
   // one already-flat class string.
-  const flat = typeof value === "string" ? value : clsx(value);
+  const flat = typeof value === "string" ? value : join(value);
   if (flat === "") return "";
 
   if (prefix === "") {
