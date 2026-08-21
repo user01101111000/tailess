@@ -45,10 +45,12 @@ describe("the browser bundle", () => {
 
   it("stays within its size budget", async () => {
     const code = await bundleFor("production");
-    // 4,857 chars minified today (~2.4 kB gzipped), roughly a fifth of which is the
+    // 5,491 chars minified today (~2.6 kB gzipped), roughly a fifth of which is the
     // warning text that cannot be eliminated. Raise this deliberately, and only for
-    // something worth shipping to every consumer's users.
-    expect(code.length).toBeLessThan(5_500);
+    // something worth shipping to every consumer's users. Last raised from 5,500 for
+    // variadic arguments and nested buckets in `ss` — +634 chars, +270 gzipped — which
+    // is what removed `cn(ss(…), …)` from every call site.
+    expect(code.length).toBeLessThan(6_000);
   });
 
   it("pulls in no Node builtins", async () => {

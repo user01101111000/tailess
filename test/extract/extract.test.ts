@@ -20,7 +20,9 @@ describe("extractClasses", () => {
       "md:text-xs",
     ]);
     expect(extractClasses(`ss({ md: isActive && "text-2xl" })`)).toEqual(["md:text-2xl"]);
-    expect(extractClasses(`ss({ md: { "text-2xl": a, "text-xs": b } })`)).toEqual([
+    // A clsx dictionary lives inside an array, where nothing can confuse it with a
+    // nested bucket map — and the brackets are exactly how the scanner tells.
+    expect(extractClasses(`ss({ md: [{ "text-2xl": a, "text-xs": b }] })`)).toEqual([
       "md:text-2xl",
       "md:text-xs",
     ]);
@@ -152,5 +154,108 @@ describe("extractClasses", () => {
   it("returns nothing for source with no tailess calls", () => {
     expect(extractClasses(`export const x = 1;`)).toEqual([]);
     expect(extractClasses("")).toEqual([]);
+  });
+});
+
+describe("extractClasses, variadic ss()", () => {
+  it("reads every argument, not just the first", () => {
+    expect(extractClasses(`ss({ md: "p-6" }, { hover: "shadow-md" }, className)`)).toEqual([
+      "hover:shadow-md",
+      "md:p-6",
+    ]);
+  });
+
+  it("reads a map behind a condition", () => {
+    // The whole point of the argument sweep: this map does not start the argument,
+    // and missing it would land the class on the element with no CSS behind it.
+    expect(extractClasses(`ss(base, isDisabled && { sm: "bg-red-500" })`)).toEqual([
+      "sm:bg-red-500",
+    ]);
+  });
+
+  it("reads both branches when the argument is a ternary of maps", () => {
+    expect(extractClasses(`ss(a, open ? { md: "p-6" } : { md: "p-2" })`)).toEqual([
+      "md:p-2",
+      "md:p-6",
+    ]);
+  });
+
+  it("ignores plain class arguments, which Tailwind already sees itself", () => {
+    expect(extractClasses(`ss("px-2 px-4", cond && "hidden", className)`)).toEqual([]);
+  });
+
+  it("reads a map spread across several lines and arguments", () => {
+    expect(
+      extractClasses(`ss(
+        {
+          base: "rounded border",
+          md: "p-6",   // still read
+        },
+        loading && { base: "animate-pulse", dark: "bg-neutral-800" },
+        "text-sm",
+      )`),
+    ).toEqual(["dark:bg-neutral-800", "md:p-6"]);
+  });
+});
+
+describe("extractClasses, nested ss() buckets", () => {
+  it("stacks a nested key onto its parent", () => {
+    expect(extractClasses(`ss({ dark: { hover: "bg-black" } })`)).toEqual(["dark:hover:bg-black"]);
+  });
+
+  it("reads a nested base as the parent prefix alone", () => {
+    expect(extractClasses(`ss({ dark: { base: "text-white", hover: "text-blue-300" } })`)).toEqual([
+      "dark:hover:text-blue-300",
+      "dark:text-white",
+    ]);
+  });
+
+  it("emits nothing extra for a value that is only a map", () => {
+    // `md:p-8` would resolve, so an over-approximation here ships a rule nothing
+    // uses. Only `md:hover:p-8` can actually be produced.
+    expect(extractClasses(`ss({ md: { hover: "p-8" } })`)).toEqual(["md:hover:p-8"]);
+  });
+
+  it("reads a nested map behind a condition, and the classes beside it", () => {
+    // `md:p-8` is the over-approximation: once a value holds anything besides the
+    // map, the token sweep runs over all of it. Narrowing the sweep to the text
+    // *outside* the braces is the obvious fix and the wrong one — it would silently
+    // drop `ss({ md: match(size, { sm: "p-1" }) })`, where the classes live inside
+    // an object that is an argument, not a bucket.
+    expect(extractClasses(`ss({ md: wide ? { hover: "p-8" } : "p-2" })`)).toEqual([
+      "md:hover:p-8",
+      "md:p-2",
+      "md:p-8",
+    ]);
+  });
+
+  it("still reads a lookup called inside a bucket", () => {
+    expect(extractClasses(`ss({ md: match(size, { sm: "p-1", lg: "p-8" }) })`)).toEqual([
+      "md:lg:p-8",
+      "md:p-1",
+      "md:p-8",
+      "md:sm:p-1",
+    ]);
+  });
+
+  it("handles a nested max-* range", () => {
+    expect(extractClasses(`ss({ md: { "max-lg": "grid" } })`)).toEqual(["md:max-lg:grid"]);
+  });
+
+  it("nests more than one level", () => {
+    expect(extractClasses(`ss({ md: { dark: { hover: "bg-black" } } })`)).toEqual([
+      "md:dark:hover:bg-black",
+    ]);
+  });
+
+  it("keeps an object inside an array as clsx classes", () => {
+    expect(extractClasses(`ss({ md: [{ "text-lg": a }, cond && "gap-4"] })`)).toEqual([
+      "md:gap-4",
+      "md:text-lg",
+    ]);
+  });
+
+  it("survives an unterminated object read mid-save", () => {
+    expect(extractClasses(`ss({ md: { hover: "p-8"`)).toEqual(["md:hover:p-8"]);
   });
 });

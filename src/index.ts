@@ -9,7 +9,7 @@ export type {
   StateKey,
 } from "./constants.js";
 export { maxScreenKeys, screenKeys, screens, stateKeys } from "./constants.js";
-export type { ClassValue, ResponsiveMap, SsInput } from "./types.js";
+export type { ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";
 export { match } from "./utils/match.js";
