@@ -1,8 +1,9 @@
-<p align="center">
-  <img src="./assets/logo.svg" alt="tailess logo" width="120" height="120">
-</p>
-
-<h1 align="center">tailess</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/wordmark-dark.svg">
+    <img src="./assets/wordmark.svg" alt="tailess" width="300">
+  </picture>
+</h1>
 
 <p align="center">
   <strong>Write Tailwind classes as a readable object — grouped by breakpoint and state,<br>fully typed, and wired into Tailwind so they actually get CSS.</strong>
