@@ -1,8 +1,8 @@
 <h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./assets/wordmark-dark.svg">
-    <img src="./assets/wordmark.svg" alt="tailess" width="300">
-  </picture>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/wordmark-dark.svg">
+  <img src="./assets/wordmark.svg" alt="tailess" width="310">
+</picture>
 </h1>
 
 <p align="center">
