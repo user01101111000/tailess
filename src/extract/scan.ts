@@ -342,6 +342,106 @@ function normalizeKey(raw: string): string | null {
   return raw;
 }
 
+/**
+ * Index just past the `}` that closes the `{` at `open`, or the end of `text`.
+ *
+ * Running to the end still counts as a match: that is a file the dev server read
+ * mid-keystroke, and the buckets already written in it should keep their styles.
+ */
+function matchBrace(text: string, open: number): number {
+  let i = open + 1;
+  let depth = 1;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const end = skipString(text, i, c);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    } else if (c === "`") {
+      i = skipTemplate(text, i);
+      continue;
+    } else {
+      const j = skipComment(text, i);
+      if (j !== i) {
+        i = j;
+        continue;
+      }
+    }
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+    i += 1;
+  }
+  return text.length;
+}
+
+/**
+ * Every `{ … }` region in `text` that is a bucket map rather than an array
+ * element, in source order.
+ *
+ * An `ss` argument — or a bucket's value — is often not the object itself:
+ * `cond && { md: "p-6" }` and `cond ? { md: "p-6" } : { md: "p-2" }` are ordinary
+ * ways to write one, and reading only text that *starts* with `{` drops their
+ * classes. Silently, too: the class still reaches the element, there is just no
+ * CSS behind it. So every brace group is taken, and both branches of a ternary
+ * are enumerated, as everywhere else in this module.
+ *
+ * Braces inside `[ … ]` are skipped, because at runtime an object inside an array
+ * is a `clsx` dictionary, not a nested map — its keys are class names, and the
+ * caller reads them as such.
+ */
+export function objectLiterals(text: string): string[] {
+  const out: string[] = [];
+  let brackets = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const end = skipString(text, i, c);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    } else if (c === "`") {
+      i = skipTemplate(text, i);
+      continue;
+    } else {
+      const j = skipComment(text, i);
+      if (j !== i) {
+        i = j;
+        continue;
+      }
+    }
+    if (c === "[") brackets += 1;
+    else if (c === "]") {
+      if (brackets > 0) brackets -= 1;
+    } else if (c === "{" && brackets === 0) {
+      const end = matchBrace(text, i);
+      out.push(text.slice(i, end));
+      i = end;
+      continue;
+    }
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * True if `text` is nothing but one object literal.
+ *
+ * Such a value is a bucket map and only a bucket map, so its own text carries no
+ * classes — which is what lets the caller skip the over-approximating token sweep
+ * and avoid emitting candidates the runtime can never produce.
+ */
+export function isObjectLiteral(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith("{") && matchBrace(t, 0) === t.length;
+}
+
 /** True if `text` (trimmed) is an array literal. */
 export function isArrayLiteral(text: string): boolean {
   return text.trim().startsWith("[");

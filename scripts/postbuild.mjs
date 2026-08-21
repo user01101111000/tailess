@@ -13,45 +13,64 @@ const dist = new URL("../dist/", import.meta.url);
 const problems = [];
 
 /**
- * The PostCSS plugin has only a default export, so Rollup emits
- * `module.exports = fn` — `require("tailess/postcss")` *is* the function. That is
- * the shape PostCSS needs: Next.js (`build/webpack/config/blocks/css/plugins.ts`)
- * and `postcss-load-config` both `require()` a string-named plugin and pass the
- * result straight to PostCSS, without unwrapping `.default`. Giving the module a
- * named export as well would turn it into `{ default, … }` and break every
- * string-named consumer with "is not a PostCSS plugin".
+ * Both plugins have only a default export, so Rollup emits `module.exports = fn` —
+ * `require("tailess/postcss")` and `require("tailess/vite")` *are* the functions.
  *
- * But tsup's CJS declarations describe it as `export default`, which tells
+ * For PostCSS that shape is mandatory: Next.js
+ * (`build/webpack/config/blocks/css/plugins.ts`) and `postcss-load-config` both
+ * `require()` a string-named plugin and pass the result straight to PostCSS,
+ * without unwrapping `.default`. Giving either module a named export as well would
+ * turn it into `{ default, … }` and break every string-named consumer with "is not
+ * a PostCSS plugin"; for the Vite entry it would hand a `vite.config.cjs` a
+ * namespace object where Vite expects a plugin.
+ *
+ * But tsup's CJS declarations describe them as `export default`, which tells
  * TypeScript under `node16` that a CJS consumer must reach for `.default` — and
  * that is `undefined` at runtime. So correct the declarations to `export =`, which
  * is what the shape actually is, and what `@tailwindcss/postcss` ships for the
  * same reason.
  */
-async function fixPostcssCjsTypes() {
-  const file = new URL("postcss/index.d.cts", dist);
-  const source = await readFile(file, "utf8");
-  const expected = "export { type TailessPostcssOptions, tailessPostcss as default };";
+const cjsDefaultEntries = [
+  {
+    file: "postcss/index.d.cts",
+    fn: "tailessPostcss",
+    expected: "export { type TailessPostcssOptions, tailessPostcss as default };",
+    types: ["TailessPostcssOptions"],
+  },
+  {
+    file: "vite/index.d.cts",
+    fn: "tailess",
+    expected: "export { type TailessViteOptions, type TailessVitePlugin, tailess as default };",
+    types: ["TailessViteOptions", "TailessVitePlugin"],
+  },
+];
 
-  if (!source.includes(expected)) {
-    // Already correct is fine; anything else means the output shape moved.
-    if (source.includes("export = tailessPostcss;")) return;
-    problems.push(
-      `dist/postcss/index.d.cts does not contain the expected export line.\n` +
-        `  looked for: ${expected}\n` +
-        `  Check what tsup emitted and update scripts/postbuild.mjs.`,
-    );
-    return;
+async function fixCjsDefaultTypes() {
+  for (const { file: name, fn, expected, types } of cjsDefaultEntries) {
+    const file = new URL(name, dist);
+    const source = await readFile(file, "utf8");
+
+    if (!source.includes(expected)) {
+      // Already correct is fine; anything else means the output shape moved.
+      if (source.includes(`export = ${fn};`)) continue;
+      problems.push(
+        `dist/${name} does not contain the expected export line.\n` +
+          `  looked for: ${expected}\n` +
+          `  Check what tsup emitted and update scripts/postbuild.mjs.`,
+      );
+      continue;
+    }
+
+    const replacement = [
+      `declare namespace ${fn} {`,
+      `  export { ${types.join(", ")} };`,
+      "}",
+      "",
+      `export = ${fn};`,
+    ].join("\n");
+
+    await writeFile(file, source.replace(expected, replacement), "utf8");
   }
-
-  const replacement = [
-    "declare namespace tailessPostcss {",
-    "  export { TailessPostcssOptions };",
-    "}",
-    "",
-    "export = tailessPostcss;",
-  ].join("\n");
-
-  await writeFile(file, source.replace(expected, replacement), "utf8");
 }
 
 /** tsup can append the source-map comment twice; one is enough and two is invalid-ish. */
@@ -76,7 +95,7 @@ async function dedupeSourceMapComments() {
   }
 }
 
-await fixPostcssCjsTypes();
+await fixCjsDefaultTypes();
 await dedupeSourceMapComments();
 
 if (problems.length > 0) {

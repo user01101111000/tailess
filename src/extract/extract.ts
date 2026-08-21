@@ -1,4 +1,12 @@
-import { extractStrings, isArrayLiteral, parseObject, type RawCall, scanCalls } from "./scan.js";
+import {
+  extractStrings,
+  isArrayLiteral,
+  isObjectLiteral,
+  objectLiterals,
+  parseObject,
+  type RawCall,
+  scanCalls,
+} from "./scan.js";
 
 /**
  * Characters that can't appear in a candidate we hand to Tailwind via
@@ -15,6 +23,19 @@ import { extractStrings, isArrayLiteral, parseObject, type RawCall, scanCalls } 
  * anyway when written as a literal.
  */
 const unsafe = /[\s"{}\\;]/;
+
+/**
+ * How deep nested buckets are followed. Real compound variants are two or three
+ * deep; the bound is here because this walks whatever bytes happen to be in a file.
+ *
+ * It matches `ss`' own limit exactly, and has to: a level the runtime still emits
+ * but the scanner stops at is a class with no CSS behind it — the silent failure
+ * this whole module exists to rule out.
+ */
+const maxNesting = 10;
+
+/** Records the classes one bucket produces. `prefix` is `""` for unprefixed ones. */
+type Add = (prefix: string, tokens: string[]) => void;
 
 /** Guards against feeding junk (or a whole expression) to Tailwind as a candidate. */
 function isSafeCandidate(candidate: string): boolean {
@@ -51,7 +72,7 @@ function tokensFrom(argText: string | undefined): string[] {
 export function extractClasses(code: string): string[] {
   const found = new Set<string>();
 
-  const add = (prefix: string, tokens: string[]): void => {
+  const add: Add = (prefix, tokens) => {
     if (prefix === "") return;
     for (const token of tokens) {
       const candidate = `${prefix}:${token}`;
@@ -64,23 +85,48 @@ export function extractClasses(code: string): string[] {
   return [...found].sort();
 }
 
-function enumerate(call: RawCall, add: (prefix: string, tokens: string[]) => void): void {
+/** Walk one `ss` bucket map; every class it produces carries `prefix`. */
+function enumerateMap(text: string, prefix: string, depth: number, add: Add): void {
+  for (const { key, value } of parseObject(text)) {
+    // `base` contributes no segment of its own, exactly as at runtime.
+    const scope = key === "base" ? prefix : prefix === "" ? key : `${prefix}:${key}`;
+    enumerateValue(value, scope, depth, add);
+  }
+}
+
+/** Walk one bucket's value, which is either classes, a nested map, or both. */
+function enumerateValue(text: string, scope: string, depth: number, add: Add): void {
+  const nested = depth < maxNesting ? objectLiterals(text) : [];
+
+  for (const inner of nested) enumerateMap(inner, scope, depth + 1, add);
+
+  // A value that is *only* a map carries no classes of its own, so stopping here
+  // keeps us from emitting `md:p-8` alongside the `md:hover:p-8` that was meant —
+  // a candidate that resolves, and would ship a rule nothing uses. Anything else
+  // (`cond && {…}`, a ternary, an array holding a clsx dictionary) may still carry
+  // classes at this level, and missing one of those is the failure that matters.
+  if (nested.length === 0 || !isObjectLiteral(text)) add(scope, tokensFrom(text));
+}
+
+function enumerate(call: RawCall, add: Add): void {
   const { name, args } = call;
 
   switch (name) {
-    // ss({ base: "...", md: "...", hover: "..." }) — the key *is* the prefix.
+    // ss({ base: "...", md: "..." }, cond && { hover: "..." }, className)
+    // — the key *is* the prefix, and a nested map stacks onto it. Text outside a
+    // map is unprefixed, so Tailwind already sees it and `add` ignores it anyway.
     case "ss": {
-      for (const { key, value } of parseObject(args[0] ?? "")) {
-        if (key === "base") continue;
-        add(key, tokensFrom(value));
+      for (const arg of args) {
+        for (const literal of objectLiterals(arg)) enumerateMap(literal, "", 0, add);
       }
       return;
     }
 
     // responsive(base, { md: "..." }) — args[0] is unprefixed, so already literal.
+    // Values here are plain class values; `responsive` has no nesting.
     case "responsive": {
-      for (const { key, value } of parseObject(args[1] ?? "")) {
-        add(key, tokensFrom(value));
+      for (const literal of objectLiterals(args[1] ?? "")) {
+        for (const { key, value } of parseObject(literal)) add(key, tokensFrom(value));
       }
       return;
     }

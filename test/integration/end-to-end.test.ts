@@ -37,6 +37,12 @@ const expected = [
   "data-[disabled]:pointer-events-none",
   "aria-expanded:rotate-180",
   "supports-[display:grid]:grid",
+  // From `composedSource` below.
+  "lg:p-6",
+  "sm:bg-red-500",
+  "dark:focus:ring-4",
+  "md:max-xl:grid-cols-2",
+  "xl:hover:underline",
 ];
 
 const source = `
@@ -66,6 +72,30 @@ export const cls = cn(
 );
 `;
 
+/**
+ * The same idea written the way `ss` is meant to be written now: one call, the maps
+ * composed as arguments, compound variants nested. Two shapes here are the ones a
+ * scanner is easiest to get wrong — a map that sits behind a condition rather than
+ * starting its argument, and a prefix assembled from two nested keys. Neither
+ * appears literally in the source, so if the scanner misses one the class still
+ * reaches the element with no rule behind it.
+ */
+const composedSource = `
+import { ss } from "tailess";
+
+export const card = (isDisabled, className) =>
+  ss(
+    { base: "rounded-lg border", lg: "p-6" },
+    isDisabled && { sm: "bg-red-500" },
+    {
+      dark: { focus: "ring-4" },
+      md: { "max-xl": "grid-cols-2" },
+      xl: { hover: "underline" },
+    },
+    className,
+  );
+`;
+
 let dir = "";
 
 beforeEach(async () => {
@@ -74,6 +104,7 @@ beforeEach(async () => {
   // would in a real project (and so the dir is already gitignored).
   dir = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-e2e-"));
   await writeFile(join(dir, "app.tsx"), source);
+  await writeFile(join(dir, "card.tsx"), composedSource);
 });
 
 afterEach(async () => {
@@ -294,6 +325,12 @@ describe("Vite integration", () => {
     const sidecar = await sidecarOf(result?.code ?? "");
     expect(sidecar).toContain("@source inline(");
     expect(sidecar).toContain("md:text-2xl");
+    // The shapes only a variadic, nesting-aware scanner produces — asserted on this
+    // path too, since Vite reaches the compiler through a transform rather than a
+    // PostCSS plugin and could regress on its own. The sidecar lists candidates, not
+    // selectors, so these are matched as the plain class names they are written as.
+    expect(sidecar).toContain("sm:bg-red-500");
+    expect(sidecar).toContain("md:max-xl:grid-cols-2");
     expect(sidecar).toMatch(/--tailess:\s*1/);
   });
 

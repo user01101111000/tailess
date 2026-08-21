@@ -53,7 +53,7 @@ describe("ss", () => {
 
   it("accepts clsx-style conditional values", () => {
     expect(
-      ss({ base: ["flex", false && "hidden"], md: { "text-2xl": true, "text-xs": false } }),
+      ss({ base: ["flex", false && "hidden"], md: [{ "text-2xl": true, "text-xs": false }] }),
     ).toBe("flex md:text-2xl");
   });
 
@@ -95,5 +95,130 @@ describe("ss", () => {
 
   it("returns an empty string for an empty input", () => {
     expect(ss({})).toBe("");
+  });
+});
+
+describe("ss, composing several arguments", () => {
+  it("returns an empty string with no arguments", () => {
+    expect(ss()).toBe("");
+  });
+
+  it("behaves exactly like cn when given only class values", () => {
+    expect(ss("px-2 py-1", false && "hidden", "px-4")).toBe("py-1 px-4");
+  });
+
+  it("joins several maps, each sorted on its own", () => {
+    expect(ss({ md: "text-lg", base: "flex" }, { hover: "underline", base: "gap-2" })).toBe(
+      "flex md:text-lg gap-2 hover:underline",
+    );
+  });
+
+  it("skips falsy arguments, which is what makes a condition inline", () => {
+    const off = false;
+    expect(ss({ base: "rounded p-4" }, off && { base: "opacity-50", sm: "bg-red-500" })).toBe(
+      "rounded p-4",
+    );
+    const on = true;
+    expect(ss({ base: "rounded p-4" }, on && { base: "opacity-50", sm: "bg-red-500" })).toBe(
+      "rounded p-4 opacity-50 sm:bg-red-500",
+    );
+  });
+
+  it("keeps arguments in written order, so a later one wins the conflict", () => {
+    expect(ss({ base: "p-4" }, { base: "p-8" })).toBe("p-8");
+    expect(ss({ md: "p-6" }, { md: "p-10" })).toBe("md:p-10");
+  });
+
+  it("lets a trailing className override a breakpoint set earlier", () => {
+    // The reason arguments are never reordered: sorting a raw string into the `base`
+    // bucket would put it ahead of `md:p-6` and quietly lose to it.
+    expect(ss({ base: "p-4", md: "p-6" }, "md:p-10")).toBe("p-4 md:p-10");
+  });
+
+  it("accepts a mix of maps, strings, arrays and conditions", () => {
+    expect(
+      ss(
+        { base: "rounded border", md: "p-6" },
+        ["shadow-sm", false && "shadow-lg"],
+        null,
+        undefined,
+        "text-sm",
+      ),
+    ).toBe("rounded border md:p-6 shadow-sm text-sm");
+  });
+
+  it("still emits a single argument through the fast path unchanged", () => {
+    expect(ss({ base: "text-xl flex", sm: "block" })).toBe("text-xl flex sm:block");
+    expect(ss("px-2 px-4")).toBe("px-4");
+    expect(ss(["flex", false && "hidden"])).toBe("flex");
+    expect(ss(false)).toBe("");
+    expect(ss(null)).toBe("");
+  });
+});
+
+describe("ss, nested buckets", () => {
+  it("stacks a nested key onto its parent's prefix", () => {
+    expect(ss({ dark: { hover: "bg-black" } })).toBe("dark:hover:bg-black");
+  });
+
+  it("reads a nested base as the parent prefix on its own", () => {
+    expect(ss({ dark: { base: "text-white", hover: "text-blue-300" } })).toBe(
+      "dark:text-white dark:hover:text-blue-300",
+    );
+  });
+
+  it("treats a bare string and a base-only map as the same thing", () => {
+    expect(ss({ md: "p-6" })).toBe(ss({ md: { base: "p-6" } }));
+  });
+
+  it("expresses a breakpoint range without between()", () => {
+    expect(ss({ md: { "max-lg": "grid" } })).toBe("md:max-lg:grid");
+  });
+
+  it("sorts nested keys canonically too", () => {
+    expect(ss({ md: { hover: "p-8", base: "p-6", "max-lg": "grid" } })).toBe(
+      "md:p-6 md:max-lg:grid md:hover:p-8",
+    );
+  });
+
+  it("drops a falsy nested bucket, prefix included", () => {
+    expect(ss({ md: { base: "p-6", hover: false, focus: undefined } })).toBe("md:p-6");
+  });
+
+  it("drops a nested map that resolves to nothing", () => {
+    expect(ss({ base: "flex", md: {} })).toBe("flex");
+    expect(ss({ base: "flex", md: { hover: "" } })).toBe("flex");
+  });
+
+  it("nests more than one level", () => {
+    expect(ss({ md: { dark: { hover: "bg-black" } } })).toBe("md:dark:hover:bg-black");
+  });
+
+  it("merges conflicts across nesting depths", () => {
+    // tailwind-merge normalizes modifier order, so these are the same key.
+    expect(ss({ md: { hover: "p-2" } }, { hover: { md: "p-4" } })).toBe("hover:md:p-4");
+  });
+
+  it("warns for an unknown nested key but still emits it", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // @ts-expect-error "nope" is not a Tailwind breakpoint or state variant.
+    expect(ss({ md: { nope: "block", base: "flex" } })).toBe("md:flex md:nope:block");
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("treats an object inside an array as clsx classes, never as a nested map", () => {
+    expect(ss({ md: [{ "text-2xl": true, hover: false }] })).toBe("md:text-2xl");
+  });
+
+  it("stops descending instead of overflowing on an object that contains itself", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cyclic: Record<string, unknown> = { base: "flex" };
+    cyclic.md = cyclic;
+    const input = cyclic as unknown as Parameters<typeof ss>[0];
+    expect(() => ss(input)).not.toThrow();
+    expect(ss(input)).toContain("flex");
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

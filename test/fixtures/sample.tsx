@@ -1,30 +1,43 @@
-import { aria, between, cn, data, match, on, responsive, ss, until, withPrefix } from "tailess";
+import { aria, between, data, match, on, responsive, ss, until, withPrefix } from "tailess";
 
-export function Card({ size, open }: { size: "sm" | "lg"; open: boolean }) {
+export function Card({
+  size,
+  open,
+  disabled,
+  className,
+}: {
+  size: "sm" | "lg";
+  open: boolean;
+  disabled: boolean;
+  className?: string;
+}) {
   return (
     <div
-      className={cn(
-        ss({
+      className={ss(
+        {
           base: "text-xl flex",
           sm: "block",
           md: "text-2xl",
           "2xl": "tracking-wide",
           "max-md": "gap-2",
           hover: "opacity-100",
-          dark: "bg-black",
+          dark: { base: "bg-black", hover: "bg-neutral-900" },
           "group-hover": "underline",
-        }),
-        on("focus-visible", "ring-2"),
-        on(["dark", "hover"], "bg-neutral-900"),
+          "focus-visible": "ring-2",
+        },
+        disabled && { base: "opacity-50 pointer-events-none", sm: "bg-red-500" },
+        match(size, { sm: "p-2", lg: "p-8" }),
+        // The helpers still work, and the scanner still reads them.
         responsive("text-sm", { lg: "text-lg", xl: "text-3xl" }),
+        on("focus-within", "ring-offset-2"),
         until("md", "hidden"),
         between("sm", "lg", "grid"),
         data("state", open ? "open" : "closed", "opacity-100"),
         data("disabled", null, "pointer-events-none"),
         aria("expanded", "rotate-180"),
         withPrefix("supports-[display:grid]", "grid"),
-        match(size, { sm: "p-2", lg: "p-8" }),
         "px-2 px-4",
+        className,
       )}
     />
   );

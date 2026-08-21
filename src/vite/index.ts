@@ -91,7 +91,12 @@ const debounceMs = 25;
  * `@tailwindcss/vite`, Tailwind compiles CSS in an `enforce: "pre"` transform,
  * which is *before* Vite's PostCSS stage, so a PostCSS plugin can never reach it.
  */
-export function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
+// Exported only as the default, exactly like `tailess/postcss`, so the CJS build is
+// `module.exports = tailess` — a `vite.config.cjs` doing `require("tailess/vite")`
+// gets the plugin creator itself rather than a namespace object Vite would reject.
+// Adding a named export back would also make Rollup's CJS writer warn on every
+// build, since it cannot tell which shape a mixed entry was meant to have.
+function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
   let root = process.cwd();
   let sidecar = createSidecar(join(root, "node_modules", ".vite"));
 
