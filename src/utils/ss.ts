@@ -1,6 +1,6 @@
-import { clsx } from "clsx";
 import { rankOf, unknownRank } from "../constants.js";
 import { isDev } from "../internal/env.js";
+import { join } from "../internal/join.js";
 
 import type { ClassValue, SsArg, SsInput, SsValue } from "../types.js";
 import { cn } from "./cn.js";
@@ -114,7 +114,7 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
       }
       part = emitMap(value, scope, depth + 1);
     } else if (scope === "") {
-      part = clsx(value as ClassValue);
+      part = join(value as ClassValue);
     } else {
       part = withPrefix(scope, value as ClassValue);
     }
@@ -164,14 +164,14 @@ export function ss(...args: SsArg[]): string {
     const only = args[0] as SsArg;
     if (only == null || only === false || only === "") return "";
     if (typeof only === "string") return cn(only);
-    return cn(isMap(only) ? emitMap(only, "", 0) : clsx(only as ClassValue));
+    return cn(isMap(only) ? emitMap(only, "", 0) : join(only as ClassValue));
   }
 
   let joined = "";
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] as SsArg;
     if (arg == null || arg === false || arg === "") continue;
-    const part = isMap(arg) ? emitMap(arg, "", 0) : clsx(arg as ClassValue);
+    const part = isMap(arg) ? emitMap(arg, "", 0) : join(arg as ClassValue);
     if (part === "") continue;
     joined = joined === "" ? part : `${joined} ${part}`;
   }

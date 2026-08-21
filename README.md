@@ -84,7 +84,7 @@ you get a console message naming the fix instead of a silently broken page.
 - 🔌 **One line of setup** — a Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
 - 🧯 **No silent failures** — the whole reason this package exists.
 - ♻️ **Instant in dev** — add a class and it appears without restarting; delete it and it stops being emitted.
-- 🪶 **Small** — 2.6 kB of its own code, ESM + CJS, tree-shakeable. [See what the badge counts](#bundle-size).
+- 🪶 **Small** — 2.7 kB of its own code and one runtime dependency, ESM + CJS, tree-shakeable. [See what the badge counts](#bundle-size).
 - ⚡ **Fast** — `ss()` with three groups costs ~385 ns, one `tailwind-merge` pass whatever the shape.
 
 ## Contents
@@ -379,8 +379,8 @@ start nesting. A falsy nested bucket drops, prefix included, like any other.
 
 ### `cn` — compose and merge
 
-`clsx` for conditional joining, `tailwind-merge` for conflict resolution. `ss` is a
-strict superset of it, so reach for `cn` when there are no breakpoints or states in
+`clsx`-style conditional joining, then `tailwind-merge` for conflict resolution. `ss` is
+a strict superset of it, so reach for `cn` when there are no breakpoints or states in
 sight and you'd rather say so.
 
 ```ts
@@ -670,21 +670,29 @@ call whatever the shape. Passing only class strings costs about what `cn` does.
 
 ### Bundle size
 
-The badge at the top reads ~11.1 kB because it measures the whole dependency tree.
+The badge at the top reads ~11 kB because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
 | `tailwind-merge` | ~8.3 kB |
-| tailess itself | **~2.6 kB** |
-| `clsx` | ~0.2 kB |
-| **Total** | **~11.1 kB** |
+| tailess itself | **~2.7 kB** |
+| **Total** | **~11 kB** |
 
-`clsx` + `tailwind-merge` is what a `cn()` helper is in essentially every Tailwind
-codebase, so if you already have one, adding tailess costs the 2.6 kB — not the 11.1.
-If you don't, you're getting `cn()` in the same install.
+`tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
+on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
+already pull it in. If yours is one of them, your bundler keeps the single shared copy
+and adding tailess costs the 2.7 kB, not the 11.
 
-About a fifth of tailess' own 2.6 kB is the text of its development-time warnings.
+The `clsx` half of that pairing is not a dependency: [`src/internal/join.ts`](./src/internal/join.ts)
+does the same job in about forty lines. That was worth doing because the code compresses
+slightly *better* alongside the rest of the package than `clsx` does on its own — the
+swap ended up 35 gzipped bytes smaller — and it removes a package from the tree.
+`clsx` stays a devDependency purely as a test oracle: every shape, down to inherited
+object keys, plus two thousand generated cases, is asserted to produce a byte-identical
+string.
+
+About a fifth of tailess' own 2.7 kB is the text of its development-time warnings.
 That text can't be dead-code-eliminated without either risking a crash when the package
 is loaded unbundled or putting a `process.env` read on the render path; both were
 measured and rejected, and the reasoning is in `src/internal/env.ts`.
@@ -758,7 +766,7 @@ add-a-class / delete-a-class dev cycle, the inline fallback path, and every one 
 
 | | |
 | --- | --- |
-| Tests | 298, across 23 files |
+| Tests | 327, across 24 files |
 | Coverage | 95% statements, 90% branches |
 | Tailwind | 4.3.3 |
 | Manually verified | Vite 8 + `@tailwindcss/vite` 4, Next.js 16 (Turbopack and webpack) |
@@ -775,9 +783,10 @@ workflow cannot publish unless all of them pass.
 
 ## FAQ
 
-**Does this replace `clsx` / `tailwind-merge`?** No — it uses both. `cn` is exactly
-`twMerge(clsx(...))`, so you can drop tailess into a codebase that already has one, and
-those two make up most of the [bundle-size badge](#bundle-size).
+**Does this replace `clsx` / `tailwind-merge`?** `cn` behaves exactly like the
+`twMerge(clsx(...))` helper nearly every Tailwind codebase already has, so tailess drops
+straight into one. `tailwind-merge` is a real dependency and does the merging;
+the `clsx` half is tailess' own forty-line equivalent, so it is not one.
 
 **`ss` or `cn`?** `ss` does everything `cn` does, so either works. The habit worth having
 is `cn` while a `className` is only plain strings, and `ss` the moment a breakpoint or a

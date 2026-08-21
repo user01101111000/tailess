@@ -1,7 +1,35 @@
-import type { ClassValue } from "clsx";
 import type { ScreenKey, SsKey } from "./constants.js";
 
-export type { ClassValue };
+/**
+ * An object whose truthy keys become class names — the `clsx` dictionary form.
+ *
+ * The value type is `any` rather than `unknown` deliberately: TypeScript lets any
+ * object type flow into `Record<string, any>`, while `Record<string, unknown>`
+ * rejects an interface that has no index signature. `clsx` declares it this way and
+ * a stricter type here would reject code that used to compile.
+ */
+// biome-ignore lint/suspicious/noExplicitAny: matches clsx's declaration; see above
+export type ClassDictionary = Record<string, any>;
+
+/** A nestable list of class values. */
+export type ClassArray = ClassValue[];
+
+/**
+ * Anything {@link cn} and the `clsx`-style bucket values accept.
+ *
+ * Structurally identical to `clsx`'s own `ClassValue`, so it stays a drop-in for
+ * code that used to import the type from there. `bigint` is included for the same
+ * reason it is there — and, as in `clsx`, one contributes nothing at runtime.
+ */
+export type ClassValue =
+  | ClassArray
+  | ClassDictionary
+  | string
+  | number
+  | bigint
+  | null
+  | boolean
+  | undefined;
 
 /**
  * Anything {@link ss} accepts — both as a top-level argument and as a bucket
