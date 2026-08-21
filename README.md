@@ -93,7 +93,7 @@ you get a console message naming the fix instead of a silently broken page.
 - [How it works](#how-it-works)
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
 - [API](#api) — [`ss`](#ss--group-by-breakpoint-and-state) · [composing](#many-arguments-one-call) · [nesting](#nested-groups-for-compound-variants) · [the other helpers](#cn--compose-and-merge)
-- [Upgrading from 0.6](#upgrading-from-06)
+- [Upgrading from 0.8](#upgrading-from-08)
 - [Framework examples](#framework-examples) · [Keys](#keys) · [Plugin options](#plugin-options)
 - [Performance](#performance) · [Bundle size](#bundle-size)
 - [Troubleshooting](#troubleshooting) · [Verified on](#verified-on) · [FAQ](#faq)
@@ -484,7 +484,7 @@ window.matchMedia(`(min-width: ${screens.md})`).matches;  // "48rem"
 Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
 `ResponsiveMap`, `ClassValue`.
 
-## Upgrading from 0.6
+## Upgrading from 0.8
 
 Two things changed, and **TypeScript catches both** — neither can turn into a style that
 quietly stops appearing. Everything else is untouched: every existing `ss({ … })` call,
@@ -494,8 +494,8 @@ quietly stops appearing. Everything else is untouched: every existing `ss({ … 
 is a nested map:
 
 ```ts
-ss({ md: { "text-lg": cond } })      // 0.6
-ss({ md: [{ "text-lg": cond }] })    // 0.7
+ss({ md: { "text-lg": cond } })      // 0.8
+ss({ md: [{ "text-lg": cond }] })    // 0.9
 ```
 
 **2. `tailess/vite` is exported only as a default,** matching `tailess/postcss`:
