@@ -1,6 +1,17 @@
 import { clsx } from "clsx";
 import { describe, expect, it } from "vitest";
-import { aria, between, cn, data, on, responsive, ss, until, withPrefix } from "../../src/index.js";
+import {
+  aria,
+  between,
+  cn,
+  data,
+  match,
+  on,
+  responsive,
+  ss,
+  until,
+  withPrefix,
+} from "../../src/index.js";
 import { join } from "../../src/internal/join.js";
 import type { ClassValue } from "../../src/types.js";
 
@@ -245,6 +256,8 @@ describe("every helper that reaches join survives hostile input", () => {
     ["aria", (v) => aria("expanded", v)],
     ["until", (v) => until("md", v)],
     ["between", (v) => between("sm", "lg", v)],
+    // `match` reaches `join` through `cn`, so it belongs here too.
+    ["match", (v) => match("a", { a: v })],
   ];
 
   /** `String(Object.create(null))` throws, and a label must never be the thing that fails. */

@@ -84,7 +84,7 @@ you get a console message naming the fix instead of a silently broken page.
 - 🔌 **One line of setup** — a Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
 - 🧯 **No silent failures** — the whole reason this package exists.
 - ♻️ **Instant in dev** — add a class and it appears without restarting; delete it and it stops being emitted.
-- 🪶 **Small** — 2.7 kB of its own code and one runtime dependency, ESM + CJS, tree-shakeable. [See what the badge counts](#bundle-size).
+- 🪶 **Small** — 2.7 kB of its own code, one dependency, ESM + CJS, tree-shakeable. [What the badge counts](#bundle-size).
 - ⚡ **Fast** — `ss()` with three groups costs ~385 ns, one `tailwind-merge` pass whatever the shape.
 
 ## Contents
@@ -107,6 +107,7 @@ you get a console message naming the fix instead of a silently broken page.
 | **Tailwind CSS** | v4 — v3 is not supported |
 | **Node** | 18+ (build plugin only; the runtime has no Node dependency) |
 | **Bundler** | anything using `@tailwindcss/vite` or `@tailwindcss/postcss` |
+| **Dependencies** | one — `tailwind-merge`. [Why that one and no others](#bundle-size) |
 
 ## Install
 
@@ -688,9 +689,8 @@ The `clsx` half of that pairing is not a dependency: [`src/internal/join.ts`](./
 does the same job in about forty lines. That was worth doing because the code compresses
 slightly *better* alongside the rest of the package than `clsx` does on its own — the
 swap ended up 35 gzipped bytes smaller — and it removes a package from the tree.
-`clsx` stays a devDependency purely as a test oracle: every shape, down to inherited
-object keys, plus two thousand generated cases, is asserted to produce a byte-identical
-string.
+`clsx` stays a devDependency purely as a test oracle — see
+[Verified on](#verified-on) for what that buys.
 
 About a fifth of tailess' own 2.7 kB is the text of its development-time warnings.
 That text can't be dead-code-eliminated without either risking a crash when the package
@@ -766,16 +766,29 @@ add-a-class / delete-a-class dev cycle, the inline fallback path, and every one 
 
 | | |
 | --- | --- |
-| Tests | 339, across 24 files |
-| Coverage | 95% statements, 90% branches |
+| Tests | 340, across 24 files |
+| Coverage | 96% statements, 91% branches |
 | Tailwind | 4.3.3 |
 | Manually verified | Vite 8 + `@tailwindcss/vite` 4, Next.js 16 (Turbopack and webpack) |
 
-One suite is worth calling out. `test/extract/runtime-parity.test.ts` hands the scanner a
-source string, then *evaluates that same string* with the real helpers, and asserts every
-prefixed class the runtime produced is in the candidates the scanner found. The two halves
-of the bridge are checked against each other rather than each against a hand-written list,
-so they cannot drift apart in the one direction that matters.
+Two suites are worth calling out, because both check a claim against a second
+implementation rather than against a list someone typed.
+
+**`test/extract/runtime-parity.test.ts`** hands the scanner a source string, then
+*evaluates that same string* with the real helpers, and asserts every prefixed class the
+runtime produced is among the candidates the scanner found. The two halves of the bridge
+are measured against each other, so they cannot drift apart in the one direction that
+matters — a class on the element with no rule behind it.
+
+**`test/internal/join.test.ts`** does the same for the `clsx` replacement, with `clsx`
+itself as the oracle. Beyond the shapes people actually write, it compares the ones they
+don't: null-prototype objects, Proxies, boxed primitives, frozen objects, a getter that
+throws, symbol keys, `bigint`, inherited enumerable keys, 200-deep nesting, and the
+circular array that overflows the stack in both — a replacement that swallows an error
+the original raised is not a replacement. On top of that, 50,000 generated cases from a
+seeded PRNG, so a failure replays exactly. A companion suite puts every one of the ten
+public helpers through twenty hostile values each and asserts none of them throws:
+during a render, a crash is worse than a wrong class.
 
 CI additionally runs lint, typecheck, [`publint`](https://publint.dev) and
 [`arethetypeswrong`](https://arethetypeswrong.github.io) on every push, and the release
