@@ -65,7 +65,7 @@ className={ss(
 
 `ss` is a strict superset of a `cn()` helper: hand it plain strings and it *is* `cn`.
 
-## Why this isn't just a formatting trick
+## Why it needs a build plugin
 
 Building `md:` at runtime is easy. Making Tailwind **emit CSS** for it is the hard part,
 and it's where every hand-rolled version of this idea quietly fails.
@@ -89,16 +89,15 @@ you get a console message naming the fix instead of a silently broken page.
 
 ## Contents
 
-- [Requirements](#requirements) · [Install](#install)
-- [Setup](#setup) — [Vite](#vite) · [Next.js](#nextjs) · [Other PostCSS setups](#other-postcss-setups)
-- [How it works](#how-it-works)
-- [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
-- [API](#api) — [`ss`](#ss--group-by-breakpoint-and-state) · [composing](#many-arguments-one-call) · [nesting](#nested-groups-for-compound-variants) · [the other helpers](#cn--compose-and-merge)
-- [Upgrading from 0.8](#upgrading-from-08)
-- [Framework examples](#framework-examples) · [Keys](#keys) · [Plugin options](#plugin-options)
-- [Performance](#performance) · [Bundle size](#bundle-size)
-- [Troubleshooting](#troubleshooting) · [Verified on](#verified-on) · [FAQ](#faq)
-- [Contributing](#contributing) · [License](#license)
+**Start here** — [Requirements](#requirements) · [Install](#install) · [Setup](#setup) ([Vite](#vite), [Next.js](#nextjs), [other PostCSS](#other-postcss-setups))
+
+**Understand it** — [How it works](#how-it-works) · [What the scanner sees](#what-the-scanner-can-and-cannot-see) · [Keys](#keys)
+
+**Reference** — [API](#api) ([`ss`](#ss--group-by-breakpoint-and-state), [composing](#many-arguments-one-call), [nesting](#nested-groups-for-compound-variants), [other helpers](#cn--compose-and-merge)) · [Plugin options](#plugin-options) · [Framework examples](#framework-examples)
+
+**Numbers** — [Performance](#performance) · [Bundle size](#bundle-size) · [Verified on](#verified-on)
+
+**Help** — [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Upgrading from 0.8](#upgrading-from-08) · [Contributing](#contributing) · [License](#license)
 
 ## Requirements
 
@@ -196,22 +195,21 @@ ss({ md: "text-2xl" })  ──▶  scan + enumerate
        your app.css  ──▶  @import "…/tailess.css"  (injected)
 ```
 
-Three details make this reliable rather than merely clever:
+Three details make it reliable rather than merely clever:
 
-**The list goes in a separate file, not inline.** Tailwind re-reads `@source inline(...)`
-only when it rebuilds its compiler, and it only rebuilds when one of its own build
-dependencies changes. Your `.tsx` files aren't dependencies — but an `@import`ed
-stylesheet is. Writing the list to a sidecar file makes every change a guaranteed
-rebuild trigger, which is what lets a brand-new class work without restarting the dev
-server. A class you delete loses its CSS too, instead of lingering forever.
+**The list lives in its own file, not inline.** Tailwind re-reads `@source inline(...)`
+only when it rebuilds its compiler, and only a change to one of its *own* build
+dependencies triggers that. Your `.tsx` files aren't dependencies; an `@import`ed
+stylesheet is. So the list goes in a sidecar — which is what lets a new class appear
+without restarting the dev server, and a deleted one stop being emitted.
 
 **Injection is scoped to real Tailwind entries.** The plugin only touches a stylesheet
-that Tailwind actually emits utilities into — directly, or through a chain of relative
+Tailwind actually emits utilities into — directly, or through a chain of relative
 `@import`s. Every other CSS file in your build comes out byte-identical.
 
-**A marker proves it's wired up.** The plugin declares `:root { --tailess: 1 }`. In dev,
-the first time you build a prefixed class the runtime checks for it and — if it's missing
-— prints exactly which line of config you're missing. No marker check runs in production.
+**A marker proves it's wired up.** The plugin declares `:root { --tailess: 1 }`. The
+first time you build a prefixed class in dev, the runtime looks for it and, if it's
+missing, prints the exact line of config you need. Nothing checks in production.
 
 ## What the scanner can and cannot see
 
@@ -226,16 +224,16 @@ costs you the style.
 ss({ md: "text-2xl", hover: "underline" })          // literals
 ss({ md: isWide ? "grid-cols-3" : "grid-cols-1" })  // both branches
 ss({ md: ["flex", cond && "gap-4"] })               // arrays
-ss({ md: [{ "text-lg": cond }] })                   // clsx object form, in an array
-until("md", { hidden: !open })                      // …and its keys unquoted
-ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a bucket stacks
+ss({ md: [{ "text-lg": cond }] })                   // clsx dictionaries, quoted…
+until("md", { hidden: !open })                      // …or not
 ss({ md: "text-lg", /* both survive */ lg: "xl" })  // comments anywhere
-ss({ dark: { hover: "bg-black" } })                 // nested — dark:hover:bg-black
+ss({ dark: { hover: "bg-black" } })                 // nesting — dark:hover:bg-black
 ss(a, cond && { sm: "bg-red-500" })                 // a map behind a condition
 ss(a, open ? { md: "p-6" } : { md: "p-2" })         // both branches, as maps
+ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a group stacks
 on(["dark", "hover"], "bg-black")                   // compound variants
 data("state", open ? "open" : "closed", "p-2")      // both values
-data("level", 2, "p-2")                             // numbers and booleans too
+data("level", 2, "p-2")                             // numbers and booleans
 ```
 
 ❌ **Not seen** — the value isn't in the source to read:
@@ -640,8 +638,11 @@ tailess({
 On Vite, a relative `content` path resolves against Vite's `root` — not the directory you
 happened to run the command from — so `vite build apps/web` and monorepo task runners
 behave the same as a plain `vite build`. On PostCSS there is no root, so paths resolve
-against the working directory. A `content` that matches no files warns rather than
-quietly producing a stylesheet with nothing in it.
+against the working directory.
+
+`content` takes directories and files — **not globs**. `"src"` scans everything under
+it, so `"src/**/*.tsx"` is both unnecessary and inert. A `content` that matches no files
+warns rather than quietly producing a stylesheet with nothing in it.
 
 | Option | Default |
 | ------ | ------- |
@@ -667,10 +668,14 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 | Warm rescan, same project | ~17 ms |
 
 A single-map `ss({ … })` call takes a dedicated path with no argument loop, so it costs
-what it did before variadic arguments existed — re-measured after that change and within
-noise of the number above. Each further argument is one more map walk, a nested group
-costs the same as a top-level one, and there is exactly one `tailwind-merge` pass per
-call whatever the shape. Passing only class strings costs about what `cn` does.
+what it did before variadic arguments existed. Each further argument is one more map
+walk, a nested group costs the same as a top-level one, and there is exactly one
+`tailwind-merge` pass per call whatever the shape. Passing only class strings costs
+about what `cn` does.
+
+The plugin caches extraction per file by mtime and size, coalesces concurrent scans, and
+rewrites the sidecar only when the class list actually changed — so an unrelated
+keystroke costs a `stat`, not a re-parse.
 
 ### Bundle size
 
@@ -685,24 +690,29 @@ That number is real, but almost none of it is tailess:
 
 `tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
-already pull it in. If yours is one of them, your bundler keeps the single shared copy
+already pull it in. If yours is one of them your bundler keeps the single shared copy,
 and adding tailess costs the 2.7 kB, not the 11.1.
 
-The `clsx` half of that pairing is not a dependency: [`src/internal/join.ts`](./src/internal/join.ts)
-does the same job in about forty lines. That was worth doing because the code compresses
-slightly *better* alongside the rest of the package than `clsx` does on its own — the
-swap ended up 35 gzipped bytes smaller — and it removes a package from the tree.
-`clsx` stays a devDependency purely as a test oracle — see
-[Verified on](#verified-on) for what that buys.
+<details>
+<summary>Why <code>clsx</code> is not a dependency</summary>
 
-About a fifth of tailess' own 2.7 kB is the text of its development-time warnings.
-That text can't be dead-code-eliminated without either risking a crash when the package
-is loaded unbundled or putting a `process.env` read on the render path; both were
-measured and rejected, and the reasoning is in `src/internal/env.ts`.
+[`src/internal/join.ts`](./src/internal/join.ts) does the same job in about forty lines.
+The point was not the bytes — the code compresses slightly *better* alongside the rest of
+the package than `clsx` does standalone, so the swap came out 35 gzipped bytes smaller —
+but one fewer package in the tree. `clsx` stays a devDependency purely as a test oracle;
+see [Verified on](#verified-on) for what that buys.
 
-The build plugin caches extraction per file by mtime and size, coalesces concurrent scans,
-and only rewrites the sidecar when the class list actually changed — so an unrelated
-keystroke costs a stat, not a re-parse.
+</details>
+
+<details>
+<summary>Why the dev-only warnings ship in production builds</summary>
+
+About a fifth of tailess' 2.7 kB is the text of those warnings. Eliminating it means
+either risking a crash when the package is loaded unbundled, or putting a `process.env`
+read on the render path. Both were measured and rejected; the reasoning is written out in
+[`src/internal/env.ts`](./src/internal/env.ts).
+
+</details>
 
 ## Troubleshooting
 
@@ -745,6 +755,24 @@ A monorepo package or shared UI folder — point `content` at it.
 </details>
 
 <details>
+<summary><strong>Nothing is scanned, and <code>content</code> looks right</strong></summary>
+
+`content` takes directories and files, not globs. `content: ["src/**/*.tsx"]` matches
+nothing; `content: ["src"]` scans the whole tree, which is what the glob was reaching
+for. The plugin warns when `content` matches no files and names the wildcard case.
+
+</details>
+
+<details>
+<summary><strong>New classes only appear after I restart the dev server</strong></summary>
+
+Update to the latest patch. An `extensions` list written with leading dots or in upper
+case (`[".tsx"]`, `["TSX"]`) used to gate the watcher against a different spelling than
+the scan itself used, so the first build was correct and nothing after it was.
+
+</details>
+
+<details>
 <summary><strong>How do I check for myself?</strong></summary>
 
 Build, then search the output CSS with a fixed-string match, because Tailwind escapes `:`
@@ -769,31 +797,41 @@ add-a-class / delete-a-class dev cycle, the inline fallback path, and every one 
 
 | | |
 | --- | --- |
-| Tests | 340, across 24 files |
+| Tests | 380, across 25 files |
 | Coverage | 96% statements, 91% branches |
 | Tailwind | 4.3.3 |
-| Manually verified | Vite 8 + `@tailwindcss/vite` 4, Next.js 16 (Turbopack and webpack) |
+| Manually verified | Vite 7 & 8 + `@tailwindcss/vite` 4 · Next.js 15 & 16, Turbopack and webpack |
 
-Two suites are worth calling out, because both check a claim against a second
-implementation rather than against a list someone typed.
+Two suites check a claim against a second implementation rather than against a list
+someone typed.
 
-**`test/extract/runtime-parity.test.ts`** hands the scanner a source string, then
-*evaluates that same string* with the real helpers, and asserts every prefixed class the
-runtime produced is among the candidates the scanner found. The two halves of the bridge
-are measured against each other, so they cannot drift apart in the one direction that
+<details>
+<summary><strong>Runtime ↔ scanner parity</strong> — the invariant the package rests on</summary>
+
+`test/extract/runtime-parity.test.ts` hands the scanner a source string, then *evaluates
+that same string* with the real helpers, and asserts every prefixed class the runtime
+produced is among the candidates the scanner found. The two halves of the bridge are
+measured against each other, so they cannot drift apart in the one direction that
 matters — a class on the element with no rule behind it.
 
-**`test/internal/join.test.ts`** does the same for the `clsx` replacement, with `clsx`
-itself as the oracle. Beyond the shapes people actually write, it compares the ones they
-don't: null-prototype objects, Proxies, boxed primitives, frozen objects, a getter that
-throws, symbol keys, `bigint`, inherited enumerable keys, 200-deep nesting, and the
-circular array that overflows the stack in both — a replacement that swallows an error
-the original raised is not a replacement. On top of that, 50,000 generated cases from a
-seeded PRNG, so a failure replays exactly. A companion suite puts every one of the ten
-public helpers through twenty hostile values each and asserts none of them throws:
-during a render, a crash is worse than a wrong class.
+</details>
 
-CI additionally runs lint, typecheck, [`publint`](https://publint.dev) and
+<details>
+<summary><strong>The <code>clsx</code> replacement</strong> — differential-tested against <code>clsx</code> itself</summary>
+
+`test/internal/join.test.ts` compares the two on the shapes people write and the ones
+they don't: null-prototype objects, Proxies, boxed primitives, frozen objects, a getter
+that throws, symbol keys, `bigint`, inherited enumerable keys, 200-deep nesting, and the
+circular array that overflows the stack in both — a replacement that swallows an error
+the original raised is not a replacement. Then 50,000 generated cases from a seeded PRNG,
+so a failure replays exactly.
+
+A companion suite puts each of the ten public helpers through twenty hostile values and
+asserts none of them throws: during a render, a crash is worse than a wrong class.
+
+</details>
+
+CI also runs lint, typecheck, [`publint`](https://publint.dev) and
 [`arethetypeswrong`](https://arethetypeswrong.github.io) on every push, and the release
 workflow cannot publish unless all of them pass.
 
