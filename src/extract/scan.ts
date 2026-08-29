@@ -20,6 +20,15 @@ export interface RawCall {
 const callPattern = /(?<![\w$])(ss|responsive|on|until|between|data|aria|withPrefix)\s*\(/g;
 
 /**
+ * A second instance of {@link callPattern} for {@link outerCalls}.
+ *
+ * A `lastIndex` is state, and the two scans interleave: following a bucket value
+ * re-enters the search while an outer one is still walking. Sharing one regex
+ * would let the inner scan rewind the outer one.
+ */
+const outerCallPattern = new RegExp(callPattern.source, "g");
+
+/**
  * How far an argument list may run before we stop reading it.
  *
  * Only reached when the `(` didn't really open a call — prose like "turn it
@@ -430,6 +439,113 @@ export function objectLiterals(text: string): string[] {
   return out;
 }
 
+/** The identifier immediately before the `(` at `i`, or `""` for a grouping paren. */
+function calleeBefore(text: string, i: number): string {
+  let j = i - 1;
+  while (j >= 0) {
+    const c = text[j] as string;
+    if (c !== " " && c !== "\t" && c !== "\n" && c !== "\r") break;
+    j -= 1;
+  }
+  const end = j + 1;
+  while (j >= 0 && /[\w$]/.test(text[j] as string)) j -= 1;
+  return text.slice(j + 1, end);
+}
+
+/**
+ * Every statically-known property key of the `{ … }` groups in `text` that sit
+ * where a *class value* goes.
+ *
+ * A `clsx` dictionary spells a class as a **key** — `{ hidden: !open }` — so the
+ * class never appears as a string literal and the sweep that collects those cannot
+ * see it, while the runtime emits it like any other class. Shorthand counts too:
+ * `{ hidden }` is `{ hidden: hidden }` and produces the same class.
+ *
+ * Which groups qualify is exactly the runtime's own rule, because the same syntax
+ * means different things in different places:
+ *
+ * - inside an array, or inside `cn(…)` / `clsx(…)`, an object is always a
+ *   dictionary — that is the documented way to write one;
+ * - inside any *other* call it is not. `match(size, { sm: "p-1" })` is a lookup
+ *   whose keys are discriminant values, and reading them as classes would safelist
+ *   a rule for every variant name in the project;
+ * - standing on its own it depends on the caller, which is what `bare` says. For
+ *   `on`/`until`/`data`/… the argument is a class value, so it is a dictionary;
+ *   in an `ss` bucket the same object is a nested bucket map, and
+ *   {@link parseObject} reads those keys as variants instead.
+ */
+export function dictionaryKeys(text: string, bare: boolean): string[] {
+  const out: string[] = [];
+  // `regions` counts enclosing class-value scopes, `foreign` enclosing calls that
+  // are neither; a plain grouping paren is transparent to both.
+  const frames: string[] = [];
+  let regions = 0;
+  let foreign = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const end = skipString(text, i, c);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    } else if (c === "`") {
+      i = skipTemplate(text, i);
+      continue;
+    } else {
+      const j = skipComment(text, i);
+      if (j !== i) {
+        i = j;
+        continue;
+      }
+    }
+
+    if (c === "{") {
+      const end = matchBrace(text, i);
+      if (foreign === 0 && (regions > 0 || bare)) collectKeys(text.slice(i, end), out);
+      i = end;
+      continue;
+    }
+
+    if (c === "[") {
+      frames.push("region");
+      regions += 1;
+    } else if (c === "(") {
+      const callee = calleeBefore(text, i);
+      if (callee === "cn" || callee === "clsx") {
+        frames.push("region");
+        regions += 1;
+      } else if (callee === "") {
+        frames.push("plain");
+      } else {
+        frames.push("foreign");
+        foreign += 1;
+      }
+    } else if (c === "]" || c === ")") {
+      const frame = frames.pop();
+      if (frame === "region") regions -= 1;
+      else if (frame === "foreign") foreign -= 1;
+    }
+    i += 1;
+  }
+  return out;
+}
+
+/** Push the statically-known keys of one `{ … }` group onto `out`. */
+function collectKeys(group: string, out: string[]): void {
+  const close = group.lastIndexOf("}");
+  const inner = close > 0 ? group.slice(1, close) : group.slice(1);
+  for (const raw of splitArgs(inner)) {
+    const entry = raw.slice(skipTrivia(raw, 0));
+    if (entry === "" || entry.startsWith("...")) continue;
+    const colon = topLevelColon(entry);
+    // No colon is shorthand — `{ hidden }` — whose key is also its value.
+    const key = normalizeKey(colon === -1 ? entry : entry.slice(0, colon).trim());
+    if (key !== null) out.push(key);
+  }
+}
+
 /**
  * True if `text` is nothing but one object literal.
  *
@@ -477,6 +593,36 @@ export function scanCalls(code: string): RawCall[] {
     // The pattern ends at the `(`, so the match's last character is the paren.
     const open = match.index + match[0].length - 1;
     calls.push({ name, args: splitArgs(readParen(code, open)) });
+  }
+  return calls;
+}
+
+/**
+ * Like {@link scanCalls}, but skipping the calls that sit inside another matched
+ * call's arguments.
+ *
+ * Reporting every descendant is right when the whole file is the input — that is
+ * what makes a nested call yield its own candidates. Following a *bucket value* is
+ * different: the walk recurses into each call it finds, so reporting descendants
+ * alongside their ancestor would visit the same call once per ancestor, and a
+ * chain of nested calls would cost exponentially more than it is long.
+ */
+export function outerCalls(code: string): RawCall[] {
+  const calls: RawCall[] = [];
+  outerCallPattern.lastIndex = 0;
+  for (
+    let match = outerCallPattern.exec(code);
+    match !== null;
+    match = outerCallPattern.exec(code)
+  ) {
+    const name = match[1];
+    if (name === undefined) continue;
+    const open = match.index + match[0].length - 1;
+    const args = readParen(code, open);
+    calls.push({ name, args: splitArgs(args) });
+    // Resume past this call's own arguments; the recursion reaches what is inside
+    // them through this call rather than beside it.
+    outerCallPattern.lastIndex = Math.max(outerCallPattern.lastIndex, open + 1 + args.length);
   }
   return calls;
 }

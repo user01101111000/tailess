@@ -25,8 +25,11 @@ import { dirname, isAbsolute, resolve } from "node:path";
 const maxDepth = 3;
 
 const tailwindSpecifier = /(?:^|[/\\])tailwindcss(?:$|[/\\])|^tailwindcss/;
-const utilitiesAtRule = /@tailwind\s+(?:utilities|all)\b/;
-const importAtRule = /@import\s+(?:url\(\s*)?["']([^"']+)["']/g;
+// An at-rule's *name* is ASCII case-insensitive in CSS, so `@Import` is the same
+// rule as `@import`. The specifier is not — it resolves as a path — so only these
+// two carry the flag, never `tailwindSpecifier`.
+const utilitiesAtRule = /@tailwind\s+(?:utilities|all)\b/i;
+const importAtRule = /@import\s+(?:url\(\s*)?["']([^"']+)["']/gi;
 
 /** True if an `@import` specifier refers to Tailwind itself. */
 export function isTailwindSpecifier(specifier: string): boolean {
