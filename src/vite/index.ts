@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { collect, defaultExtensions, isScannable } from "../extract/collect.js";
+import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
@@ -112,7 +112,9 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
    */
   const watched = new WeakSet<object>();
 
-  const extensions = new Set<string>(options.extensions ?? defaultExtensions);
+  // Normalized through the same helper the scan itself uses, so the watcher and the
+  // scan always agree on what `extensions: [".tsx"]` means.
+  const extensions = normalizeExtensions(options.extensions);
 
   /**
    * `content` resolved against Vite's root, not the working directory.
@@ -159,10 +161,16 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
     // renders unstyled.
     if (files.length === 0 && options.content?.length && !warnedAboutEmptyScan) {
       warnedAboutEmptyScan = true;
+      // Naming the glob case explicitly: `content` was glob-shaped in Tailwind v3,
+      // so it is the first thing a reader reaches for, and "matched no files" on its
+      // own reads like a wrong path rather than a wrong kind of path.
+      const glob = scanned.some((path) => path.includes("*"))
+        ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
+        : "";
       console.warn(
         `[tailess] the "content" option matched no files, so no variant class will ` +
           `have CSS. Scanned: ${scanned.join(", ")}. Paths are resolved against Vite's ` +
-          `root (${root}).`,
+          `root (${root}).${glob}`,
       );
     }
 

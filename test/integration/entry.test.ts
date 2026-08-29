@@ -117,3 +117,29 @@ describe("isTailwindEntry", () => {
     expect(await isTailwindEntry(`@import "tailwindcss";`)).toBe(true);
   });
 });
+
+describe("at-rule names are case-insensitive", () => {
+  // CSS folds an at-rule's *name* to lower case, so `@Import "tailwindcss"` is the
+  // same rule as `@import "tailwindcss"`. Reading it case-sensitively meant such a
+  // stylesheet was not recognised as an entry, and every runtime-built class in the
+  // project lost its CSS with nothing said about it.
+  it("recognises an entry written with an upper-case @IMPORT", async () => {
+    expect(await isTailwindEntry(`@IMPORT "tailwindcss";`)).toBe(true);
+    expect(await isTailwindEntry(`@Import "tailwindcss";`)).toBe(true);
+  });
+
+  it("recognises an upper-case @TAILWIND utilities", async () => {
+    expect(hasUtilitiesAtRule(`@TAILWIND UTILITIES;`)).toBe(true);
+    expect(await isTailwindEntry(`@Tailwind Utilities;`)).toBe(true);
+  });
+
+  it("still follows a relative import written in upper case", async () => {
+    await writeFile(join(dir, "base.css"), `@import "tailwindcss";`);
+    await writeFile(join(dir, "app.css"), `@IMPORT "./base.css";`);
+    expect(await isTailwindEntry(`@IMPORT "./base.css";`, join(dir, "app.css"))).toBe(true);
+  });
+
+  it("leaves a stylesheet with no Tailwind in it alone", async () => {
+    expect(await isTailwindEntry(`@IMPORT "./other.css";`)).toBe(false);
+  });
+});

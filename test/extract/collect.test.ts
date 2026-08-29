@@ -2,7 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearCache, collect, defaultExtensions, isScannable } from "../../src/extract/collect.js";
+import {
+  clearCache,
+  collect,
+  defaultExtensions,
+  isScannable,
+  normalizeExtensions,
+} from "../../src/extract/collect.js";
 
 let dir = "";
 
@@ -143,5 +149,59 @@ describe("isScannable", () => {
     for (const ext of ["tsx", "ts", "jsx", "js", "vue", "svelte", "astro", "mdx", "html"]) {
       expect(defaultExtensions).toContain(ext);
     }
+  });
+});
+
+describe("a root that is not a directory", () => {
+  it("scans a single file passed directly", async () => {
+    const file = join(dir, "one.tsx");
+    await writeFile(file, `ss({ md: "text-2xl" })`);
+
+    const result = await collect({ roots: [file] });
+    expect(result.classes).toEqual(["md:text-2xl"]);
+    expect(result.files).toEqual([file]);
+  });
+
+  it("does not count a glob as a file that was read", async () => {
+    // `content` was glob-shaped in Tailwind v3, so a glob is the first thing a
+    // reader reaches for. It has a scannable extension and no directory to walk, so
+    // it used to be recorded as a scanned file — leaving `files` non-empty with no
+    // classes in it, which is exactly the state the "matched no files" warning tests
+    // for. The one guard against a mistyped `content` was defeated by the most
+    // likely way of mistyping it.
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "p-9" })`);
+
+    const result = await collect({ roots: [join(dir, "src", "**", "*.tsx")] });
+    expect(result.classes).toEqual([]);
+    expect(result.files).toEqual([]);
+  });
+
+  it("does not count a path that simply does not exist", async () => {
+    const result = await collect({ roots: [join(dir, "nope", "missing.tsx")] });
+    expect(result.files).toEqual([]);
+  });
+});
+
+describe("normalizeExtensions", () => {
+  it("accepts a leading dot and any case, matching what the scan does", () => {
+    // The Vite plugin builds this same set to gate its watcher. When it built one by
+    // hand instead, `extensions: [".tsx"]` scanned correctly and then matched nothing
+    // in the watcher, so the first build was right and every class added afterwards
+    // silently had no CSS until the server was restarted.
+    expect([...normalizeExtensions([".tsx", "TS", ".Vue"])].sort()).toEqual(["ts", "tsx", "vue"]);
+    expect(isScannable("a.tsx", normalizeExtensions([".tsx"]))).toBe(true);
+    expect(isScannable("a.TSX", normalizeExtensions(["tsx"]))).toBe(true);
+  });
+
+  it("defaults to the extensions the scan defaults to", () => {
+    expect([...normalizeExtensions()].sort()).toEqual([...defaultExtensions].sort());
+  });
+
+  it("agrees with collect() for a dotted extension list", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-9" })`);
+    const result = await collect({ roots: [dir], extensions: [".tsx"] });
+    expect(result.classes).toEqual(["md:p-9"]);
+    expect(isScannable(join(dir, "a.tsx"), normalizeExtensions([".tsx"]))).toBe(true);
   });
 });
