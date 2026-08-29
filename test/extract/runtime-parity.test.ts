@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { extractClasses } from "../../src/extract/extract.js";
-import { between, cn, match, on, responsive, ss, until } from "../../src/index.js";
+import {
+  aria,
+  between,
+  cn,
+  data,
+  match,
+  on,
+  responsive,
+  ss,
+  until,
+  withPrefix,
+} from "../../src/index.js";
 
 /**
  * The one invariant this package exists to hold: **every class the runtime can
@@ -14,7 +25,7 @@ import { between, cn, match, on, responsive, ss, until } from "../../src/index.j
  * scanner over-approximates by design, so the assertion is one-directional:
  * runtime output must be a subset of the candidates, never the reverse.
  */
-const helpers = { ss, cn, match, on, until, between, responsive } as const;
+const helpers = { ss, cn, match, on, until, between, responsive, data, aria, withPrefix } as const;
 
 /** Run `src` with `env` bound, using the same text the scanner was given. */
 function evaluate(src: string, env: Record<string, unknown>): string {
@@ -63,6 +74,39 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `on(["dark", "hover"], "bg-black")` },
   { src: `between("sm", "lg", "grid")` },
   { src: `until("md", "hidden")` },
+
+  // A `clsx` dictionary names its classes in the *keys*, so an unquoted one puts no
+  // string literal in the source at all. Every case below used to emit a class with
+  // no CSS behind it; the quoted spelling worked only by accident, because the key
+  // happened to look like a string to the sweep.
+  { src: `until("md", { hidden: collapsed })`, env: { collapsed: true } },
+  { src: `on("hover", { underline: yes })`, env: { yes: true } },
+  { src: `on(["dark", "hover"], { hidden: yes })`, env: { yes: true } },
+  { src: `between("sm", "lg", { grid: yes })`, env: { yes: true } },
+  { src: `aria("expanded", { hidden: yes })`, env: { yes: true } },
+  { src: `data("state", "open", { hidden: yes })`, env: { yes: true } },
+  { src: `withPrefix("has-[:checked]", { underline: yes })`, env: { yes: true } },
+  { src: `responsive("text-sm", { md: { hidden: yes } })`, env: { yes: true } },
+  { src: `ss({ md: ["p-4", { hidden: yes }] })`, env: { yes: true } },
+  { src: `ss({ md: cn("p-4", { hidden: yes }) })`, env: { yes: true } },
+  { src: `ss({ lg: ["ring-2", { hidden: !open }] })`, env: { open: false } },
+  { src: `ss({ md: [{ truncate: long }] })`, env: { long: true } },
+
+  // `data`'s value is `string | number | boolean | …`, and a number or a boolean is
+  // every bit as static as a string — it is just not a string *literal*.
+  { src: `data("count", 3, "opacity-100")` },
+  { src: `data("checked", true, "underline")` },
+  { src: `data("index", 0, "font-bold")` },
+  { src: `data("open", false, "hidden")` },
+
+  // A helper called inside a bucket has already built its own prefix, so the
+  // bucket's key stacks on top of it. `has-*` takes a value and so is not one of
+  // the keys, which leaves `withPrefix` with no other spelling.
+  { src: `ss({ md: withPrefix("has-[:checked]", "underline") })` },
+  { src: `ss({ md: on("hover", "underline") })` },
+  { src: `ss({ md: aria("expanded", "rotate-180") })` },
+  { src: `ss({ md: until("lg", "hidden") })` },
+  { src: `ss({ dark: { md: data("state", "open", "hidden") } })` },
 ];
 
 describe("what the runtime builds, the scanner finds", () => {

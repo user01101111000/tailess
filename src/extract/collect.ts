@@ -110,6 +110,22 @@ export function clearCache(): void {
   inFlight.clear();
 }
 
+/**
+ * An extension list reduced to the form {@link isScannable} compares against: no
+ * leading dot, lower case.
+ *
+ * Exported because the Vite plugin needs the very same set to decide which watcher
+ * events are worth a rescan. Building it a second time by hand is how the two
+ * drifted: `extensions: [".tsx"]` scanned correctly and then matched nothing in the
+ * watcher, so the first build was right and every class added afterwards silently
+ * had no CSS until the dev server was restarted.
+ */
+export function normalizeExtensions(extensions: Iterable<string> = defaultExtensions): Set<string> {
+  const out = new Set<string>();
+  for (const ext of extensions) out.add(ext.replace(/^\./, "").toLowerCase());
+  return out;
+}
+
 /** True if `file` has an extension we scan. */
 export function isScannable(
   file: string,
@@ -129,8 +145,15 @@ async function walk(
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch {
-    // Not a directory (or unreadable) — treat `root` as a single file.
-    if (isScannable(root, extensions)) found.push(root);
+    // Not a directory (or unreadable) — `root` may still be a single file, but it
+    // has to really be one. A glob such as `src/**/*.tsx` lands here too and has a
+    // scannable extension, so counting it as a file that was read would leave
+    // `files` non-empty with no classes in it — which is precisely the condition
+    // the "content matched no files" warning tests, and the only thing standing
+    // between a mistyped `content` and a silently unstyled build.
+    if (!isScannable(root, extensions)) return;
+    const info = await stat(root).catch(() => undefined);
+    if (info?.isFile()) found.push(root);
     return;
   }
 
@@ -193,10 +216,7 @@ export async function collect(options: CollectOptions): Promise<CollectResult> {
 }
 
 async function run(options: CollectOptions): Promise<CollectResult> {
-  const extensions = new Set<string>();
-  for (const ext of options.extensions ?? defaultExtensions) {
-    extensions.add(ext.replace(/^\./, "").toLowerCase());
-  }
+  const extensions = normalizeExtensions(options.extensions);
   const ignore = new Set<string>(defaultIgnore);
   for (const dir of options.ignore ?? []) ignore.add(dir);
 

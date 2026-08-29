@@ -227,12 +227,15 @@ ss({ md: "text-2xl", hover: "underline" })          // literals
 ss({ md: isWide ? "grid-cols-3" : "grid-cols-1" })  // both branches
 ss({ md: ["flex", cond && "gap-4"] })               // arrays
 ss({ md: [{ "text-lg": cond }] })                   // clsx object form, in an array
+until("md", { hidden: !open })                      // …and its keys unquoted
+ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a bucket stacks
 ss({ md: "text-lg", /* both survive */ lg: "xl" })  // comments anywhere
 ss({ dark: { hover: "bg-black" } })                 // nested — dark:hover:bg-black
 ss(a, cond && { sm: "bg-red-500" })                 // a map behind a condition
 ss(a, open ? { md: "p-6" } : { md: "p-2" })         // both branches, as maps
 on(["dark", "hover"], "bg-black")                   // compound variants
 data("state", open ? "open" : "closed", "p-2")      // both values
+data("level", 2, "p-2")                             // numbers and booleans too
 ```
 
 ❌ **Not seen** — the value isn't in the source to read:

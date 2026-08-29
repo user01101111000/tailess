@@ -77,13 +77,16 @@ async function isTailwindStylesheet(root: Root, from: string | undefined): Promi
   let direct = false;
 
   root.walkAtRules((rule) => {
-    if (rule.name === "import") {
+    // PostCSS reports the name as written, and an at-rule name is ASCII
+    // case-insensitive in CSS — `@Import "tailwindcss"` is the same rule.
+    const name = rule.name.toLowerCase();
+    if (name === "import") {
       const specifier = /["']([^"']+)["']/.exec(rule.params)?.[1];
       if (specifier) {
         if (isTailwindSpecifier(specifier)) direct = true;
         else imports.push(specifier);
       }
-    } else if (rule.name === "tailwind" && /^\s*(?:utilities|all)\b/.test(rule.params)) {
+    } else if (name === "tailwind" && /^\s*(?:utilities|all)\b/i.test(rule.params)) {
       direct = true;
     }
     return direct ? false : undefined;

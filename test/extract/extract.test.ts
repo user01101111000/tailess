@@ -63,6 +63,57 @@ describe("extractClasses", () => {
     expect(extractClasses(`data("state", value, "underline")`)).toEqual(["data-[state]:underline"]);
   });
 
+  it("reads a data() value that is a number or a boolean", () => {
+    // `data` takes `string | number | boolean | …`. These are static too — they are
+    // just not string *literals*, so the sweep that recovers strings finds nothing and
+    // the presence form used to be emitted instead: the class the runtime puts on the
+    // element gets no CSS, and the CSS that is generated matches whenever the
+    // attribute merely exists. `data-checked={true}` is what React writes.
+    expect(extractClasses(`data("count", 3, "opacity-100")`)).toEqual([
+      "data-[count=3]:opacity-100",
+    ]);
+    expect(extractClasses(`data("checked", true, "underline")`)).toEqual([
+      "data-[checked=true]:underline",
+    ]);
+    expect(extractClasses(`data("index", 0, "font-bold")`)).toEqual(["data-[index=0]:font-bold"]);
+    expect(extractClasses(`data("open", false, "hidden")`)).toEqual(["data-[open=false]:hidden"]);
+    expect(extractClasses(`data("ratio", -1.5, "grid")`)).toEqual(["data-[ratio=-1.5]:grid"]);
+  });
+
+  it("reads the keys of an unquoted clsx dictionary", () => {
+    // A dictionary names its classes in the *keys*, so an unquoted one puts no string
+    // literal in the source at all. Quoting was the only reason the documented
+    // `[{ "text-lg": on }]` form ever worked.
+    expect(extractClasses(`until("md", { hidden: collapsed })`)).toEqual(["max-md:hidden"]);
+    expect(extractClasses(`on("hover", { underline: yes })`)).toEqual(["hover:underline"]);
+    expect(extractClasses(`aria("expanded", { hidden: yes })`)).toEqual(["aria-expanded:hidden"]);
+    expect(extractClasses(`ss({ md: ["p-4", { hidden: yes }] })`)).toEqual(["md:hidden", "md:p-4"]);
+    // Shorthand is `{ hidden: hidden }`, which emits the same class.
+    expect(extractClasses(`on("hover", { underline })`)).toEqual(["hover:underline"]);
+  });
+
+  it("does not read a lookup's keys as classes", () => {
+    // `match`'s second argument is keyed by a discriminant, not by class name, so its
+    // keys must not be safelisted the way a dictionary's are.
+    expect(extractClasses(`on("hover", match(tone, { block: "a", flex: "b" }))`)).toEqual([
+      "hover:a",
+      "hover:b",
+    ]);
+  });
+
+  it("stacks a bucket key onto a helper called inside the bucket", () => {
+    // The inner call has already built its prefix by the time the bucket sees the
+    // string it returned, so the key stacks on top. `has-*` takes a value and so is
+    // not one of the keys, which leaves `withPrefix` with no other spelling.
+    expect(extractClasses(`ss({ md: withPrefix("has-[:checked]", "underline") })`)).toContain(
+      "md:has-[:checked]:underline",
+    );
+    expect(extractClasses(`ss({ md: on("hover", "underline") })`)).toContain("md:hover:underline");
+    expect(extractClasses(`ss({ dark: { md: aria("expanded", "rotate-180") } })`)).toContain(
+      "dark:md:aria-expanded:rotate-180",
+    );
+  });
+
   it("handles aria() and withPrefix()", () => {
     expect(extractClasses(`aria("expanded", "rotate-180")`)).toEqual(["aria-expanded:rotate-180"]);
     expect(extractClasses(`withPrefix("supports-[display:grid]", "grid")`)).toEqual([
