@@ -1,20 +1,29 @@
-<h1 align="center">
+<div align="center">
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/wordmark-dark.svg">
-  <img src="./assets/wordmark.svg" alt="tailess" width="310">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-dark.svg">
+  <img src="./assets/hero.svg" alt="tailess — write Tailwind classes as a readable object" width="840">
 </picture>
-</h1>
 
-<p align="center">
-  <strong>Write Tailwind classes as a readable object — grouped by breakpoint and state,<br>fully typed, and wired into Tailwind so they actually get CSS.</strong>
-</p>
+<br><br>
 
-<p align="center">
-  <a href="https://www.npmjs.com/package/tailess"><img src="https://img.shields.io/npm/v/tailess.svg" alt="npm version"></a>
-  <a href="https://bundlejs.com/?q=tailess"><img src="https://img.shields.io/bundlejs/size/tailess" alt="bundle size"></a>
-  <a href="https://github.com/user01101111000/tailess/actions/workflows/ci.yml"><img src="https://github.com/user01101111000/tailess/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license"></a>
-</p>
+<a href="https://www.npmjs.com/package/tailess"><img alt="npm version" src="https://img.shields.io/npm/v/tailess?style=flat-square&labelColor=0A0A0A&color=CB3837&logo=npm&logoColor=white&label=npm"></a>
+<a href="https://www.npmjs.com/package/tailess"><img alt="downloads per month" src="https://img.shields.io/npm/dm/tailess?style=flat-square&labelColor=0A0A0A&color=F59E0B&label=downloads"></a>
+<a href="https://bundlejs.com/?q=tailess"><img alt="bundle size" src="https://img.shields.io/bundlejs/size/tailess?style=flat-square&labelColor=0A0A0A&color=10B981&label=min%2Bgzip"></a>
+<a href="https://github.com/user01101111000/tailess/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/user01101111000/tailess/ci.yml?style=flat-square&labelColor=0A0A0A&color=22C55E&logo=githubactions&logoColor=white&label=CI"></a>
+
+<a href="#requirements"><img alt="Tailwind CSS v4" src="https://img.shields.io/badge/Tailwind_CSS-v4-38BDF8?style=flat-square&labelColor=0A0A0A&logo=tailwindcss&logoColor=white"></a>
+<a href="#api"><img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&labelColor=0A0A0A&logo=typescript&logoColor=white"></a>
+<a href="#keys"><img alt="149 typed keys" src="https://img.shields.io/badge/typed_keys-149-EC4899?style=flat-square&labelColor=0A0A0A"></a>
+<a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8B5CF6?style=flat-square&labelColor=0A0A0A"></a>
+
+<br><br>
+
+**[Install](#install)** · **[Setup](#setup)** · **[How it works](#how-it-works)** · **[API](#api)** · **[Keys](#keys)** · **[Troubleshooting](#troubleshooting)** · **[FAQ](#faq)**
+
+</div>
+
+<br>
 
 ---
 
@@ -72,32 +81,81 @@ and it's where every hand-rolled version of this idea quietly fails.
 
 Tailwind v4 generates CSS by scanning your source for *literal* class strings. It never
 runs your code. So `"md:" + "text-2xl"` is invisible to it: the class lands on the
-element, and there is no rule behind it. Your element is simply unstyled, with nothing in
-the console and nothing in the build log.
+element, and there is no rule behind it.
+
+> [!CAUTION]
+> Your element is simply unstyled — with nothing in the console and nothing in the build
+> log. That is the failure mode every hand-rolled version of this idea has, and the one
+> thing tailess is built to make impossible.
 
 `tailess` ships a one-line build plugin that closes that gap — it reads your source,
 enumerates every class your `ss()` calls can produce, and hands the list to Tailwind
 through its own `@source inline(...)` safelist. And if you ever forget to install it,
 you get a console message naming the fix instead of a silently broken page.
 
-- 🎯 **Typed against Tailwind itself** — 149 keys, every one verified against the real Tailwind compiler in CI.
-- 🔌 **One line of setup** — a Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
-- 🧯 **No silent failures** — the whole reason this package exists.
-- ♻️ **Instant in dev** — add a class and it appears without restarting; delete it and it stops being emitted.
-- 🪶 **Small** — 2.7 kB of its own code, one dependency, ESM + CJS, tree-shakeable. [What the badge counts](#bundle-size).
-- ⚡ **Fast** — `ss()` with three groups costs ~385 ns, one `tailwind-merge` pass whatever the shape.
+<table>
+<tr>
+<td width="50%" valign="top">
+
+🎯 &nbsp;**Typed against Tailwind itself**
+
+149 keys, every one verified against the real Tailwind compiler in CI.
+
+</td>
+<td width="50%" valign="top">
+
+🔌 &nbsp;**One line of setup**
+
+A Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+🧯 &nbsp;**No silent failures**
+
+The whole reason this package exists.
+
+</td>
+<td valign="top">
+
+♻️ &nbsp;**Instant in dev**
+
+Add a class and it appears without restarting; delete it and it stops being emitted.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+🪶 &nbsp;**Small**
+
+2.7 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
+[What the badge counts →](#bundle-size)
+
+</td>
+<td valign="top">
+
+⚡ &nbsp;**Fast**
+
+`ss()` with three groups costs ~385 ns, one `tailwind-merge` pass whatever the shape.
+
+</td>
+</tr>
+</table>
 
 ## Contents
 
-**Start here** — [Requirements](#requirements) · [Install](#install) · [Setup](#setup) ([Vite](#vite), [Next.js](#nextjs), [other PostCSS](#other-postcss-setups))
+| | |
+| :-- | :-- |
+| 🚀 &nbsp;**Start here** | [Requirements](#requirements) · [Install](#install) · [Setup](#setup) — [Vite](#vite), [Next.js](#nextjs), [other PostCSS](#other-postcss-setups) |
+| 🧠 &nbsp;**Understand it** | [How it works](#how-it-works) · [What the scanner sees](#what-the-scanner-can-and-cannot-see) · [Keys](#keys) |
+| 📖 &nbsp;**Reference** | [API](#api) — [`ss`](#ss--group-by-breakpoint-and-state), [composing](#many-arguments-one-call), [nesting](#nested-groups-for-compound-variants), [other helpers](#cn--compose-and-merge) · [Plugin options](#plugin-options) · [Framework examples](#framework-examples) |
+| 📊 &nbsp;**Numbers** | [Performance](#performance) · [Bundle size](#bundle-size) · [Verified on](#verified-on) |
+| 🛟 &nbsp;**Help** | [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Upgrading from 0.8](#upgrading-from-08) · [Contributing](#contributing) · [License](#license) |
 
-**Understand it** — [How it works](#how-it-works) · [What the scanner sees](#what-the-scanner-can-and-cannot-see) · [Keys](#keys)
-
-**Reference** — [API](#api) ([`ss`](#ss--group-by-breakpoint-and-state), [composing](#many-arguments-one-call), [nesting](#nested-groups-for-compound-variants), [other helpers](#cn--compose-and-merge)) · [Plugin options](#plugin-options) · [Framework examples](#framework-examples)
-
-**Numbers** — [Performance](#performance) · [Bundle size](#bundle-size) · [Verified on](#verified-on)
-
-**Help** — [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Upgrading from 0.8](#upgrading-from-08) · [Contributing](#contributing) · [License](#license)
+---
 
 ## Requirements
 
@@ -113,6 +171,10 @@ you get a console message naming the fix instead of a silently broken page.
 ```bash
 npm install tailess
 ```
+
+> [!TIP]
+> Already have a `cn()` helper? `ss` is a strict superset of it — the same call with plain
+> strings behaves identically, so you can swap one file at a time.
 
 ## Setup
 
@@ -180,20 +242,18 @@ That's the whole setup:
 import { ss } from "tailess";
 ```
 
+---
+
 ## How it works
 
-```text
-your source                  tailess plugin                    Tailwind
-───────────                  ──────────────                    ────────
-ss({ md: "text-2xl" })  ──▶  scan + enumerate           
-                             "md:text-2xl"              
-                                   │
-                                   ▼
-                             node_modules/.cache/…/tailess.css
-                             @source inline("md:text-2xl")  ──▶  .md\:text-2xl { … }
-                                   │
-       your app.css  ──▶  @import "…/tailess.css"  (injected)
-```
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/flow-dark.svg">
+  <img src="./assets/flow.svg" alt="your source, then the tailess plugin, then Tailwind output" width="840">
+</picture>
+
+</div>
 
 Three details make it reliable rather than merely clever:
 
@@ -268,6 +328,8 @@ const size = match(scale, { sm: "text-sm", lg: "text-2xl" });
 Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`.
 Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
 attribute won't throw the scanner off.
+
+---
 
 ## API
 
@@ -655,6 +717,8 @@ By default the whole project is scanned, skipping dependencies, build output (`d
 `build`, `.next`, `.output`, …) and caches. Dot-directories are *not* skipped wholesale,
 so `.storybook/preview.tsx` is still found.
 
+---
+
 ## Performance
 
 Measured on the built package, Node 22. Runtime numbers are per call, warm:
@@ -713,6 +777,8 @@ read on the render path. Both were measured and rejected; the reasoning is writt
 [`src/internal/env.ts`](./src/internal/env.ts).
 
 </details>
+
+---
 
 ## Troubleshooting
 
@@ -873,6 +939,23 @@ npm test
 npm run build
 ```
 
+---
+
 ## License
 
 [MIT](./LICENSE) © [user01101111000](https://github.com/user01101111000)
+
+<br>
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/wordmark-dark.svg">
+  <img src="./assets/wordmark.svg" alt="tailess" width="150">
+</picture>
+
+<br><br>
+
+**[npm](https://www.npmjs.com/package/tailess)** · **[Issues](https://github.com/user01101111000/tailess/issues)** · **[Contributing](./CONTRIBUTING.md)** · **[Changelog](./CHANGELOG.md)**
+
+</div>
