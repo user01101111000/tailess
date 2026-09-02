@@ -101,6 +101,48 @@ describe("extractClasses", () => {
     ]);
   });
 
+  it("stacks one helper's prefix onto another called inside it", () => {
+    // Not an `ss` bucket this time — the outer call is a helper too, and its result
+    // is the already-prefixed string the inner one returned.
+    expect(extractClasses(`until("md", on("hover", "p-2"))`)).toContain("max-md:hover:p-2");
+    expect(extractClasses(`on("hover", until("md", "p-2"))`)).toContain("hover:max-md:p-2");
+    expect(extractClasses(`aria("expanded", on("hover", "p-2"))`)).toContain(
+      "aria-expanded:hover:p-2",
+    );
+    expect(extractClasses(`responsive("p-1", { md: on("hover", "p-2") })`)).toContain(
+      "md:hover:p-2",
+    );
+    expect(
+      extractClasses(`on("hover", until("md", withPrefix("has-[:checked]", "p-6")))`),
+    ).toContain("hover:max-md:has-[:checked]:p-6");
+  });
+
+  it("resolves a data() value written in any numeric spelling", () => {
+    // The runtime interpolates the *number*, so the candidate has to be the number's
+    // string form — `1e3` is `data-[n=1000]:` on the element, never `data-[n=1e3]:`.
+    const cases: Array<[string, string]> = [
+      [`data("n", 1e3, "p-1")`, "data-[n=1000]:p-1"],
+      [`data("n", 1_000, "p-1")`, "data-[n=1000]:p-1"],
+      [`data("n", .5, "p-1")`, "data-[n=0.5]:p-1"],
+      [`data("n", 1., "p-1")`, "data-[n=1]:p-1"],
+      [`data("n", +1, "p-1")`, "data-[n=1]:p-1"],
+      [`data("n", 0x10, "p-1")`, "data-[n=16]:p-1"],
+      [`data("n", 0b11, "p-1")`, "data-[n=3]:p-1"],
+      [`data("n", 0o17, "p-1")`, "data-[n=15]:p-1"],
+      [`data("n", 2e-2, "p-1")`, "data-[n=0.02]:p-1"],
+      [`data("n", -0, "p-1")`, "data-[n=0]:p-1"],
+    ];
+    for (const [src, expected] of cases) expect(extractClasses(src)).toEqual([expected]);
+  });
+
+  it("still falls back to the presence form for a value it cannot resolve", () => {
+    expect(extractClasses(`data("n", value, "p-1")`)).toEqual(["data-[n]:p-1"]);
+    expect(extractClasses(`data("n", null, "p-1")`)).toEqual(["data-[n]:p-1"]);
+    expect(extractClasses(`data("n", undefined, "p-1")`)).toEqual(["data-[n]:p-1"]);
+    expect(extractClasses(`data("n", Infinity, "p-1")`)).toEqual(["data-[n]:p-1"]);
+    expect(extractClasses(`data("n", 1n, "p-1")`)).toEqual(["data-[n]:p-1"]);
+  });
+
   it("stacks a bucket key onto a helper called inside the bucket", () => {
     // The inner call has already built its prefix by the time the bucket sees the
     // string it returned, so the key stacks on top. `has-*` takes a value and so is

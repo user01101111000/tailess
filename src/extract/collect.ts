@@ -57,13 +57,19 @@ export const defaultIgnore = [
   ".vscode",
 ] as const;
 
+/**
+ * Both optional fields are spelled `| undefined` because that is what the callers
+ * hand over: each plugin forwards its own `options.extensions` straight through, and
+ * those are optional too. Under `exactOptionalPropertyTypes` a bare `?:` means
+ * "absent, or a value" and refuses an explicit `undefined`.
+ */
 export interface CollectOptions {
   /** Files or directories to scan. */
   roots: string[];
   /** File extensions to scan, without the dot. Defaults to {@link defaultExtensions}. */
-  extensions?: Iterable<string>;
+  extensions?: Iterable<string> | undefined;
   /** Extra directory names to skip on top of {@link defaultIgnore}. */
-  ignore?: Iterable<string>;
+  ignore?: Iterable<string> | undefined;
 }
 
 export interface CollectResult {
