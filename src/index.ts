@@ -1,14 +1,25 @@
 export type {
+  ContainerKey,
   ElementStateKey,
   GroupStateKey,
+  MaxContainerKey,
   MaxScreenKey,
+  NegatableStateKey,
+  NotStateKey,
   PeerStateKey,
   ScreenKey,
   SsKey,
   StandaloneStateKey,
   StateKey,
 } from "./constants.js";
-export { maxScreenKeys, screenKeys, screens, stateKeys } from "./constants.js";
+export {
+  containerKeys,
+  maxContainerKeys,
+  maxScreenKeys,
+  screenKeys,
+  screens,
+  stateKeys,
+} from "./constants.js";
 export type { ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";

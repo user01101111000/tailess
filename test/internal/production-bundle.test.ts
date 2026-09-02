@@ -47,13 +47,17 @@ describe("the browser bundle", () => {
 
   it("stays within its size budget", async () => {
     const code = await bundleFor("production");
-    // 5,900 chars minified today (~2.7 kB gzipped), roughly a fifth of which is the
+    // 6,165 chars minified today (~2.8 kB gzipped), roughly a fifth of which is the
     // warning text that cannot be eliminated. Raise this deliberately, and only for
-    // something worth shipping to every consumer's users. Last raised from 5,500 for
+    // something worth shipping to every consumer's users. Raised from 5,500 for
     // variadic arguments and nested buckets in `ss` — +634 chars, +270 gzipped — which
     // is what removed `cn(ss(…), …)` from every call site. Vendoring `clsx` as
     // `join` moved 135 chars in and a dependency out, and gzipped 35 bytes smaller.
-    expect(code.length).toBeLessThan(6_000);
+    // Raised again from 6,000 for the container-query and `not-*` keys: +265 chars,
+    // +100 gzipped, for 84 keys — container queries being the one Tailwind v4 feature
+    // `ss` could not express at all. Deriving both families from a size list rather
+    // than writing them out kept that number down by another 94.
+    expect(code.length).toBeLessThan(6_400);
   });
 
   it("pulls in no Node builtins", async () => {

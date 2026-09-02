@@ -14,7 +14,7 @@
 
 <a href="#requirements"><img alt="Tailwind CSS v4" src="https://img.shields.io/badge/Tailwind_CSS-v4-38BDF8?style=flat-square&labelColor=0A0A0A&logo=tailwindcss&logoColor=white"></a>
 <a href="#api"><img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&labelColor=0A0A0A&logo=typescript&logoColor=white"></a>
-<a href="#keys"><img alt="149 typed keys" src="https://img.shields.io/badge/typed_keys-149-EC4899?style=flat-square&labelColor=0A0A0A"></a>
+<a href="#keys"><img alt="233 typed keys" src="https://img.shields.io/badge/typed_keys-233-EC4899?style=flat-square&labelColor=0A0A0A"></a>
 <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8B5CF6?style=flat-square&labelColor=0A0A0A"></a>
 
 </div>
@@ -77,6 +77,7 @@ className={ss(
   - [Vite](#vite)
   - [Next.js](#nextjs)
   - [Other PostCSS setups](#other-postcss-setups)
+- [Sorting classes](#sorting-classes)
 - [API](#api)
   - [`ss` — group by breakpoint and state](#ss--group-by-breakpoint-and-state)
   - [`cn` — compose and merge](#cn--compose-and-merge)
@@ -90,6 +91,7 @@ className={ss(
 - [Keys](#keys)
 - [Framework examples](#framework-examples)
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
+- [Build-time checks](#build-time-checks)
 - [Plugin options](#plugin-options)
 - [Performance](#performance)
   - [Bundle size](#bundle-size)
@@ -109,7 +111,7 @@ className={ss(
 
 🎯 &nbsp;**Typed against Tailwind itself**
 
-149 keys, every one verified against the real Tailwind compiler in CI.
+233 keys, every one verified against the real Tailwind compiler in CI.
 
 </td>
 <td width="50%" valign="top">
@@ -141,7 +143,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 
 🪶 &nbsp;**Small**
 
-2.7 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
+2.8 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
 [What the badge counts →](#bundle-size)
 
 </td>
@@ -242,6 +244,43 @@ That's the whole setup:
 import { ss } from "tailess";
 ```
 
+## Sorting classes
+
+tailess sorts your *keys* — `base`, then breakpoints, then `max-*`, then states — but not
+the classes inside them. For that, point Tailwind's own formatter at the helpers — in
+`.prettierrc.json`:
+
+```json
+{
+  "plugins": ["prettier-plugin-tailwindcss"],
+  "tailwindStylesheet": "./src/index.css",
+  "tailwindFunctions": [
+    "ss", "cn", "responsive", "on", "until",
+    "between", "data", "aria", "match", "withPrefix"
+  ]
+}
+```
+
+`tailwindStylesheet` is the CSS entry holding your `@import "tailwindcss"` — on Next.js
+usually `./app/globals.css`. Leave it out and anything from your own `@theme` or
+`@utility` is treated as an unknown class and sorted to the front.
+
+```tsx
+// before
+ss({ base: "text-sm p-4 flex items-center", md: "gap-2 p-8 grid" })
+
+// after
+ss({ base: "flex items-center p-4 text-sm", md: "grid gap-2 p-8" })
+```
+
+Each string is sorted on its own. Separate arguments are never reordered, so a trailing
+`className` still wins.
+
+> [!NOTE]
+> Two conflicting utilities in **one** string can be reordered — `"p-4 p-2"` becomes
+> `"p-2 p-4"`, and `tailwind-merge` then keeps `p-4` where it kept `p-2`. Write the
+> override as its own argument instead, which nothing reorders: `ss({ base: "p-4" }, "p-2")`.
+
 ---
 
 ## API
@@ -270,7 +309,7 @@ you already wrote as literals.
 ### `ss` — group by breakpoint and state
 
 The main event. `base` holds classes with no further prefix; every other key is a
-breakpoint, a `max-*` range, or a state variant.
+breakpoint, a `max-*` range, a container query, or a state variant.
 
 ```ts
 ss({ base: "text-xl flex", sm: "block", md: "text-2xl" });
@@ -278,6 +317,13 @@ ss({ base: "text-xl flex", sm: "block", md: "text-2xl" });
 
 ss({ base: "grid", "max-md": "gap-2", "group-hover": "underline" });
 // → "grid max-md:gap-2 group-hover:underline"
+
+// Sized by the nearest `@container` ancestor rather than the viewport:
+ss({ base: "grid", "@md": "grid-cols-2", "@max-sm": "hidden" });
+// → "grid @md:grid-cols-2 @max-sm:hidden"
+
+ss({ base: "opacity-100", "not-hover": "opacity-70", "not-dark": "text-black" });
+// → "opacity-100 not-hover:opacity-70 not-dark:text-black"
 ```
 
 Keys are emitted `base` → breakpoints mobile-first → `max-*` largest-first → states,
@@ -449,6 +495,7 @@ For variants tailess doesn't model as keys.
 withPrefix("supports-[display:grid]", "grid");  // → "supports-[display:grid]:grid"
 withPrefix("has-[:checked]", "bg-blue-50");     // → "has-[:checked]:bg-blue-50"
 withPrefix("group-[.open]", "rotate-90");       // → "group-[.open]:rotate-90"
+withPrefix("@lg/sidebar", "grid");              // → "@lg/sidebar:grid"  (named container)
 ```
 
 ### Also exported
@@ -464,8 +511,8 @@ Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `Sta
 
 ## Keys
 
-`ss` accepts `base` plus Tailwind's own keys — **149 in total**, and nothing else, so
-autocomplete is exhaustive and a typo can't compile. The same 149 are available inside a
+`ss` accepts `base` plus Tailwind's own keys — **233 in total**, and nothing else, so
+autocomplete is exhaustive and a typo can't compile. The same 233 are available inside a
 nested group, which is how a compound variant is spelled.
 
 | Group | # | Keys |
@@ -473,6 +520,8 @@ nested group, which is how a compound variant is spelled.
 | `base` | 1 | unprefixed classes |
 | Breakpoints | 5 | `sm` `md` `lg` `xl` `2xl` |
 | Max-width ranges | 5 | `max-sm` `max-md` `max-lg` `max-xl` `max-2xl` |
+| Container queries | 13 | `@3xs` `@2xs` `@xs` `@sm` `@md` `@lg` `@xl` `@2xl` `@3xl` `@4xl` `@5xl` `@6xl` `@7xl` — sized by the nearest `@container`, not the viewport |
+| Container ranges | 13 | `@max-3xs` … `@max-7xl` |
 | Interaction & links | 7 | `hover` `focus` `focus-within` `focus-visible` `active` `visited` `target` |
 | Position among siblings | 9 | `first` `last` `only` `odd` `even` `first-of-type` `last-of-type` `only-of-type` `empty` |
 | Form & input state | 16 | `disabled` `enabled` `checked` `indeterminate` `default` `optional` `required` `valid` `invalid` `user-valid` `user-invalid` `in-range` `out-of-range` `placeholder-shown` `autofill` `read-only` |
@@ -481,11 +530,12 @@ nested group, which is how a compound variant is spelled.
 | Media & feature queries | 17 | `dark` `motion-safe` `motion-reduce` `contrast-more` `contrast-less` `forced-colors` `inverted-colors` `portrait` `landscape` `print` `noscript` `pointer-fine` `pointer-coarse` `pointer-none` `any-pointer-fine` `any-pointer-coarse` `any-pointer-none` |
 | Direction & transition | 3 | `rtl` `ltr` `starting` |
 | Descendants | 2 | `*` direct children · `**` all descendants |
-| `group-*` | 36 | the element-state keys — everything above except pseudo-elements, queries and `starting` — matched on the **parent**: `group-hover`, `group-checked`, … |
+| `group-*` | 36 | the element's own state — the four state rows plus `rtl`/`ltr` — matched on the **parent**: `group-hover`, `group-checked`, … |
 | `peer-*` | 36 | the same 36, matched on a **sibling**: `peer-hover`, `peer-checked`, … |
+| `not-*` | 58 | those same 36, plus every media query and breakpoint: `not-hover`, `not-dark`, `not-md`, … |
 
-Anything with a value of its own (`data-*`, `aria-*`, `supports-*`, `has-*`, `not-*`,
-arbitrary `min-[…]`) is deliberately absent — use [`data`/`aria`](#data--aria--attribute-variants)
+Anything with a value of its own (`data-*`, `aria-*`, `supports-*`, `has-*`, `in-*`,
+`nth-*`, a named container like `@lg/sidebar`, arbitrary `min-[…]`) is deliberately absent — use [`data`/`aria`](#data--aria--attribute-variants)
 or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
 `stateKeys` and is regenerated and re-verified against the Tailwind compiler in CI.
 
@@ -633,6 +683,28 @@ Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`
 Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
 attribute won't throw the scanner off.
 
+## Build-time checks
+
+The plugin reports what it can prove wrong from your source, while the project builds:
+
+```
+[tailess] src/Card.tsx: "p-4" never reaches the element — "p-2" replaces it in the same
+  string. Drop the unused one, or move the override into its own argument.
+[tailess] src/Card.tsx: between("lg", "sm", …) describes an empty range: "lg" is not
+  narrower than "sm", so "lg:max-sm:" can never match a viewport.
+```
+
+Four things are checked: two conflicting utilities in **one** string, a `between` range
+no viewport can satisfy, an empty prefix, and whitespace inside a variant. Each is a
+class that cannot work — nothing is reported for code that merely looks unusual, and a
+later argument overriding an earlier one is never flagged, since that is the point of
+passing `className` last.
+
+The runtime warns about most of these too, but only once the line renders, in a browser,
+with the console open. A branch that did not run during development ships either way —
+these run on every build, for every call site, and show up in CI. They warn; they never
+fail the build.
+
 ## Plugin options
 
 Both plugins take the same options (`cacheDir` is PostCSS-only).
@@ -682,19 +754,19 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 
 ### Bundle size
 
-The badge at the top reads **11.1 kB** because it measures the whole dependency tree.
+The badge at the top reads **11.2 kB** because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
 | `tailwind-merge` | ~8.4 kB |
-| tailess itself | **~2.7 kB** |
-| **Total** | **~11.1 kB** |
+| tailess itself | **~2.8 kB** |
+| **Total** | **~11.2 kB** |
 
 `tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
 already pull it in. If yours is one of them your bundler keeps the single shared copy,
-and adding tailess costs the 2.7 kB, not the 11.1.
+and adding tailess costs the 2.8 kB, not the 11.2.
 
 ## Troubleshooting
 

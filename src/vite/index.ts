@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
+import { reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 
 /**
@@ -149,11 +150,15 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
     wrote: boolean;
   }> {
     const scanned = roots();
-    const { classes, files } = await collect({
+    const { classes, files, diagnostics } = await collect({
       roots: scanned,
       ignore: options.ignore,
       extensions: options.extensions,
     });
+
+    // What the scanner could prove wrong, said once, while the project builds — the
+    // runtime equivalents only fire once the offending line renders in a browser.
+    reportDiagnostics(diagnostics, root);
 
     // An explicit `content` that matches nothing is always a mistake — a wrong path,
     // or an extension list that excludes the project's own files. Left quiet it looks

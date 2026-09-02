@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { collect } from "../extract/collect.js";
 import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceChunks } from "../integration/inject.js";
+import { reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 
 /**
@@ -170,11 +171,13 @@ const tailessPostcss = Object.assign(
           return;
         }
 
-        const { classes, files, roots, extensions } = await collect({
+        const { classes, files, roots, extensions, diagnostics } = await collect({
           roots: options.content?.length ? options.content : [process.cwd()],
           ignore: options.ignore,
           extensions: options.extensions,
         });
+
+        reportDiagnostics(diagnostics, process.cwd());
 
         // Prefer the sidecar: it is a build dependency Tailwind tracks, so a
         // rewritten list always takes effect. Falling back to inlining keeps things

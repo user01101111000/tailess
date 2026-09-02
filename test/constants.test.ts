@@ -3,7 +3,14 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { __unstable__loadDesignSystem, compile } from "tailwindcss";
 import { describe, expect, it } from "vitest";
-import { maxScreenKeys, screenKeys, screens, stateKeys } from "../src/constants.js";
+import {
+  containerKeys,
+  maxContainerKeys,
+  maxScreenKeys,
+  screenKeys,
+  screens,
+  stateKeys,
+} from "../src/constants.js";
 import { hasRule } from "./helpers/css.js";
 
 const require = createRequire(import.meta.url);
@@ -20,15 +27,23 @@ const design = await __unstable__loadDesignSystem(`@import "tailwindcss";`, {
   loadStylesheet,
 });
 
-/** Every static variant Tailwind registers, minus the breakpoints we model separately. */
-const plain = [...design.variants.entries()]
+/** Every static variant Tailwind registers. */
+const allStatic = [...design.variants.entries()]
   .filter(([, variant]) => variant.kind === "static")
-  .map(([name]) => name)
-  .filter((name) => !(screenKeys as readonly string[]).includes(name));
+  .map(([name]) => name);
 
-/** The plain variants Tailwind lets you compound onto `group` / `peer`. */
-const compoundable = (prefix: "group" | "peer"): string[] =>
-  plain.filter((name) => design.variants.compoundsWith(prefix, name));
+/** …minus the breakpoints, which tailess models as their own key family. */
+const plain = allStatic.filter((name) => !(screenKeys as readonly string[]).includes(name));
+
+/**
+ * The variants Tailwind lets you compound onto `prefix`.
+ *
+ * `group` and `peer` only reach the element's own state, so they are asked about the
+ * `plain` set. `not` reaches further — a media query and a breakpoint can both be
+ * negated — so it is asked about every static variant there is.
+ */
+const compoundable = (prefix: "group" | "peer" | "not", from: string[] = plain): string[] =>
+  from.filter((name) => design.variants.compoundsWith(prefix, name));
 
 /** Compile a stylesheet that safelists `candidates`, and return the CSS. */
 async function build(candidates: readonly string[]): Promise<string> {
@@ -91,6 +106,7 @@ describe("built-in keys cover every static Tailwind variant", () => {
     ...plain,
     ...compoundable("group").map((name) => `group-${name}`),
     ...compoundable("peer").map((name) => `peer-${name}`),
+    ...compoundable("not", allStatic).map((name) => `not-${name}`),
   ].sort();
 
   it("lists exactly the variants Tailwind registers — no more, no fewer", () => {
@@ -112,5 +128,34 @@ describe("key sets", () => {
 
   it("keeps max-* keys largest-first, mirroring Tailwind's own ordering", () => {
     expect(maxScreenKeys).toEqual([...screenKeys].reverse().map((key) => `max-${key}`));
+  });
+});
+
+/**
+ * Container queries are a functional variant in Tailwind's registry — `@md` is `@`
+ * given a size — so the registry comparison above cannot vouch for them, exactly as
+ * it cannot for `max-*`. Compile them instead: the only proof that matters is a rule
+ * coming out the other side.
+ */
+describe("container-query keys", () => {
+  it("every container key produces a rule", async () => {
+    const css = await build(containerKeys.map((key) => `${key}:underline`));
+    expect(containerKeys.filter((key) => !hasRule(css, `${key}:underline`))).toEqual([]);
+  });
+
+  it("every @max-* container key produces a rule", async () => {
+    const css = await build(maxContainerKeys.map((key) => `${key}:underline`));
+    expect(maxContainerKeys.filter((key) => !hasRule(css, `${key}:underline`))).toEqual([]);
+  });
+
+  it("keeps @max-* largest-first, mirroring the viewport ranges", () => {
+    expect(maxContainerKeys).toEqual(
+      [...containerKeys].reverse().map((key) => key.replace("@", "@max-")),
+    );
+  });
+
+  it("has no duplicates and does not collide with the viewport keys", () => {
+    const all = [...containerKeys, ...maxContainerKeys, ...screenKeys, ...maxScreenKeys];
+    expect(new Set(all).size).toBe(all.length);
   });
 });
