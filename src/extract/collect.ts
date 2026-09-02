@@ -2,6 +2,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
+import { type Diagnostic, diagnose } from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
 /** File extensions scanned by default. */
@@ -84,12 +85,25 @@ export interface CollectResult {
    * Callers use it to describe the same file set to a bundler's watcher.
    */
   extensions: string[];
+  /**
+   * Problems the scanner could prove from the source, with the file they are in.
+   * The runtime warns about most of these too, but only once the line runs — these
+   * are found on every build, for every call site, and reach CI.
+   */
+  diagnostics: FileDiagnostic[];
+}
+
+/** A {@link Diagnostic} together with the file it was found in. */
+export interface FileDiagnostic extends Diagnostic {
+  /** Absolute path of the file. */
+  file: string;
 }
 
 interface CacheEntry {
   mtimeMs: number;
   size: number;
   classes: string[];
+  diagnostics: Diagnostic[];
 }
 
 /**
@@ -179,8 +193,9 @@ async function walk(
   await Promise.all(nested);
 }
 
-/** Extract one file's classes, reusing the cached result when it hasn't changed. */
-async function classesOf(file: string): Promise<string[]> {
+/** Read one file, reusing the cached extraction when it hasn't changed. */
+async function scanFile(file: string): Promise<CacheEntry> {
+  const empty: CacheEntry = { mtimeMs: 0, size: -1, classes: [], diagnostics: [] };
   let mtimeMs = 0;
   let size = -1;
   try {
@@ -189,16 +204,23 @@ async function classesOf(file: string): Promise<string[]> {
     size = info.size;
   } catch {
     cache.delete(file);
-    return [];
+    return empty;
   }
 
   const cached = cache.get(file);
-  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached.classes;
+  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached;
 
   const code = await readFile(file, "utf8").catch(() => "");
-  const classes = extractClasses(code);
-  cache.set(file, { mtimeMs, size, classes });
-  return classes;
+  // Both walks read the same text once; diagnostics are cached beside the classes so
+  // an unchanged file costs a `stat` on the next scan, exactly as before.
+  const entry: CacheEntry = {
+    mtimeMs,
+    size,
+    classes: extractClasses(code),
+    diagnostics: diagnose(code),
+  };
+  cache.set(file, entry);
+  return entry;
 }
 
 /**
@@ -232,10 +254,19 @@ async function run(options: CollectOptions): Promise<CollectResult> {
   files.sort();
 
   const classes = new Set<string>();
-  const perFile = await Promise.all(files.map(classesOf));
-  for (const list of perFile) {
-    for (const cls of list) classes.add(cls);
-  }
+  const diagnostics: FileDiagnostic[] = [];
+  const perFile = await Promise.all(files.map(scanFile));
+  perFile.forEach((entry, index) => {
+    for (const cls of entry.classes) classes.add(cls);
+    const file = files[index] as string;
+    for (const d of entry.diagnostics) diagnostics.push({ ...d, file });
+  });
 
-  return { classes: [...classes].sort(), files, roots, extensions: [...extensions] };
+  return {
+    classes: [...classes].sort(),
+    files,
+    roots,
+    extensions: [...extensions],
+    diagnostics,
+  };
 }

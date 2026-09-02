@@ -91,6 +91,7 @@ className={ss(
 - [Keys](#keys)
 - [Framework examples](#framework-examples)
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
+- [Build-time checks](#build-time-checks)
 - [Plugin options](#plugin-options)
 - [Performance](#performance)
   - [Bundle size](#bundle-size)
@@ -681,6 +682,28 @@ const size = match(scale, { sm: "text-sm", lg: "text-2xl" });
 Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`.
 Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
 attribute won't throw the scanner off.
+
+## Build-time checks
+
+The plugin reports what it can prove wrong from your source, while the project builds:
+
+```
+[tailess] src/Card.tsx: "p-4" never reaches the element — "p-2" replaces it in the same
+  string. Drop the unused one, or move the override into its own argument.
+[tailess] src/Card.tsx: between("lg", "sm", …) describes an empty range: "lg" is not
+  narrower than "sm", so "lg:max-sm:" can never match a viewport.
+```
+
+Four things are checked: two conflicting utilities in **one** string, a `between` range
+no viewport can satisfy, an empty prefix, and whitespace inside a variant. Each is a
+class that cannot work — nothing is reported for code that merely looks unusual, and a
+later argument overriding an earlier one is never flagged, since that is the point of
+passing `className` last.
+
+The runtime warns about most of these too, but only once the line renders, in a browser,
+with the console open. A branch that did not run during development ships either way —
+these run on every build, for every call site, and show up in CI. They warn; they never
+fail the build.
 
 ## Plugin options
 
