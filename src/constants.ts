@@ -33,6 +33,48 @@ export const maxScreenKeys = ["max-2xl", "max-xl", "max-lg", "max-md", "max-sm"]
 export type MaxScreenKey = (typeof maxScreenKeys)[number];
 
 /**
+ * Container-query keys, smallest first — `@md:` styles an element by the width of
+ * its nearest `@container` ancestor rather than the viewport.
+ *
+ * Sizes mirror Tailwind v4's `--container-*` scale. A *named* container
+ * (`@lg/sidebar:`) carries a value of its own and so is not a key; write that one
+ * with `withPrefix("@lg/sidebar", …)`.
+ */
+const containerSizes = [
+  "3xs",
+  "2xs",
+  "xs",
+  "sm",
+  "md",
+  "lg",
+  "xl",
+  "2xl",
+  "3xl",
+  "4xl",
+  "5xl",
+  "6xl",
+  "7xl",
+] as const;
+
+/** A container-query key, e.g. `@md` (at the `md` container width and up). */
+export type ContainerKey = `@${(typeof containerSizes)[number]}`;
+
+/** A `@max-*` container key, e.g. `@max-md` (below the `md` container width). */
+export type MaxContainerKey = `@max-${(typeof containerSizes)[number]}`;
+
+export const containerKeys: readonly ContainerKey[] = containerSizes.map(
+  (size): ContainerKey => `@${size}`,
+);
+
+/**
+ * `@max-*` container keys, largest first — the same ordering rule as
+ * {@link maxScreenKeys}, so a narrower range wins over a wider one.
+ */
+export const maxContainerKeys: readonly MaxContainerKey[] = [...containerSizes]
+  .reverse()
+  .map((size): MaxContainerKey => `@max-${size}`);
+
+/**
  * Variants describing the state of the element itself — the ones Tailwind also
  * lets you compound onto a parent (`group-*`) or a sibling (`peer-*`).
  *
@@ -85,8 +127,7 @@ const elementStates = [
  * pseudo-elements, media and feature queries, and the child combinators. None of
  * these compound with `group-*` / `peer-*`.
  */
-const standaloneStates = [
-  // Pseudo-elements
+const pseudoElements = [
   "before",
   "after",
   "first-letter",
@@ -97,8 +138,14 @@ const standaloneStates = [
   "backdrop",
   "placeholder",
   "details-content",
+] as const;
 
-  // Media & feature queries
+/**
+ * Media and feature queries. Split out from the rest because these are exactly the
+ * standalone variants Tailwind lets you negate — `not-dark`, `not-print` — while a
+ * pseudo-element or a child combinator has nothing to negate.
+ */
+const mediaQueries = [
   "dark",
   "motion-safe",
   "motion-reduce",
@@ -116,12 +163,18 @@ const standaloneStates = [
   "any-pointer-fine",
   "any-pointer-coarse",
   "any-pointer-none",
+] as const;
+
+/** Everything standalone that is neither a pseudo-element nor a query. */
+const otherStandalone = [
   "starting",
 
   // Children: `*` for direct children, `**` for all descendants.
   "*",
   "**",
 ] as const;
+
+const standaloneStates = [...pseudoElements, ...mediaQueries, ...otherStandalone] as const;
 
 /** A state variant that also has `group-*` and `peer-*` forms. */
 export type ElementStateKey = (typeof elementStates)[number];
@@ -135,8 +188,26 @@ export type GroupStateKey = `group-${ElementStateKey}`;
 /** A sibling-state variant, e.g. `peer-checked`. */
 export type PeerStateKey = `peer-${ElementStateKey}`;
 
+/**
+ * The variants Tailwind lets you negate. Wider than the `group-*` / `peer-*` set:
+ * a media query can be negated (`not-dark`) and so can a breakpoint (`not-md`,
+ * which is `max-md` said the other way round), while a pseudo-element cannot.
+ */
+const negatableStates = [...elementStates, ...mediaQueries, ...screenKeys] as const;
+
+/** A variant that has a `not-*` form. */
+export type NegatableStateKey = (typeof negatableStates)[number];
+
+/** A negated variant, e.g. `not-hover` or `not-dark`. */
+export type NotStateKey = `not-${NegatableStateKey}`;
+
 /** A built-in Tailwind state variant key. */
-export type StateKey = ElementStateKey | StandaloneStateKey | GroupStateKey | PeerStateKey;
+export type StateKey =
+  | ElementStateKey
+  | StandaloneStateKey
+  | GroupStateKey
+  | PeerStateKey
+  | NotStateKey;
 
 /**
  * Every Tailwind variant that needs no value of its own — pseudo-classes,
@@ -157,19 +228,27 @@ export const stateKeys: readonly StateKey[] = [
   ...standaloneStates,
   ...elementStates.map((state): GroupStateKey => `group-${state}`),
   ...elementStates.map((state): PeerStateKey => `peer-${state}`),
+  ...negatableStates.map((state): NotStateKey => `not-${state}`),
 ];
 
 /** Every key {@link ss} accepts besides `base`. */
-export type SsKey = ScreenKey | MaxScreenKey | StateKey;
+export type SsKey = ScreenKey | MaxScreenKey | ContainerKey | MaxContainerKey | StateKey;
 
 /**
  * Emission order for {@link ss}: `base`, then breakpoints mobile-first, then
- * `max-*` largest-first, then states. Keeping it stable means the same input
- * always produces the same string, which keeps `tailwind-merge`'s "last one
- * wins" behaviour predictable.
+ * `max-*` largest-first, then container queries the same way round, then states.
+ * Keeping it stable means the same input always produces the same string, which
+ * keeps `tailwind-merge`'s "last one wins" behaviour predictable.
  */
 const order = new Map<string, number>();
-for (const key of ["base", ...screenKeys, ...maxScreenKeys, ...stateKeys]) {
+for (const key of [
+  "base",
+  ...screenKeys,
+  ...maxScreenKeys,
+  ...containerKeys,
+  ...maxContainerKeys,
+  ...stateKeys,
+]) {
   order.set(key, order.size);
 }
 
