@@ -107,6 +107,35 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `ss({ md: aria("expanded", "rotate-180") })` },
   { src: `ss({ md: until("lg", "hidden") })` },
   { src: `ss({ dark: { md: data("state", "open", "hidden") } })` },
+
+  // The same stacking, but where the *outer* call is a helper rather than an `ss`
+  // bucket. A helper's result is already prefixed by the time its caller sees it.
+  { src: `until("md", on("hover", "p-2"))` },
+  { src: `on("hover", until("md", "p-2"))` },
+  { src: `between("sm", "lg", on("hover", "p-2"))` },
+  { src: `data("state", "open", on("hover", "p-2"))` },
+  { src: `aria("expanded", on("hover", "p-2"))` },
+  { src: `withPrefix("group-hover", on("focus", "p-2"))` },
+  { src: `responsive("p-1", { md: on("hover", "p-2") })` },
+  { src: `responsive("p-1", { md: withPrefix("has-[:checked]", "p-9") })` },
+  { src: `until("lg", aria("busy", "p-3"))` },
+  { src: `on(["dark", "hover"], withPrefix("has-[:checked]", "p-5"))` },
+  // Three prefixes deep, which is what these helpers composing produces.
+  { src: `on("hover", until("md", withPrefix("has-[:checked]", "p-6")))` },
+  { src: `until("md", on("hover", aria("busy", "p-7")))` },
+
+  // Every spelling of a numeric literal, since the runtime interpolates the *number*.
+  { src: `data("count", 1e3, "opacity-100")` },
+  { src: `data("count", 1_000, "opacity-100")` },
+  { src: `data("count", .5, "opacity-100")` },
+  { src: `data("count", 1., "opacity-100")` },
+  { src: `data("count", +1, "opacity-100")` },
+  { src: `data("count", 0x10, "opacity-100")` },
+  { src: `data("count", 0b11, "opacity-100")` },
+  { src: `data("count", 0o17, "opacity-100")` },
+  { src: `data("count", 2e-2, "opacity-100")` },
+  { src: `data("count", -0, "opacity-100")` },
+  { src: `data("checked", false, "opacity-100")` },
 ];
 
 describe("what the runtime builds, the scanner finds", () => {

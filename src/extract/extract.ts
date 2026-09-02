@@ -46,19 +46,47 @@ const maxNesting = 10;
  * to {@link enumerate} — so without a bound a chain of nested calls is re-walked
  * once per ancestor, which is quadratic in how deep the chain runs.
  *
- * One hop is enough. What needs following is a helper whose output is a prefixed
- * string — `withPrefix`, `on`, `until`, `between`, `data`, `aria` — and none of
- * those contains a further bucket to descend into. A nested `ss` or `responsive`
- * needs no hop at all: its map is an object literal, so {@link objectLiterals}
- * already finds it right there in the value.
+ * Two hops covers what people write. One is the ordinary case —
+ * `until("md", on("hover", …))`, `ss({ md: withPrefix(…) })` — and the second is
+ * there because these compose: `on("hover", until("md", withPrefix(…)))` is three
+ * prefixes deep and each one has to reach the innermost classes. Beyond that the
+ * spelling is unreadable long before it is unsupported. A nested `ss` or
+ * `responsive` needs no hop at all: its map is an object literal, so
+ * {@link objectLiterals} already finds it right there in the value.
  */
-const maxFollow = 1;
+const maxFollow = 2;
 
 /**
- * A numeric or boolean literal — the {@link data} values that are static without
- * being string literals.
+ * A JavaScript numeric literal, minus any sign: decimal with an optional leading or
+ * trailing dot, an exponent, digit separators, and the three radix prefixes.
+ *
+ * Enumerating the spellings rather than matching digits is the point. A value the
+ * scanner cannot read falls back to the attribute-presence form, which is right for
+ * something genuinely dynamic and wrong for `0x10` — the runtime resolves that to
+ * `16` and builds `data-[n=16]:`, so a narrower pattern quietly loses the class.
  */
-const numberOrBoolean = /^(?:true|false|-?\d+(?:\.\d+)?)$/;
+const numericBody =
+  /^(?:0[xX][0-9a-fA-F][0-9a-fA-F_]*|0[oO][0-7][0-7_]*|0[bB][01][01_]*|(?:\d[\d_]*)?\.?(?:\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?)$/;
+
+/**
+ * The text a static {@link data} value interpolates to at runtime, or `null` when it
+ * is not a literal that can be resolved without running the code.
+ *
+ * Template interpolation stringifies the *number*, not the source text, so the answer
+ * has to go through `Number` — `1e3` is `"1000"` on the element, never `"1e3"`.
+ */
+function staticValue(literal: string): string | null {
+  if (literal === "true" || literal === "false") return literal;
+  const negative = literal.startsWith("-");
+  const body = negative || literal.startsWith("+") ? literal.slice(1) : literal;
+  if (!numericBody.test(body)) return null;
+  const digits = body.replace(/_/g, "");
+  // Every part of the decimal form is optional, so `.` and `+` reach here as well.
+  if (!/\d/.test(digits)) return null;
+  const value = Number(digits);
+  if (!Number.isFinite(value)) return null;
+  return String(negative ? -value : value);
+}
 
 /** Records the classes one bucket produces. `prefix` is `""` for unprefixed ones. */
 type Add = (prefix: string, tokens: string[]) => void;
@@ -139,6 +167,53 @@ function enumerateMap(text: string, prefix: string, depth: number, add: Add, fol
   }
 }
 
+/**
+ * Stack `prefix` onto every class produced by a tailess helper called inside another
+ * one's class argument.
+ *
+ * A helper's result is already a prefixed string by the time its caller sees it, so
+ * the caller's own prefix goes in front: `until("md", on("hover", "p-2"))` is
+ * `max-md:hover:p-2`, and `ss({ md: withPrefix("has-[:x]", "u") })` is
+ * `md:has-[:x]:u`. The top-level sweep finds the inner call too, but only ever
+ * unprefixed — this is the sole source of the stacked form.
+ *
+ * `calls` is passed in rather than scanned here so a caller with several prefixes
+ * for one argument (a `data` value written as a ternary, say) reads the text once.
+ */
+function followCalls(
+  calls: RawCall[],
+  prefix: string,
+  depth: number,
+  add: Add,
+  follow: number,
+): void {
+  for (const call of calls) {
+    enumerate(
+      call,
+      (inner, tokens) => add(inner === "" ? prefix : `${prefix}:${inner}`, tokens),
+      depth,
+      follow - 1,
+    );
+  }
+}
+
+/**
+ * Emit one helper argument that is a class value, under each of `prefixes`.
+ *
+ * Every helper but `ss` and `responsive` funnels through here, so the rule that a
+ * nested call stacks is applied in one place rather than restated per case.
+ */
+function emitValue(text: string, prefixes: string[], add: Add, follow: number): void {
+  if (prefixes.length === 0) return;
+  const tokens = classTokens(text);
+  const calls = follow > 0 ? outerCalls(text) : [];
+  for (const prefix of prefixes) {
+    if (prefix === "") continue;
+    if (calls.length > 0) followCalls(calls, prefix, 0, add, follow);
+    add(prefix, tokens);
+  }
+}
+
 /** Walk one bucket's value, which is either classes, a nested map, or both. */
 function enumerateValue(
   text: string,
@@ -151,22 +226,9 @@ function enumerateValue(
 
   for (const inner of nested) enumerateMap(inner, scope, depth + 1, add, follow);
 
-  // A tailess helper called *inside* a bucket has already built its own prefix by
-  // the time the bucket sees the string it returned, so the bucket's key stacks on
-  // top of that prefix — `ss({ md: withPrefix("has-[:checked]", "underline") })` is
-  // `md:has-[:checked]:underline`. Nothing else can spell that: `has-*` takes a
-  // value, so it is not one of the keys. A `base` bucket is skipped because its
-  // scope is empty, which is exactly what the top-level sweep already emitted.
-  if (scope !== "" && follow > 0) {
-    for (const call of outerCalls(text)) {
-      enumerate(
-        call,
-        (prefix, tokens) => add(prefix === "" ? scope : `${scope}:${prefix}`, tokens),
-        depth,
-        follow - 1,
-      );
-    }
-  }
+  // A `base` bucket is skipped because its scope is empty, which is exactly what the
+  // top-level sweep already emitted.
+  if (scope !== "" && follow > 0) followCalls(outerCalls(text), scope, depth, add, follow);
 
   // A value that is *only* a map carries no classes of its own, so stopping here
   // keeps us from emitting `md:p-8` alongside the `md:hover:p-8` that was meant —
@@ -194,7 +256,7 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     // Values here are plain class values; `responsive` has no nesting.
     case "responsive": {
       for (const literal of objectLiterals(args[1] ?? "")) {
-        for (const { key, value } of parseObject(literal)) add(key, classTokens(value));
+        for (const { key, value } of parseObject(literal)) emitValue(value, [key], add, follow);
       }
       return;
     }
@@ -203,66 +265,76 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     case "on": {
       if (args.length < 2) return;
       const stateArg = args[0] ?? "";
-      const classes = classTokens(args[1]);
       const states = extractStrings(stateArg);
-      if (isArrayLiteral(stateArg)) {
-        add(states.join(":"), classes);
-      } else {
-        for (const state of states) add(state, classes);
-      }
+      const prefixes = isArrayLiteral(stateArg) ? [states.join(":")] : states;
+      emitValue(args[1] ?? "", prefixes, add, follow);
       return;
     }
 
     case "until": {
       if (args.length < 2) return;
-      const classes = classTokens(args[1]);
-      for (const key of extractStrings(args[0] ?? "")) add(`max-${key}`, classes);
+      const keys = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        keys.map((key) => `max-${key}`),
+        add,
+        follow,
+      );
       return;
     }
 
     case "between": {
       if (args.length < 3) return;
-      const classes = classTokens(args[2]);
+      const prefixes: string[] = [];
       for (const min of extractStrings(args[0] ?? "")) {
-        for (const max of extractStrings(args[1] ?? "")) add(`${min}:max-${max}`, classes);
+        for (const max of extractStrings(args[1] ?? "")) prefixes.push(`${min}:max-${max}`);
       }
+      emitValue(args[2] ?? "", prefixes, add, follow);
       return;
     }
 
     case "data": {
       if (args.length < 3) return;
       const valueArg = args[1] ?? "";
-      const classes = classTokens(args[2]);
       const values = extractStrings(valueArg);
       const literal = valueArg.trim();
-      // `data` takes `string | number | boolean | null | undefined`, and a number or
-      // a boolean is every bit as static as a string — it just isn't a string
+      // `data` takes `string | number | boolean | null | undefined`. A number or a
+      // boolean is every bit as static as a string — it just isn't a string
       // *literal*, so the sweep above finds nothing and the presence form would be
       // emitted for a call the runtime builds the value form for. That is wrong
       // twice: `data-[checked=true]:` never gets CSS, and the `data-[checked]:` that
       // does is a selector matching whenever the attribute is merely present.
       // `data-checked={true}` is what React writes, so this is a mainstream path.
-      if (values.length === 0 && numberOrBoolean.test(literal)) values.push(literal);
+      if (values.length === 0) {
+        const resolved = staticValue(literal);
+        if (resolved !== null) values.push(resolved);
+      }
       // `null`/`undefined` (or a non-literal value) means the presence form.
       const presence = values.length === 0 || literal === "null" || literal === "undefined";
+      const prefixes: string[] = [];
       for (const name of extractStrings(args[0] ?? "")) {
-        if (presence) add(`data-[${name}]`, classes);
-        for (const value of values) add(`data-[${name}=${value}]`, classes);
+        if (presence) prefixes.push(`data-[${name}]`);
+        for (const value of values) prefixes.push(`data-[${name}=${value}]`);
       }
+      emitValue(args[2] ?? "", prefixes, add, follow);
       return;
     }
 
     case "aria": {
       if (args.length < 2) return;
-      const classes = classTokens(args[1]);
-      for (const name of extractStrings(args[0] ?? "")) add(`aria-${name}`, classes);
+      const names = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        names.map((name) => `aria-${name}`),
+        add,
+        follow,
+      );
       return;
     }
 
     case "withPrefix": {
       if (args.length < 2) return;
-      const classes = classTokens(args[1]);
-      for (const prefix of extractStrings(args[0] ?? "")) add(prefix, classes);
+      emitValue(args[1] ?? "", extractStrings(args[0] ?? ""), add, follow);
       return;
     }
   }
