@@ -54,7 +54,12 @@ interface Root {
 interface Helpers {
   result: {
     messages: Array<Record<string, unknown>>;
-    opts?: { from?: string };
+    // Spelled `| undefined` for the same reason the public options interfaces are:
+    // under `exactOptionalPropertyTypes` a bare `from?: string` refuses a value that
+    // may be *explicitly* undefined, which is exactly what PostCSS's own
+    // `ResultOptions.from` is — and the whole point of these structural types is that
+    // the plugin stays assignable to `AcceptedPlugin` in a typed `postcss.config.ts`.
+    opts?: { from?: string | undefined } | undefined;
   };
   postcss: {
     atRule(defaults: { name: string; params: string }): AtRule;
