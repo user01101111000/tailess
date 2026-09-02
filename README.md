@@ -863,10 +863,10 @@ add-a-class / delete-a-class dev cycle, the inline fallback path, and every one 
 
 | | |
 | --- | --- |
-| Tests | 380, across 25 files |
-| Coverage | 96% statements, 91% branches |
+| Tests | 408, across 26 files |
+| Coverage | 95% statements, 90% branches |
 | Tailwind | 4.3.3 |
-| Manually verified | Vite 7 & 8 + `@tailwindcss/vite` 4 · Next.js 15 & 16, Turbopack and webpack |
+| Manually verified | Vite 7 & 8 (React, Vue, Svelte) · Next.js 15 & 16, Turbopack and webpack · bare PostCSS CLI |
 
 Two suites check a claim against a second implementation rather than against a list
 someone typed.
