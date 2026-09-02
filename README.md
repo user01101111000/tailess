@@ -77,6 +77,7 @@ className={ss(
   - [Vite](#vite)
   - [Next.js](#nextjs)
   - [Other PostCSS setups](#other-postcss-setups)
+- [Sorting classes](#sorting-classes)
 - [API](#api)
   - [`ss` — group by breakpoint and state](#ss--group-by-breakpoint-and-state)
   - [`cn` — compose and merge](#cn--compose-and-merge)
@@ -241,6 +242,43 @@ That's the whole setup:
 ```tsx
 import { ss } from "tailess";
 ```
+
+## Sorting classes
+
+tailess sorts your *keys* — `base`, then breakpoints, then `max-*`, then states — but not
+the classes inside them. For that, point Tailwind's own formatter at the helpers — in
+`.prettierrc.json`:
+
+```json
+{
+  "plugins": ["prettier-plugin-tailwindcss"],
+  "tailwindStylesheet": "./src/index.css",
+  "tailwindFunctions": [
+    "ss", "cn", "responsive", "on", "until",
+    "between", "data", "aria", "match", "withPrefix"
+  ]
+}
+```
+
+`tailwindStylesheet` is the CSS entry holding your `@import "tailwindcss"` — on Next.js
+usually `./app/globals.css`. Leave it out and anything from your own `@theme` or
+`@utility` is treated as an unknown class and sorted to the front.
+
+```tsx
+// before
+ss({ base: "text-sm p-4 flex items-center", md: "gap-2 p-8 grid" })
+
+// after
+ss({ base: "flex items-center p-4 text-sm", md: "grid gap-2 p-8" })
+```
+
+Each string is sorted on its own. Separate arguments are never reordered, so a trailing
+`className` still wins.
+
+> [!NOTE]
+> Two conflicting utilities in **one** string can be reordered — `"p-4 p-2"` becomes
+> `"p-2 p-4"`, and `tailwind-merge` then keeps `p-4` where it kept `p-2`. Write the
+> override as its own argument instead, which nothing reorders: `ss({ base: "p-4" }, "p-2")`.
 
 ---
 
