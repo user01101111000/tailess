@@ -1,5 +1,53 @@
 # tailess
 
+## 0.9.3
+
+### Patch Changes
+
+- 60ca7d5: Close the last two ways the runtime could build a class the scanner never enumerated.
+
+  **Helpers composed with one another.** A helper's result is an already-prefixed string
+  by the time its caller sees it, so the caller's prefix goes in front:
+  `until("md", on("hover", "p-2"))` is `max-md:hover:p-2`. That stacking was taught to
+  `ss` buckets in the previous release but not to the helpers themselves, so
+  `until`, `on`, `between`, `data`, `aria`, `withPrefix` and a `responsive` bucket value
+  each read a nested call only unprefixed. The class landed on the element with no rule
+  behind it — no warning, no build error. Every helper now funnels its class argument
+  through one place, so the rule is stated once instead of restated per case, and it
+  holds three prefixes deep: `on("hover", until("md", withPrefix("has-[:x]", …)))`.
+
+  **A `data()` value written in any other numeric spelling.** Only plain integers and
+  simple decimals were recognised, so `1e3`, `0x10`, `1_000`, `.5`, `+1`, `-0` and
+  `2e-2` fell through to the attribute-presence form — the branch meant for a value that
+  is genuinely dynamic. Template interpolation stringifies the _number_, so the runtime
+  builds `data-[n=1000]:` where the scanner had safelisted `data-[n]:`: the class in the
+  DOM got no CSS, and the CSS that was generated matched whenever the attribute merely
+  existed. The value is now resolved through `Number`, so the candidate is whatever the
+  element will actually carry.
+
+  Both were found by differential testing — running the real helpers and the real
+  scanner over the same source and diffing — and both are pinned by cases in the parity
+  suite, which fails on a regression rather than leaving it for a user to discover.
+
+- 2ffbe13: Make the PostCSS plugin assignable to `AcceptedPlugin` again for consumers using
+  `exactOptionalPropertyTypes`.
+
+  The plugin is typed structurally so tailess needs no dependency on `postcss` — the
+  host build always supplies it — and that only pays off if the shape really is one
+  PostCSS accepts. It wasn't, under the strict reading of optional properties: a bare
+  `from?: string` means "absent, or a string" and refuses a value that may be
+  _explicitly_ `undefined`, which is precisely what PostCSS's own `ResultOptions.from`
+  is. A typed `postcss.config.ts` with that flag on stopped compiling, while the plugin
+  kept working perfectly at runtime — so nothing in the suite noticed. The same
+  oversight was in `CollectOptions`, whose two optional fields receive each plugin's own
+  optional options verbatim.
+
+  `exactOptionalPropertyTypes` is now on for the repo itself, so the strict reading is
+  what CI checks, and `test/postcss/assignable.test.ts` asserts the plugin extends
+  `AcceptedPlugin` — the mirror of the Vite suite that already existed. Every public
+  option was already spelled `| undefined` for exactly this reason; the internal
+  structural types now match.
+
 ## 0.9.2
 
 ### Patch Changes
