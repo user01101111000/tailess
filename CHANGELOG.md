@@ -1,5 +1,73 @@
 # tailess
 
+## 0.10.0
+
+### Minor Changes
+
+- 4c74e0a: Report what the scanner can prove wrong while the project builds, instead of waiting
+  for the line to render.
+
+  The runtime already warns about an empty `between` range, a blank prefix and whitespace
+  inside a variant — but only once that code path executes, in a browser, with a console
+  open. A branch that did not run during development ships the bug either way. Every one
+  of those mistakes is visible in the source, and the plugin was already reading every
+  file, so it now says so on every build, for every call site, in terminal and CI output.
+
+  It also catches something nothing warned about at all: two conflicting utilities inside
+  **one** string, where `tailwind-merge` silently drops the first.
+
+  ```
+  [tailess] src/Card.tsx: "p-4" never reaches the element — "p-2" replaces it in the same
+    string. Drop the unused one, or move the override into its own argument.
+  ```
+
+  That check is deliberately narrow, because overriding is a documented feature: a later
+  argument beating an earlier one is how a caller's `className` wins, and it is never
+  flagged. Neither is `["p-4", cond && "p-2"]`, where the first applies whenever the
+  condition is false, nor an interpolated template, where nothing is statically known.
+  Only two unconditional, conflicting classes in a single literal qualify — there the
+  first provably cannot reach the element, whatever the props do.
+
+  Diagnostics warn; they never fail a build. They cost nothing at runtime: none of this
+  code is reachable from the package entry, and the browser bundle is byte-for-byte
+  unchanged. Extraction and diagnosis share one read of each file and one cache entry, so
+  an unchanged file still costs a `stat`.
+
+  Checked against the suite that exercises all 233 keys and every helper form: 400
+  expressions, four build paths, zero reported — the silent half is the half that matters.
+
+- 2c1f74f: Add container-query and `not-*` keys. 149 keys become 233, and both families are
+  autocompleted and typo-checked like every other one.
+
+  **Container queries** were the one Tailwind v4 feature `ss` could not express at all.
+  `@3xs` through `@7xl`, and `@max-3xs` through `@max-7xl`, size an element by its nearest
+  `@container` ancestor instead of the viewport — previously reachable only through
+  `withPrefix("@md", …)`. They sit right after the viewport ranges in emission order,
+  since that is what they are:
+
+  ```ts
+  ss({ base: "grid", "@md": "grid-cols-2", "@max-sm": "hidden" });
+  // → "grid @md:grid-cols-2 @max-sm:hidden"
+  ```
+
+  A _named_ container (`@lg/sidebar`) carries a value, so it stays `withPrefix` territory
+  along with `data-*`, `has-*` and the rest.
+
+  **`not-*`** was listed among the variants that take a value, which it does not — it
+  compounds, exactly as `group-*` and `peer-*` do, just with a wider set. Tailwind negates
+  every element state, every media query and every breakpoint, so all 58 are keys now:
+  `not-hover`, `not-dark`, `not-md`.
+
+  Neither family is written out by hand. Container keys derive from one list of sizes and
+  `not-*` from the states it applies to, so the two spellings of a name cannot drift — the
+  same rule the `group-*` / `peer-*` pairs already followed. The suite that compares the
+  key list against Tailwind's own variant registry now covers `not-*` in both directions,
+  and the container keys are checked the way `max-*` always has been: by compiling them and
+  asserting a rule comes out.
+
+  The runtime grows 265 minified characters, about 100 gzipped — 2.7 kB to 2.8 kB — and the
+  size budget was raised deliberately to match.
+
 ## 0.9.3
 
 ### Patch Changes
