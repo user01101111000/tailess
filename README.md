@@ -5,7 +5,7 @@
   <img src="./assets/hero.svg" alt="tailess — write Tailwind classes as a readable object" width="840">
 </picture>
 
-<br><br>
+<br>
 
 <a href="https://www.npmjs.com/package/tailess"><img alt="npm version" src="https://img.shields.io/npm/v/tailess?style=flat-square&labelColor=0A0A0A&color=CB3837&logo=npm&logoColor=white&label=npm"></a>
 <a href="https://www.npmjs.com/package/tailess"><img alt="downloads per month" src="https://img.shields.io/npm/dm/tailess?style=flat-square&labelColor=0A0A0A&color=F59E0B&label=downloads"></a>
@@ -17,13 +17,7 @@
 <a href="#keys"><img alt="149 typed keys" src="https://img.shields.io/badge/typed_keys-149-EC4899?style=flat-square&labelColor=0A0A0A"></a>
 <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8B5CF6?style=flat-square&labelColor=0A0A0A"></a>
 
-<br><br>
-
-**[Install](#install)** · **[Setup](#setup)** · **[How it works](#how-it-works)** · **[API](#api)** · **[Keys](#keys)** · **[Troubleshooting](#troubleshooting)** · **[FAQ](#faq)**
-
 </div>
-
-<br>
 
 ---
 
@@ -74,24 +68,40 @@ className={ss(
 
 `ss` is a strict superset of a `cn()` helper: hand it plain strings and it *is* `cn`.
 
-## Why it needs a build plugin
+## Contents
 
-Building `md:` at runtime is easy. Making Tailwind **emit CSS** for it is the hard part,
-and it's where every hand-rolled version of this idea quietly fails.
+- [Features](#features)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Setup](#setup)
+  - [Vite](#vite)
+  - [Next.js](#nextjs)
+  - [Other PostCSS setups](#other-postcss-setups)
+- [API](#api)
+  - [`ss` — group by breakpoint and state](#ss--group-by-breakpoint-and-state)
+  - [`cn` — compose and merge](#cn--compose-and-merge)
+  - [`responsive` — mobile-first](#responsive--mobile-first)
+  - [`until` / `between` — max-width ranges](#until--between--max-width-ranges)
+  - [`on` — state variants](#on--state-variants)
+  - [`data` / `aria` — attribute variants](#data--aria--attribute-variants)
+  - [`match` — exhaustive variant selection](#match--exhaustive-variant-selection)
+  - [`withPrefix` — the escape hatch](#withprefix--the-escape-hatch)
+  - [Also exported](#also-exported)
+- [Keys](#keys)
+- [Framework examples](#framework-examples)
+- [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
+- [Plugin options](#plugin-options)
+- [Performance](#performance)
+  - [Bundle size](#bundle-size)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Upgrading from 0.8](#upgrading-from-08)
+- [Contributing](#contributing)
+- [License](#license)
 
-Tailwind v4 generates CSS by scanning your source for *literal* class strings. It never
-runs your code. So `"md:" + "text-2xl"` is invisible to it: the class lands on the
-element, and there is no rule behind it.
+---
 
-> [!CAUTION]
-> Your element is simply unstyled — with nothing in the console and nothing in the build
-> log. That is the failure mode every hand-rolled version of this idea has, and the one
-> thing tailess is built to make impossible.
-
-`tailess` ships a one-line build plugin that closes that gap — it reads your source,
-enumerates every class your `ss()` calls can produce, and hands the list to Tailwind
-through its own `@source inline(...)` safelist. And if you ever forget to install it,
-you get a console message naming the fix instead of a silently broken page.
+## Features
 
 <table>
 <tr>
@@ -113,9 +123,9 @@ A Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
 <tr>
 <td valign="top">
 
-🧯 &nbsp;**No silent failures**
+🧯 &nbsp;**Tells you when it isn't wired up**
 
-The whole reason this package exists.
+A dev-time check warns if the build plugin is missing, naming the line of config to add.
 
 </td>
 <td valign="top">
@@ -144,16 +154,6 @@ Add a class and it appears without restarting; delete it and it stops being emit
 </td>
 </tr>
 </table>
-
-## Contents
-
-| | |
-| :-- | :-- |
-| 🚀 &nbsp;**Start here** | [Requirements](#requirements) · [Install](#install) · [Setup](#setup) — [Vite](#vite), [Next.js](#nextjs), [other PostCSS](#other-postcss-setups) |
-| 🧠 &nbsp;**Understand it** | [How it works](#how-it-works) · [What the scanner sees](#what-the-scanner-can-and-cannot-see) · [Keys](#keys) |
-| 📖 &nbsp;**Reference** | [API](#api) — [`ss`](#ss--group-by-breakpoint-and-state), [composing](#many-arguments-one-call), [nesting](#nested-groups-for-compound-variants), [other helpers](#cn--compose-and-merge) · [Plugin options](#plugin-options) · [Framework examples](#framework-examples) |
-| 📊 &nbsp;**Numbers** | [Performance](#performance) · [Bundle size](#bundle-size) · [Verified on](#verified-on) |
-| 🛟 &nbsp;**Help** | [Troubleshooting](#troubleshooting) · [FAQ](#faq) · [Upgrading from 0.8](#upgrading-from-08) · [Contributing](#contributing) · [License](#license) |
 
 ---
 
@@ -241,93 +241,6 @@ That's the whole setup:
 ```tsx
 import { ss } from "tailess";
 ```
-
----
-
-## How it works
-
-<div align="center">
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/flow-dark.svg">
-  <img src="./assets/flow.svg" alt="your source, then the tailess plugin, then Tailwind output" width="840">
-</picture>
-
-</div>
-
-Three details make it reliable rather than merely clever:
-
-**The list lives in its own file, not inline.** Tailwind re-reads `@source inline(...)`
-only when it rebuilds its compiler, and only a change to one of its *own* build
-dependencies triggers that. Your `.tsx` files aren't dependencies; an `@import`ed
-stylesheet is. So the list goes in a sidecar — which is what lets a new class appear
-without restarting the dev server, and a deleted one stop being emitted.
-
-**Injection is scoped to real Tailwind entries.** The plugin only touches a stylesheet
-Tailwind actually emits utilities into — directly, or through a chain of relative
-`@import`s. Every other CSS file in your build comes out byte-identical.
-
-**A marker proves it's wired up.** The plugin declares `:root { --tailess: 1 }`. The
-first time you build a prefixed class in dev, the runtime looks for it and, if it's
-missing, prints the exact line of config you need. Nothing checks in production.
-
-## What the scanner can and cannot see
-
-The scanner reads *literal* strings at your call sites. It over-approximates on purpose:
-both branches of a ternary, every key of an object, every element of an array. Extra
-candidates cost nothing — Tailwind ignores ones that don't resolve — while a missing one
-costs you the style.
-
-✅ **Seen**
-
-```tsx
-ss({ md: "text-2xl", hover: "underline" })          // literals
-ss({ md: isWide ? "grid-cols-3" : "grid-cols-1" })  // both branches
-ss({ md: ["flex", cond && "gap-4"] })               // arrays
-ss({ md: [{ "text-lg": cond }] })                   // clsx dictionaries, quoted…
-until("md", { hidden: !open })                      // …or not
-ss({ md: "text-lg", /* both survive */ lg: "xl" })  // comments anywhere
-ss({ dark: { hover: "bg-black" } })                 // nesting — dark:hover:bg-black
-ss(a, cond && { sm: "bg-red-500" })                 // a map behind a condition
-ss(a, open ? { md: "p-6" } : { md: "p-2" })         // both branches, as maps
-ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a group stacks
-on(["dark", "hover"], "bg-black")                   // compound variants
-data("state", open ? "open" : "closed", "p-2")      // both values
-data("level", 2, "p-2")                             // numbers and booleans
-```
-
-❌ **Not seen** — the value isn't in the source to read:
-
-```tsx
-const size = "text-2xl";
-ss({ md: size });                    // a variable
-ss({ md: `text-${scale}` });         // an interpolated template
-ss({ ...spread });                   // a spread
-ss({ md: { [key]: "grid" } });       // a computed key
-withPrefix(dynamicPrefix, "grid");   // a computed prefix
-```
-
-The scanner also finds helpers by **name**, so a renamed import hides them:
-
-```tsx
-import { ss as tw } from "tailess";
-tw({ md: "p-6" });                   // ✗ not found — nothing supplies md:p-6
-
-import * as t from "tailess";
-t.ss({ md: "p-6" });                 // ✓ a namespace import is fine
-```
-
-If you need one of those, put the literal somewhere the scanner can reach it — usually by
-writing the full class in a `match()` lookup, which needs no build integration at all
-because every class in it is already a literal:
-
-```tsx
-const size = match(scale, { sm: "text-sm", lg: "text-2xl" });
-```
-
-Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`.
-Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
-attribute won't throw the scanner off.
 
 ---
 
@@ -549,32 +462,32 @@ window.matchMedia(`(min-width: ${screens.md})`).matches;  // "48rem"
 Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
 `ResponsiveMap`, `ClassValue`.
 
-## Upgrading from 0.8
+## Keys
 
-Two things changed, and **TypeScript catches both** — neither can turn into a style that
-quietly stops appearing. Everything else is untouched: every existing `ss({ … })` call,
-`cn`, and all seven other helpers behave exactly as before.
+`ss` accepts `base` plus Tailwind's own keys — **149 in total**, and nothing else, so
+autocomplete is exhaustive and a typo can't compile. The same 149 are available inside a
+nested group, which is how a compound variant is spelled.
 
-**1. A `clsx` dictionary as a bucket value now goes in an array,** because a bare object
-is a nested map:
+| Group | # | Keys |
+| :-- | --: | :-- |
+| `base` | 1 | unprefixed classes |
+| Breakpoints | 5 | `sm` `md` `lg` `xl` `2xl` |
+| Max-width ranges | 5 | `max-sm` `max-md` `max-lg` `max-xl` `max-2xl` |
+| Interaction & links | 7 | `hover` `focus` `focus-within` `focus-visible` `active` `visited` `target` |
+| Position among siblings | 9 | `first` `last` `only` `odd` `even` `first-of-type` `last-of-type` `only-of-type` `empty` |
+| Form & input state | 16 | `disabled` `enabled` `checked` `indeterminate` `default` `optional` `required` `valid` `invalid` `user-valid` `user-invalid` `in-range` `out-of-range` `placeholder-shown` `autofill` `read-only` |
+| Element state | 2 | `open` `inert` |
+| Pseudo-elements | 10 | `before` `after` `first-letter` `first-line` `marker` `selection` `file` `backdrop` `placeholder` `details-content` |
+| Media & feature queries | 17 | `dark` `motion-safe` `motion-reduce` `contrast-more` `contrast-less` `forced-colors` `inverted-colors` `portrait` `landscape` `print` `noscript` `pointer-fine` `pointer-coarse` `pointer-none` `any-pointer-fine` `any-pointer-coarse` `any-pointer-none` |
+| Direction & transition | 3 | `rtl` `ltr` `starting` |
+| Descendants | 2 | `*` direct children · `**` all descendants |
+| `group-*` | 36 | the element-state keys — everything above except pseudo-elements, queries and `starting` — matched on the **parent**: `group-hover`, `group-checked`, … |
+| `peer-*` | 36 | the same 36, matched on a **sibling**: `peer-hover`, `peer-checked`, … |
 
-```ts
-ss({ md: { "text-lg": cond } })      // 0.8
-ss({ md: [{ "text-lg": cond }] })    // 0.9
-```
-
-**2. `tailess/vite` is exported only as a default,** matching `tailess/postcss`:
-
-```js
-import tailess from "tailess/vite";      // ✅ unchanged — the only documented form
-const tailess = require("tailess/vite"); // ✅ now the plugin itself, so a .cjs config works
-
-import { tailess } from "tailess/vite";  // ✗ removed
-require("tailess/vite").default;         // ✗ removed
-```
-
-Both plugin entries now have one shape: `require()` hands you the plugin creator. Before
-this, a `vite.config.cjs` got a namespace object that Vite rejects.
+Anything with a value of its own (`data-*`, `aria-*`, `supports-*`, `has-*`, `not-*`,
+arbitrary `min-[…]`) is deliberately absent — use [`data`/`aria`](#data--aria--attribute-variants)
+or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
+`stateKeys` and is regenerated and re-verified against the Tailwind compiler in CI.
 
 ## Framework examples
 
@@ -660,29 +573,65 @@ const props = defineProps<{ active: boolean }>();
 
 </details>
 
-## Keys
+---
 
-`ss` accepts `base` plus Tailwind's own keys — **149 in total**, and nothing else, so
-autocomplete is exhaustive and a typo can't compile. The same 149 are available inside a
-nested group, which is how a compound variant is spelled.
+## What the scanner can and cannot see
 
-| Group | Count | Keys |
-| ----- | ----- | ---- |
-| `base` | 1 | unprefixed classes |
-| Breakpoints | 5 | `sm` `md` `lg` `xl` `2xl` |
-| Max-width ranges | 5 | `max-sm` `max-md` `max-lg` `max-xl` `max-2xl` |
-| Pseudo-classes | 34 | `hover` `focus` `focus-within` `focus-visible` `active` `visited` `target` `first` `last` `only` `odd` `even` `first-of-type` `last-of-type` `only-of-type` `empty` `disabled` `enabled` `checked` `indeterminate` `default` `optional` `required` `valid` `invalid` `user-valid` `user-invalid` `in-range` `out-of-range` `placeholder-shown` `autofill` `read-only` `open` `inert` |
-| Pseudo-elements | 10 | `before` `after` `first-letter` `first-line` `marker` `selection` `file` `backdrop` `placeholder` `details-content` |
-| Media & feature queries | 17 | `dark` `motion-safe` `motion-reduce` `contrast-more` `contrast-less` `forced-colors` `inverted-colors` `portrait` `landscape` `print` `noscript` `pointer-fine` `pointer-coarse` `pointer-none` `any-pointer-fine` `any-pointer-coarse` `any-pointer-none` |
-| Direction & transition | 3 | `rtl` `ltr` `starting` |
-| Descendants | 2 | `*` (direct children) `**` (all descendants) |
-| `group-*` | 36 | parent state — `group-hover` `group-focus` `group-checked` `group-open` … |
-| `peer-*` | 36 | sibling state — `peer-hover` `peer-checked` `peer-invalid` … |
+The scanner reads *literal* strings at your call sites. It over-approximates on purpose:
+both branches of a ternary, every key of an object, every element of an array. Extra
+candidates cost nothing — Tailwind ignores ones that don't resolve — while a missing one
+costs you the style.
 
-Anything with a value of its own (`data-*`, `aria-*`, `supports-*`, `has-*`, `not-*`,
-arbitrary `min-[…]`) is deliberately absent — use [`data`/`aria`](#data--aria--attribute-variants)
-or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
-`stateKeys` and is regenerated and re-verified against the Tailwind compiler in CI.
+✅ **Seen**
+
+```tsx
+ss({ md: "text-2xl", hover: "underline" })          // literals
+ss({ md: isWide ? "grid-cols-3" : "grid-cols-1" })  // both branches
+ss({ md: ["flex", cond && "gap-4"] })               // arrays
+ss({ md: [{ "text-lg": cond }] })                   // clsx dictionaries, quoted…
+until("md", { hidden: !open })                      // …or not
+ss({ md: "text-lg", /* both survive */ lg: "xl" })  // comments anywhere
+ss({ dark: { hover: "bg-black" } })                 // nesting — dark:hover:bg-black
+ss(a, cond && { sm: "bg-red-500" })                 // a map behind a condition
+ss(a, open ? { md: "p-6" } : { md: "p-2" })         // both branches, as maps
+ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a group stacks
+on(["dark", "hover"], "bg-black")                   // compound variants
+data("state", open ? "open" : "closed", "p-2")      // both values
+data("level", 2, "p-2")                             // numbers and booleans
+```
+
+❌ **Not seen** — the value isn't in the source to read:
+
+```tsx
+const size = "text-2xl";
+ss({ md: size });                    // a variable
+ss({ md: `text-${scale}` });         // an interpolated template
+ss({ ...spread });                   // a spread
+ss({ md: { [key]: "grid" } });       // a computed key
+withPrefix(dynamicPrefix, "grid");   // a computed prefix
+```
+
+The scanner also finds helpers by **name**, so a renamed import hides them:
+
+```tsx
+import { ss as tw } from "tailess";
+tw({ md: "p-6" });                   // ✗ not found — nothing supplies md:p-6
+
+import * as t from "tailess";
+t.ss({ md: "p-6" });                 // ✓ a namespace import is fine
+```
+
+If you need one of those, put the literal somewhere the scanner can reach it — usually by
+writing the full class in a `match()` lookup, which needs no build integration at all
+because every class in it is already a literal:
+
+```tsx
+const size = match(scale, { sm: "text-sm", lg: "text-2xl" });
+```
+
+Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`.
+Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
+attribute won't throw the scanner off.
 
 ## Plugin options
 
@@ -731,16 +680,6 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 | Cold scan, 2,000-file project | ~98 ms |
 | Warm rescan, same project | ~17 ms |
 
-A single-map `ss({ … })` call takes a dedicated path with no argument loop, so it costs
-what it did before variadic arguments existed. Each further argument is one more map
-walk, a nested group costs the same as a top-level one, and there is exactly one
-`tailwind-merge` pass per call whatever the shape. Passing only class strings costs
-about what `cn` does.
-
-The plugin caches extraction per file by mtime and size, coalesces concurrent scans, and
-rewrites the sidecar only when the class list actually changed — so an unrelated
-keystroke costs a `stat`, not a re-parse.
-
 ### Bundle size
 
 The badge at the top reads **11.1 kB** because it measures the whole dependency tree.
@@ -756,29 +695,6 @@ That number is real, but almost none of it is tailess:
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
 already pull it in. If yours is one of them your bundler keeps the single shared copy,
 and adding tailess costs the 2.7 kB, not the 11.1.
-
-<details>
-<summary>Why <code>clsx</code> is not a dependency</summary>
-
-[`src/internal/join.ts`](./src/internal/join.ts) does the same job in about forty lines.
-The point was not the bytes — the code compresses slightly *better* alongside the rest of
-the package than `clsx` does standalone, so the swap came out 35 gzipped bytes smaller —
-but one fewer package in the tree. `clsx` stays a devDependency purely as a test oracle;
-see [Verified on](#verified-on) for what that buys.
-
-</details>
-
-<details>
-<summary>Why the dev-only warnings ship in production builds</summary>
-
-About a fifth of tailess' 2.7 kB is the text of those warnings. Eliminating it means
-either risking a crash when the package is loaded unbundled, or putting a `process.env`
-read on the render path. Both were measured and rejected; the reasoning is written out in
-[`src/internal/env.ts`](./src/internal/env.ts).
-
-</details>
-
----
 
 ## Troubleshooting
 
@@ -853,54 +769,6 @@ A class starting with a digit is escaped further: `2xl:flex` becomes `.\32 xl\:f
 
 </details>
 
-## Verified on
-
-The test suite runs the **real Tailwind compiler** over real fixture directories and
-asserts the generated rules exist — the only assertion that actually fails when the
-bridge breaks. It covers both plugins, the split-CSS-entry `@import` chain, the
-add-a-class / delete-a-class dev cycle, the inline fallback path, and every one of the
-149 keys.
-
-| | |
-| --- | --- |
-| Tests | 408, across 26 files |
-| Coverage | 95% statements, 90% branches |
-| Tailwind | 4.3.3 |
-| Manually verified | Vite 7 & 8 (React, Vue, Svelte) · Next.js 15 & 16, Turbopack and webpack · bare PostCSS CLI |
-
-Two suites check a claim against a second implementation rather than against a list
-someone typed.
-
-<details>
-<summary><strong>Runtime ↔ scanner parity</strong> — the invariant the package rests on</summary>
-
-`test/extract/runtime-parity.test.ts` hands the scanner a source string, then *evaluates
-that same string* with the real helpers, and asserts every prefixed class the runtime
-produced is among the candidates the scanner found. The two halves of the bridge are
-measured against each other, so they cannot drift apart in the one direction that
-matters — a class on the element with no rule behind it.
-
-</details>
-
-<details>
-<summary><strong>The <code>clsx</code> replacement</strong> — differential-tested against <code>clsx</code> itself</summary>
-
-`test/internal/join.test.ts` compares the two on the shapes people write and the ones
-they don't: null-prototype objects, Proxies, boxed primitives, frozen objects, a getter
-that throws, symbol keys, `bigint`, inherited enumerable keys, 200-deep nesting, and the
-circular array that overflows the stack in both — a replacement that swallows an error
-the original raised is not a replacement. Then 50,000 generated cases from a seeded PRNG,
-so a failure replays exactly.
-
-A companion suite puts each of the ten public helpers through twenty hostile values and
-asserts none of them throws: during a render, a crash is worse than a wrong class.
-
-</details>
-
-CI also runs lint, typecheck, [`publint`](https://publint.dev) and
-[`arethetypeswrong`](https://arethetypeswrong.github.io) on every push, and the release
-workflow cannot publish unless all of them pass.
-
 ## FAQ
 
 **Does this replace `clsx` / `tailwind-merge`?** `cn` behaves exactly like the
@@ -929,6 +797,35 @@ integration check and every warning are dev-only and drop out of a production bu
 **Does it work with a custom `@theme`?** Yes. Candidates go through Tailwind's own
 pipeline, so your theme values resolve exactly as they do for classes written by hand.
 
+## Upgrading from 0.8
+
+Two things changed, and **TypeScript catches both** — neither can turn into a style that
+quietly stops appearing. Everything else is untouched: every existing `ss({ … })` call,
+`cn`, and all seven other helpers behave exactly as before.
+
+**1. A `clsx` dictionary as a bucket value now goes in an array,** because a bare object
+is a nested map:
+
+```ts
+ss({ md: { "text-lg": cond } })      // 0.8
+ss({ md: [{ "text-lg": cond }] })    // 0.9
+```
+
+**2. `tailess/vite` is exported only as a default,** matching `tailess/postcss`:
+
+```js
+import tailess from "tailess/vite";      // ✅ unchanged — the only documented form
+const tailess = require("tailess/vite"); // ✅ now the plugin itself, so a .cjs config works
+
+import { tailess } from "tailess/vite";  // ✗ removed
+require("tailess/vite").default;         // ✗ removed
+```
+
+Both plugin entries now have one shape: `require()` hands you the plugin creator. Before
+this, a `vite.config.cjs` got a namespace object that Vite rejects.
+
+---
+
 ## Contributing
 
 Issues and PRs welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
@@ -938,8 +835,6 @@ npm install
 npm test
 npm run build
 ```
-
----
 
 ## License
 
@@ -954,8 +849,8 @@ npm run build
   <img src="./assets/wordmark.svg" alt="tailess" width="150">
 </picture>
 
-<br><br>
+<br>
 
-**[npm](https://www.npmjs.com/package/tailess)** · **[Issues](https://github.com/user01101111000/tailess/issues)** · **[Contributing](./CONTRIBUTING.md)** · **[Changelog](./CHANGELOG.md)**
+[npm](https://www.npmjs.com/package/tailess) · [Issues](https://github.com/user01101111000/tailess/issues) · [Contributing](./CONTRIBUTING.md) · [Changelog](./CHANGELOG.md)
 
 </div>
