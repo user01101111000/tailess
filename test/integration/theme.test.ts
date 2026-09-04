@@ -104,6 +104,30 @@ describe("reading --breakpoint-* out of a stylesheet", () => {
     expect(names(`@theme { --breakpoint-3xl: 120rem }`)).toEqual(["3xl=120rem"]);
   });
 
+  it("ignores a theme block written inside a string literal", () => {
+    // No breakpoint value is ever quoted, so stripping strings first loses nothing —
+    // and a `content:` or `url()` holding this text is not CSS the browser reads.
+    expect(names(`.a::after { content: "@theme { --breakpoint-md: 1px; }" }`)).toEqual([]);
+    expect(names(`.a { background: url('@theme { --breakpoint-sm: initial; }') }`)).toEqual([]);
+  });
+
+  it("says nothing at all when a @config defers part of the theme to JavaScript", () => {
+    // A v3 config can set `theme.screens`, and that file is never opened — so the CSS
+    // in hand is only half the input, and half an answer would be worse than none.
+    expect(names(`@config "./tailwind.config.js";\n@theme { --breakpoint-md: 50rem; }`)).toEqual(
+      [],
+    );
+    expect(
+      messages(`@config "./tailwind.config.js";\n@theme { --breakpoint-sm: initial; }`),
+    ).toEqual([]);
+  });
+
+  it("still answers when @config appears only inside a comment or a string", () => {
+    expect(names(`/* @config "./old.js"; */\n@theme { --breakpoint-md: 50rem; }`)).toEqual([
+      "md=50rem",
+    ]);
+  });
+
   it("does not choke on input that is not really CSS", () => {
     for (const css of ["", "@theme", "@theme {", "}".repeat(50), "@theme {".repeat(200)]) {
       expect(() => breakpointsIn(css)).not.toThrow();
@@ -260,6 +284,17 @@ describe("following the stylesheets a theme is split across", () => {
       join(dir, "app.css"),
     );
     expect(themeDiagnostics(found)).toEqual([]);
+  });
+
+  it("goes quiet when a @config turns up in an imported file", async () => {
+    // The screens it sets would apply to every stylesheet in the chain, not just its
+    // own, so one anywhere silences the whole answer.
+    await writeFile(join(dir, "legacy.css"), `@config "../tailwind.config.js";`);
+    const found = await collectBreakpoints(
+      `@import "./legacy.css";\n@theme { --breakpoint-sm: initial; }`,
+      join(dir, "app.css"),
+    );
+    expect(found).toEqual([]);
   });
 
   it("does not follow a bare specifier, which needs a resolver we do not have", async () => {
