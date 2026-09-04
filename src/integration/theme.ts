@@ -24,10 +24,11 @@ import { importSpecifiers, readStylesheet } from "./entry.js";
  * is a compile error. It is reported anyway, since the error says nothing about the
  * escape hatch that does work.
  *
- * **Not covered:** a `@config` pointing at a v3-style JS config can set `theme.screens`
- * too, and that is a JS file this never opens. Reading it would mean loading and
- * evaluating the consumer's config, which is a much larger surface than the question
- * warrants — so a project on `@config` gets no answer here rather than a wrong one.
+ * **`@config` silences all of it.** A v3-style JS config can set `theme.screens` too,
+ * and that is a JavaScript file this never opens — evaluating a consumer's config is a
+ * far larger surface than the question warrants. Rather than answer from half the
+ * inputs and risk being confidently wrong, a project with a `@config` anywhere in its
+ * stylesheet chain gets no answer at all.
  */
 
 /** How many `@import` hops to follow. Matches {@link isTailwindEntry}'s budget. */
@@ -61,6 +62,29 @@ const themeReset = /--\*\s*:\s*([^;}]*)/g;
 const comment = /\/\*[\s\S]*?\*\//g;
 
 /**
+ * String literals, removed alongside the comments.
+ *
+ * No breakpoint value is ever quoted, so nothing real is lost — while a quoted one
+ * holding the text of a whole `@theme` block (a `content:` value, a `url()`) would
+ * otherwise be read as CSS and reported.
+ */
+const stringLiteral = /"[^"\n]*"|'[^'\n]*'/g;
+
+/**
+ * A `@config` at-rule, which points at a v3-style JavaScript config.
+ *
+ * That file can set `theme.screens`, and it is not something this opens — so when one
+ * is present the CSS in hand is only part of the answer, and the honest response is
+ * none at all rather than a confident one drawn from half the inputs.
+ */
+const configAtRule = /@config(?=[\s"'])/i;
+
+/** True if the project defers part of its theme to a JS config. */
+export function hasJsConfig(css: string): boolean {
+  return configAtRule.test(css.replace(comment, ""));
+}
+
+/**
  * One `--breakpoint-*` declaration, in source order.
  *
  * Order is the whole point of keeping these as a list rather than a map: `initial`
@@ -84,7 +108,8 @@ export interface BreakpointDecl {
  */
 export function breakpointsIn(source: string): BreakpointDecl[] {
   const found: BreakpointDecl[] = [];
-  const css = source.replace(comment, "");
+  if (hasJsConfig(source)) return [];
+  const css = source.replace(comment, "").replace(stringLiteral, "");
 
   themeAtRule.lastIndex = 0;
   for (let match = themeAtRule.exec(css); match !== null; match = themeAtRule.exec(css)) {
@@ -140,6 +165,7 @@ export async function collectBreakpoints(
   depth = maxDepth,
   seen: Set<string> = new Set(),
 ): Promise<BreakpointDecl[]> {
+  if (hasJsConfig(css)) return [];
   const own = breakpointsIn(css);
   if (depth <= 0 || !file) return own;
 
@@ -154,6 +180,9 @@ export async function collectBreakpoints(
     seen.add(path);
     const nested = await readStylesheet(path);
     if (nested === undefined) continue;
+    // One `@config` anywhere in the chain silences the whole answer, not just its
+    // own file: the breakpoints it sets would apply to every one of them.
+    if (hasJsConfig(nested)) return [];
     imported.push(...(await collectBreakpoints(nested, path, depth - 1, seen)));
   }
 

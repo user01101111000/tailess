@@ -1,5 +1,338 @@
 # tailess
 
+## 0.10.0
+
+### Minor Changes
+
+- 4c74e0a: Report what the scanner can prove wrong while the project builds, instead of waiting
+  for the line to render.
+
+  The runtime already warns about an empty `between` range, a blank prefix and whitespace
+  inside a variant — but only once that code path executes, in a browser, with a console
+  open. A branch that did not run during development ships the bug either way. Every one
+  of those mistakes is visible in the source, and the plugin was already reading every
+  file, so it now says so on every build, for every call site, in terminal and CI output.
+
+  It also catches something nothing warned about at all: two conflicting utilities inside
+  **one** string, where `tailwind-merge` silently drops the first.
+
+  ```
+  [tailess] src/Card.tsx: "p-4" never reaches the element — "p-2" replaces it in the same
+    string. Drop the unused one, or move the override into its own argument.
+  ```
+
+  That check is deliberately narrow, because overriding is a documented feature: a later
+  argument beating an earlier one is how a caller's `className` wins, and it is never
+  flagged. Neither is `["p-4", cond && "p-2"]`, where the first applies whenever the
+  condition is false, nor an interpolated template, where nothing is statically known.
+  Only two unconditional, conflicting classes in a single literal qualify — there the
+  first provably cannot reach the element, whatever the props do.
+
+  Diagnostics warn; they never fail a build. They cost nothing at runtime: none of this
+  code is reachable from the package entry, and the browser bundle is byte-for-byte
+  unchanged. Extraction and diagnosis share one read of each file and one cache entry, so
+  an unchanged file still costs a `stat`.
+
+  Checked against the suite that exercises all 233 keys and every helper form: 400
+  expressions, four build paths, zero reported — the silent half is the half that matters.
+
+- 2c1f74f: Add container-query and `not-*` keys. 149 keys become 233, and both families are
+  autocompleted and typo-checked like every other one.
+
+  **Container queries** were the one Tailwind v4 feature `ss` could not express at all.
+  `@3xs` through `@7xl`, and `@max-3xs` through `@max-7xl`, size an element by its nearest
+  `@container` ancestor instead of the viewport — previously reachable only through
+  `withPrefix("@md", …)`. They sit right after the viewport ranges in emission order,
+  since that is what they are:
+
+  ```ts
+  ss({ base: "grid", "@md": "grid-cols-2", "@max-sm": "hidden" });
+  // → "grid @md:grid-cols-2 @max-sm:hidden"
+  ```
+
+  A _named_ container (`@lg/sidebar`) carries a value, so it stays `withPrefix` territory
+  along with `data-*`, `has-*` and the rest.
+
+  **`not-*`** was listed among the variants that take a value, which it does not — it
+  compounds, exactly as `group-*` and `peer-*` do, just with a wider set. Tailwind negates
+  every element state, every media query and every breakpoint, so all 58 are keys now:
+  `not-hover`, `not-dark`, `not-md`.
+
+  Neither family is written out by hand. Container keys derive from one list of sizes and
+  `not-*` from the states it applies to, so the two spellings of a name cannot drift — the
+  same rule the `group-*` / `peer-*` pairs already followed. The suite that compares the
+  key list against Tailwind's own variant registry now covers `not-*` in both directions,
+  and the container keys are checked the way `max-*` always has been: by compiling them and
+  asserting a rule comes out.
+
+  The runtime grows 265 minified characters, about 100 gzipped — 2.7 kB to 2.8 kB — and the
+  size budget was raised deliberately to match.
+
+## 0.9.3
+
+### Patch Changes
+
+- 60ca7d5: Close the last two ways the runtime could build a class the scanner never enumerated.
+
+  **Helpers composed with one another.** A helper's result is an already-prefixed string
+  by the time its caller sees it, so the caller's prefix goes in front:
+  `until("md", on("hover", "p-2"))` is `max-md:hover:p-2`. That stacking was taught to
+  `ss` buckets in the previous release but not to the helpers themselves, so
+  `until`, `on`, `between`, `data`, `aria`, `withPrefix` and a `responsive` bucket value
+  each read a nested call only unprefixed. The class landed on the element with no rule
+  behind it — no warning, no build error. Every helper now funnels its class argument
+  through one place, so the rule is stated once instead of restated per case, and it
+  holds three prefixes deep: `on("hover", until("md", withPrefix("has-[:x]", …)))`.
+
+  **A `data()` value written in any other numeric spelling.** Only plain integers and
+  simple decimals were recognised, so `1e3`, `0x10`, `1_000`, `.5`, `+1`, `-0` and
+  `2e-2` fell through to the attribute-presence form — the branch meant for a value that
+  is genuinely dynamic. Template interpolation stringifies the _number_, so the runtime
+  builds `data-[n=1000]:` where the scanner had safelisted `data-[n]:`: the class in the
+  DOM got no CSS, and the CSS that was generated matched whenever the attribute merely
+  existed. The value is now resolved through `Number`, so the candidate is whatever the
+  element will actually carry.
+
+  Both were found by differential testing — running the real helpers and the real
+  scanner over the same source and diffing — and both are pinned by cases in the parity
+  suite, which fails on a regression rather than leaving it for a user to discover.
+
+- 2ffbe13: Make the PostCSS plugin assignable to `AcceptedPlugin` again for consumers using
+  `exactOptionalPropertyTypes`.
+
+  The plugin is typed structurally so tailess needs no dependency on `postcss` — the
+  host build always supplies it — and that only pays off if the shape really is one
+  PostCSS accepts. It wasn't, under the strict reading of optional properties: a bare
+  `from?: string` means "absent, or a string" and refuses a value that may be
+  _explicitly_ `undefined`, which is precisely what PostCSS's own `ResultOptions.from`
+  is. A typed `postcss.config.ts` with that flag on stopped compiling, while the plugin
+  kept working perfectly at runtime — so nothing in the suite noticed. The same
+  oversight was in `CollectOptions`, whose two optional fields receive each plugin's own
+  optional options verbatim.
+
+  `exactOptionalPropertyTypes` is now on for the repo itself, so the strict reading is
+  what CI checks, and `test/postcss/assignable.test.ts` asserts the plugin extends
+  `AcceptedPlugin` — the mirror of the Vite suite that already existed. Every public
+  option was already spelled `| undefined` for exactly this reason; the internal
+  structural types now match.
+
+## 0.9.2
+
+### Patch Changes
+
+- 8a834e7: Fix two build-integration faults that only showed up after the first successful build.
+
+  **`extensions` written with a leading dot silently froze the Vite dev watcher.** The scan
+  normalizes the option (`".tsx"` → `"tsx"`); the plugin built a second set from the raw
+  option to gate its watcher, and compared it against an already-normalized extension. So
+  `extensions: [".tsx"]` — or any upper-case spelling — scanned correctly on the first
+  transform and then matched nothing on every file-system event after it. The build was
+  right, the dev server was right until you touched anything, and from then on every new
+  `md:` or `hover:` class had no CSS until the process was restarted. Nothing was logged.
+  Both paths now go through one exported `normalizeExtensions`, so they cannot drift again.
+
+  **A glob in `content` defeated the warning meant to catch exactly that.** A root that is
+  not a directory is treated as a single file, and `src/**/*.tsx` has a scannable
+  extension, so the glob itself was recorded as a file that had been read. `files` came
+  back non-empty with no classes in it — which is precisely the state the "content matched
+  no files" warning tests for, so the one guard against a mistyped `content` was disabled
+  by the most likely way of mistyping it. Globs were never expanded; `content` takes
+  directories and files. A root is now counted only if it really is a file, and when the
+  warning does fire on a wildcard path it says so, since `content` was glob-shaped in
+  Tailwind v3 and that is the habit people arrive with.
+
+- 313c79a: Close four gaps where the runtime built a class the scanner never enumerated. Each
+  one produced the exact failure this package exists to rule out: the class lands on the
+  element, no CSS is generated for it, and nothing says so — no console warning, no build
+  error, just a style that quietly does nothing.
+
+  **A `clsx` dictionary written with unquoted keys.** A dictionary names its classes in
+  the _keys_, so `{ hidden: !open }` puts no string literal in the source at all, and the
+  scanner only ever read string literals. Quoting the key was the sole reason the
+  documented `ss({ md: [{ "text-lg": on }] })` form worked; `until("md", { hidden: !open })`
+  — the idiomatic spelling, and the one the README's own condition examples lead you to —
+  found nothing. Every helper was affected, and the utilities spelled as bare identifiers
+  are the common ones: `hidden`, `flex`, `block`, `grid`, `underline`, `truncate`,
+  `italic`, `uppercase`, `relative`, `absolute`.
+
+  Which objects count is now the runtime's own rule rather than a guess. Inside an array
+  or a `cn()`/`clsx()` call an object is always a dictionary; inside any other call it is
+  not, so `match(size, { sm: "p-1" })` keeps its discriminant keys out of the safelist;
+  standing alone it depends on the caller, because that same object is a nested bucket map
+  in an `ss` bucket and a dictionary everywhere else.
+
+  **`data()` with a number or a boolean.** `data` accepts
+  `string | number | boolean | null | undefined`, but only a string _literal_ was read
+  statically, so `data("checked", true, …)` fell through to the attribute-presence branch.
+  That was wrong twice over: `data-[checked=true]:` — what the runtime actually builds, and
+  what React writes for `data-checked={true}` — got no CSS, while the `data-[checked]:`
+  that was safelisted is a different selector, matching whenever the attribute merely
+  exists.
+
+  **A prefixing helper called inside an `ss` bucket.** `ss({ md: withPrefix("has-[:checked]",
+"underline") })` builds `md:has-[:checked]:underline` at runtime: the inner call has
+  already made its prefix, and the bucket's key stacks on top. The scanner read the inner
+  call only unprefixed. It matters most for `withPrefix`, which is the documented escape
+  hatch for variants that take a value and therefore have no bucket key of their own.
+
+  **An entry stylesheet whose at-rule is not lower case.** CSS folds an at-rule's _name_,
+  so `@Import "tailwindcss"` is the same rule as `@import` — but it was matched
+  case-sensitively, so such a stylesheet was not recognised as a Tailwind entry and the
+  whole project lost its generated classes. The specifier stays case-sensitive, since it
+  resolves as a path.
+
+  The parity suite — which evaluates each source string with the real helpers and asserts
+  the runtime's output is a subset of the scanner's candidates — now covers all of these,
+  so a regression fails a test rather than a user's layout.
+
+## 0.9.1
+
+### Patch Changes
+
+- d953a2d: Drop the `clsx` runtime dependency. A fresh install now pulls `tailess` and
+  `tailwind-merge`, nothing else.
+
+  `src/internal/join.ts` does the same job in about forty lines. The point is not really
+  the bytes — `clsx` is 237 gzipped — but it does not cost any either: the code compresses
+  better next to the rest of the package than `clsx`'s standalone bundle does, so the swap
+  came out 35 gzipped bytes _smaller_ (135 more minified characters, which is the number
+  the size budget tracks). It is also no slower; on arrays and nested dictionaries it
+  measures slightly faster, and `cn` and `ss` are unchanged end to end.
+
+  A drop-in replacement is only worth having if it is genuinely identical, so `clsx` stays
+  a devDependency and serves as the test oracle rather than being removed outright.
+  `test/internal/join.test.ts` asserts the two produce byte-identical output across every
+  shape, including the ones nobody writes on purpose: null-prototype objects, Proxies,
+  boxed primitives, frozen objects, a getter that throws, symbol keys, `bigint` (which
+  `clsx` types but drops at runtime), inherited enumerable keys, 200-deep nesting, and the
+  circular array that overflows the stack in both — parity on a throw counts too. On top of
+  that, 50,000 generated cases from a seeded PRNG, so any failure replays exactly.
+
+  A second suite puts every public helper — `cn`, `ss`, `withPrefix`, `on`, `responsive`,
+  `data`, `aria`, `until`, `between` — through twenty hostile values each and asserts none
+  of them throws, because a crash during a render is worse than a wrong class. `join.ts`
+  ends up at 100% statement, branch and function coverage.
+
+  `ClassValue` is now declared by tailess instead of re-exported from `clsx`, with the same
+  structure, so importing the type from `tailess` keeps working. `ClassArray` and
+  `ClassDictionary` are exported alongside it. `ClassDictionary` stays `Record<string, any>`
+  rather than tightening to `unknown`: TypeScript lets any object type flow into
+  `Record<string, any>` but rejects an interface with no index signature for
+  `Record<string, unknown>`, so the stricter type would have failed code that used to
+  compile.
+
+  `tailwind-merge` is deliberately kept. Roughly two thirds of Tailwind installs already
+  have it, so for most projects it is a shared copy rather than an addition — and 77% of its
+  size is the utility-conflict taxonomy, which is large because Tailwind is. Reimplementing
+  that lands at the same size or gets merges quietly wrong, which is the exact failure this
+  package exists to prevent.
+
+## 0.9.0
+
+### Minor Changes
+
+- 7c1f00f: `ss` is now variadic and its buckets nest, so `cn(ss(…), cond && ss(…))` collapses into
+  one `ss(…)` — with a small breaking change to the `clsx` dictionary form.
+
+  **`ss` takes as many arguments as you like.** An argument is anything a bucket accepts:
+  another map, a class string, a `clsx` array, or a condition producing one. That removes
+  the wrapper that every non-trivial call site needed, and with it the second and third
+  `ss()` inside it:
+
+  ```tsx
+  // before
+  className={cn(
+    ss({ base: "rounded-lg border p-4", md: "p-6" }),
+    isDisabled && ss({ base: "opacity-50", sm: "bg-red-500" }),
+    className,
+  )}
+
+  // after
+  className={ss(
+    { base: "rounded-lg border p-4", md: "p-6" },
+    isDisabled && { base: "opacity-50", sm: "bg-red-500" },
+    className,
+  )}
+  ```
+
+  Keys are sorted inside each map; the arguments themselves are never reordered, so the
+  last one wins exactly as it does in `cn`. That ordering is the point rather than a
+  detail: sorting a bare string into the `base` bucket would place a caller's
+  `className="md:p-10"` ahead of the component's own `md:p-6` and silently lose to it.
+  Given only class values `ss` is `cn`, of which it is now a strict superset. `cn` itself
+  is unchanged and still exported.
+
+  **A bucket's value can be another map,** which stacks the prefixes. Each breakpoint gets
+  its own group with the same keys and the same rules, which is how a compound variant is
+  written without reaching for `on` or `between`:
+
+  ```ts
+  ss({
+    md: { base: "p-6", hover: "p-8", "max-lg": "grid" },
+    dark: { base: "text-white", hover: "text-blue-300" },
+  });
+  // → "md:p-6 md:max-lg:grid md:hover:p-8 dark:text-white dark:hover:text-blue-300"
+  ```
+
+  `md: "p-6"` and `md: { base: "p-6" }` are the same thing, so existing calls need no
+  change to start nesting. Nesting is bounded at ten levels, which stops an object that
+  reaches itself from taking the render down with a stack overflow.
+
+  **Breaking: a `clsx` dictionary written as a bucket value now goes in an array.**
+
+  ```ts
+  ss({ md: { "text-lg": cond } }); // before
+  ss({ md: [{ "text-lg": cond }] }); // after
+  ```
+
+  A bare object is now always a nested map, and an array is always classes. The shape
+  decides, never the key names — telling the two apart by guessing whether `hover` is a
+  variant or a class name would make the same source mean different things depending on
+  what someone named a utility, which is the failure mode this package exists to rule out.
+  TypeScript rejects the old form, so this surfaces as a compile error rather than a style
+  that quietly stops appearing.
+
+  **The scanner understands both shapes, and one bug it already had is fixed along the
+  way.** Only `ss`' first argument was ever read, and an object had to _start_ its
+  argument to be parsed at all — so `ss(base, isDisabled && { sm: "bg-red-500" })` produced
+  no CSS for `sm:bg-red-500`, the exact silent failure this package is built to prevent.
+  Every argument is now swept for object literals wherever they sit, both branches of a
+  ternary included, and nested keys are followed to the same depth the runtime allows.
+  `responsive`'s second argument got the same fix. The end-to-end suite compiles the new
+  shapes through the real Tailwind compiler on both the Vite and PostCSS paths.
+
+  A new suite pins the invariant behind all of this. It hands the scanner a source string,
+  evaluates _that same string_ with the real helpers, and asserts every prefixed class the
+  runtime produced is among the candidates the scanner found — so the two halves are checked
+  against each other instead of each against a list that can drift.
+
+  **`responsive`, `on`, `until` and `between` are unchanged and staying.** Each is now
+  expressible as an `ss` shape — `between("sm", "lg", x)` is `ss({ sm: { "max-lg": x } })` —
+  and the README says so, but they read well on their own and cost nothing when unused.
+
+  New exported types: `SsValue`, `SsArg`. `SsInput` keeps its name and is now recursive.
+
+  **Breaking: `tailess/vite` is exported only as a default, matching `tailess/postcss`.**
+  Its CJS build is now `module.exports = tailess`, so `require("tailess/vite")` _is_ the
+  plugin creator — previously it was a namespace object, which a `vite.config.cjs` would
+  hand to Vite as something Vite rejects. `import tailess from "tailess/vite"`, the only
+  form the docs have ever shown, is unaffected in both module systems; the undocumented
+  `import { tailess } from "tailess/vite"` and `require("tailess/vite").default` are gone,
+  and TypeScript flags both. The `.d.cts` is corrected to `export =` by the same post-build
+  step that already did it for the PostCSS entry.
+
+  That also removes the last warning from the build. Rollup's CJS writer warns on any entry
+  with both a default and a named export, because it has to guess the shape; tsup exposes
+  Rollup's input options but not `output.exports`, so there was nowhere to state the intent.
+  The alternatives were measured and are worse: `silent` hides real warnings, dropping the
+  tree-shaking pass turns the PostCSS plugin back into `{ default: fn }` and breaks every
+  string-named config, and splitting the Vite entry into its own tsup config races `clean`
+  and costs `dist/postcss/index.js` its shared chunk (3.4 kB to 22.1 kB).
+
+  **Cost.** The single-map call keeps a dedicated path with no argument loop and measures
+  within noise of before. The runtime grew 634 minified characters, 270 gzipped — 2.4 kB to
+  2.6 kB — and the bundle-size budget was raised deliberately to match.
+
 ## 0.8.0
 
 ### Minor Changes
