@@ -251,10 +251,7 @@ export async function collectTheme(
 }
 
 /** Just the breakpoints, for callers that want nothing else. */
-export async function collectBreakpoints(
-  css: string,
-  file?: string,
-): Promise<BreakpointDecl[]> {
+export async function collectBreakpoints(css: string, file?: string): Promise<BreakpointDecl[]> {
   return (await collectTheme(css, file)).breakpoints;
 }
 

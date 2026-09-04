@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { collect } from "../extract/collect.js";
-import { type BrokenClass, findBroken, probeList } from "./verify.js";
 import { isTailwindEntry } from "../integration/entry.js";
+import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
 /**
  * `tailess check` — compile the project for real and prove every class the runtime
@@ -74,7 +74,7 @@ async function loadStylesheet(id: string, base: string) {
     } catch {
       resolved = undefined;
     }
-    if (resolved !== undefined && resolved.endsWith(".css")) {
+    if (resolved?.endsWith(".css")) {
       path = resolved;
     } else {
       const pkgPath = req.resolve(`${id.split("/")[0]}/package.json`);
@@ -185,7 +185,9 @@ export async function run(options: Options): Promise<number> {
       "element with no rule behind them:\n",
   );
   for (const { candidate, utility } of broken.slice(0, 20)) {
-    console.error(`  ${candidate}\n    "${utility}" resolves on its own, so the variant is what fails.`);
+    console.error(
+      `  ${candidate}\n    "${utility}" resolves on its own, so the variant is what fails.`,
+    );
   }
   if (broken.length > 20) console.error(`  …and ${broken.length - 20} more.`);
   console.error(

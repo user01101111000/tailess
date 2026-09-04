@@ -502,9 +502,7 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       if (args.length < 2) return;
       const variant = nthVariants[name];
       const arg = args[0] ?? "";
-      const prefixes = extractStrings(arg).map(
-        (value) => `${variant}-[${escapeCondition(value)}]`,
-      );
+      const prefixes = extractStrings(arg).map((value) => `${variant}-[${escapeCondition(value)}]`);
       if (prefixes.length === 0) {
         const resolved = staticValue(arg.trim());
         if (resolved !== null) prefixes.push(`${variant}-${resolved}`);

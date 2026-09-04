@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearCache } from "../../src/extract/collect.js";
 import { parse, run } from "../../src/check/run.js";
+import { clearCache } from "../../src/extract/collect.js";
 
 /**
  * The gate itself, run against real project directories and the real Tailwind
@@ -73,7 +73,10 @@ describe("the check itself", () => {
   it("fails a project whose theme removed a breakpoint out from under a key", async () => {
     // The case the theme warning describes; here it is proved rather than guessed.
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4", lg: "p-6" })`);
-    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
     const { code, output } = await check();
     expect(code).toBe(1);
     expect(output).toContain("md:p-4");
@@ -117,7 +120,10 @@ describe("the check itself", () => {
     // A project can have more than one entry, and a component is styled by whichever
     // its page loads — so failing every one of them is what makes a class broken.
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
-    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
     await writeFile(join(dir, "b.css"), `@import "tailwindcss";`);
     const { code } = await check();
     expect(code).toBe(0);

@@ -45,8 +45,7 @@ const plain = allStatic.filter((name) => !(screenKeys as readonly string[]).incl
 const compoundable = (
   prefix: "group" | "peer" | "not" | "has" | "in",
   from: string[] = plain,
-): string[] =>
-  from.filter((name) => design.variants.compoundsWith(prefix, name));
+): string[] => from.filter((name) => design.variants.compoundsWith(prefix, name));
 
 /** Compile a stylesheet that safelists `candidates`, and return the CSS. */
 async function build(candidates: readonly string[]): Promise<string> {

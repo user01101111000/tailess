@@ -37,7 +37,6 @@ export { between, until } from "./utils/range.js";
 export { responsive } from "./utils/responsive.js";
 export { ss } from "./utils/ss.js";
 export { notSupports, supports } from "./utils/supports.js";
-export type { CssVarInput, CssVarName, CssVars } from "./utils/vars.js";
 export type {
   VariantComponent,
   VariantGroups,
@@ -46,4 +45,5 @@ export type {
   VariantsConfig,
 } from "./utils/variants.js";
 export { variants } from "./utils/variants.js";
+export type { CssVarInput, CssVarName, CssVars } from "./utils/vars.js";
 export { vars } from "./utils/vars.js";

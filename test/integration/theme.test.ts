@@ -232,9 +232,9 @@ describe("a @custom-variant the keys do not know about", () => {
   it("reads every spelling of the at-rule", () => {
     // Names that Tailwind does not already ship — `pointer-coarse` and friends are
     // built in, so a definition of one of those is a redefinition, not a new variant.
-    expect(customVariantsIn(`@custom-variant midnight-only (@media (prefers-contrast: more));`)).toEqual([
-      "midnight-only",
-    ]);
+    expect(
+      customVariantsIn(`@custom-variant midnight-only (@media (prefers-contrast: more));`),
+    ).toEqual(["midnight-only"]);
     expect(customVariantsIn(`@custom-variant midnight (&:where([data-theme=x] *));`)).toEqual([
       "midnight",
     ]);
@@ -261,9 +261,9 @@ describe("a @custom-variant the keys do not know about", () => {
   });
 
   it("does not repeat a name declared twice", () => {
-    expect(
-      customVariantsIn(`@custom-variant a (&:hover);\n@custom-variant a (&:focus);`),
-    ).toEqual(["a"]);
+    expect(customVariantsIn(`@custom-variant a (&:hover);\n@custom-variant a (&:focus);`)).toEqual([
+      "a",
+    ]);
   });
 
   it("ignores a commented-out or quoted definition", () => {
@@ -355,7 +355,10 @@ describe("following the stylesheets a theme is split across", () => {
   });
 
   it("finds a @custom-variant in an imported file", async () => {
-    await writeFile(join(dir, "variants.css"), `@custom-variant midnight-only (@media (pointer: coarse));`);
+    await writeFile(
+      join(dir, "variants.css"),
+      `@custom-variant midnight-only (@media (pointer: coarse));`,
+    );
     const theme = await collectTheme(
       `@import "tailwindcss";
 @import "./variants.css";`,

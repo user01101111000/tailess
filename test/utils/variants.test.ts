@@ -21,9 +21,7 @@ const button = variants({
 
 describe("variants", () => {
   it("applies the defaults when called with nothing", () => {
-    expect(button()).toBe(
-      "rounded font-medium hover:brightness-110 bg-blue-600 text-sm px-2",
-    );
+    expect(button()).toBe("rounded font-medium hover:brightness-110 bg-blue-600 text-sm px-2");
   });
 
   it("lets an option be an ss map, which is the point", () => {
