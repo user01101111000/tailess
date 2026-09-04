@@ -1,4 +1,19 @@
-import { aria, between, data, match, on, responsive, ss, until, withPrefix } from "tailess";
+import {
+  aria,
+  between,
+  container,
+  data,
+  group,
+  match,
+  notSupports,
+  on,
+  peer,
+  responsive,
+  ss,
+  supports,
+  until,
+  withPrefix,
+} from "tailess";
 
 export function Card({
   size,
@@ -36,6 +51,11 @@ export function Card({
         data("disabled", null, "pointer-events-none"),
         aria("expanded", "rotate-180"),
         withPrefix("supports-[display:grid]", "grid"),
+        supports("display: grid", "gap-4"),
+        notSupports("display: grid", "flex"),
+        group("row", "hover", "underline"),
+        peer("email", "invalid", "text-red-600"),
+        container("sidebar", "@md", "grid-cols-2"),
         "px-2 px-4",
         className,
       )}

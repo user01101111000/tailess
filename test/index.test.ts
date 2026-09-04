@@ -4,22 +4,45 @@ import {
   aria,
   between,
   cn,
+  container,
   data,
+  group,
   match,
   maxScreenKeys,
+  notSupports,
   on,
+  peer,
   responsive,
   screenKeys,
   screens,
   ss,
   stateKeys,
+  supports,
   until,
+  vars,
   withPrefix,
 } from "../src/index.js";
 
 describe("public API", () => {
   it("exports every helper as a plain function — no config, no factory", () => {
-    for (const fn of [ss, cn, responsive, on, until, between, match, data, aria, withPrefix]) {
+    for (const fn of [
+      ss,
+      cn,
+      responsive,
+      on,
+      until,
+      between,
+      match,
+      data,
+      aria,
+      withPrefix,
+      supports,
+      notSupports,
+      vars,
+      group,
+      peer,
+      container,
+    ]) {
       expect(typeof fn).toBe("function");
     }
   });

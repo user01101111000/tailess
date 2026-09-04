@@ -85,8 +85,11 @@ className={ss(
   - [`until` / `between` — max-width ranges](#until--between--max-width-ranges)
   - [`on` — state variants](#on--state-variants)
   - [`data` / `aria` — attribute variants](#data--aria--attribute-variants)
+  - [`supports` / `notSupports` — feature queries](#supports--notsupports--feature-queries)
+  - [`group` / `peer` / `container` — named variants](#group--peer--container--named-variants)
   - [`match` — exhaustive variant selection](#match--exhaustive-variant-selection)
   - [`withPrefix` — the escape hatch](#withprefix--the-escape-hatch)
+  - [`vars` — values a class cannot carry](#vars--values-a-class-cannot-carry)
   - [Also exported](#also-exported)
 - [Keys](#keys)
 - [Framework examples](#framework-examples)
@@ -143,7 +146,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 
 🪶 &nbsp;**Small**
 
-2.8 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
+4.0 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
 [What the badge counts →](#bundle-size)
 
 </td>
@@ -255,8 +258,9 @@ the classes inside them. For that, point Tailwind's own formatter at the helpers
   "plugins": ["prettier-plugin-tailwindcss"],
   "tailwindStylesheet": "./src/index.css",
   "tailwindFunctions": [
-    "ss", "cn", "responsive", "on", "until",
-    "between", "data", "aria", "match", "withPrefix"
+    "ss", "cn", "responsive", "on", "until", "between",
+    "data", "aria", "supports", "notSupports", "match", "withPrefix",
+    "group", "peer", "container"
   ]
 }
 ```
@@ -288,7 +292,11 @@ Each string is sorted on its own. Separate arguments are never reordered, so a t
 Every helper is a plain function. No factory, no instance, no config object.
 
 ```ts
-import { ss, cn, responsive, on, until, between, data, aria, match, withPrefix } from "tailess";
+import {
+  ss, cn, responsive, on, until, between,
+  data, aria, supports, notSupports, match, withPrefix, vars,
+  group, peer, container,
+} from "tailess";
 ```
 
 | | | needs the plugin |
@@ -299,12 +307,15 @@ import { ss, cn, responsive, on, until, between, data, aria, match, withPrefix }
 | [`until`](#until--between--max-width-ranges) / [`between`](#until--between--max-width-ranges) | max-width ranges | ✅ |
 | [`on`](#on--state-variants) | one state variant, or a stack of them | ✅ |
 | [`data`](#data--aria--attribute-variants) / [`aria`](#data--aria--attribute-variants) | attribute variants, for headless UI | ✅ |
+| [`supports`](#supports--notsupports--feature-queries) / [`notSupports`](#supports--notsupports--feature-queries) | feature queries, spaces escaped for you | ✅ |
+| [`group`](#group--peer--container--named-variants) / [`peer`](#group--peer--container--named-variants) / [`container`](#group--peer--container--named-variants) | the *named* group, peer and container variants | ✅ |
 | [`match`](#match--exhaustive-variant-selection) | exhaustive lookup by a discriminant | — |
 | [`withPrefix`](#withprefix--the-escape-hatch) | any variant tailess doesn't model | ✅ |
+| [`vars`](#vars--values-a-class-cannot-carry) | custom properties, for values no class can hold | — |
 
 "Needs the plugin" means the helper builds a variant prefix at runtime, so Tailwind never
 sees the finished class in your source. `cn` and `match` only ever pass through classes
-you already wrote as literals.
+you already wrote as literals, and `vars` produces no class at all.
 
 ### `ss` — group by breakpoint and state
 
@@ -467,6 +478,62 @@ data("state", "half_open", "opacity-50");  // matches data-state="half open"
 Passing a literal space warns in development rather than silently producing a class that
 matches nothing.
 
+### `supports` / `notSupports` — feature queries
+
+Apply classes only when the browser understands a CSS feature. Write the query the way
+CSS spells it; the space is escaped for you.
+
+```ts
+supports("display: grid", "grid");     // → "supports-[display:_grid]:grid"
+supports("gap", "gap-4");              // → "supports-[gap]:gap-4"
+notSupports("display: grid", "flex");  // → "not-supports-[display:_grid]:flex"
+```
+
+A query with no `:` tests the property itself, so `supports("gap", …)` asks whether `gap`
+is understood at all.
+
+Combining queries needs every term in its own parentheses — `supports("(display:grid) and
+(gap:1rem)", …)`. Without them the whole string becomes a single condition that is false
+in every browser, so a missing pair warns in development. A *combined* query cannot be
+negated, because `@supports not (a) and (b)` is not valid CSS; write
+`supports("not ((a) and (b))", …)` instead.
+
+### `group` / `peer` / `container` — named variants
+
+The unnamed forms are already keys: `group-hover` and `peer-checked` are state variants,
+`@md` and `@max-md` are container queries. They reach the *nearest* group, peer or
+container — which stops being enough the moment those nest. Name the parent and these
+target that one.
+
+```ts
+group("row", "hover", "underline");          // → "group-hover/row:underline"
+peer("email", "invalid", "text-red-600");    // → "peer-invalid/email:text-red-600"
+container("sidebar", "@md", "grid-cols-2");  // → "@md/sidebar:grid-cols-2"
+container("main", "@max-lg", "hidden");      // → "@max-lg/main:hidden"
+```
+
+The name goes on the element you are naming, with the same `/` spelling:
+
+```tsx
+<li className="group/row">
+  <span className={group("row", "hover", "underline")} />
+</li>
+
+<aside className="@container/sidebar">
+  <div className={container("sidebar", "@md", "grid-cols-2")} />
+</aside>
+```
+
+A `group` or `peer` name may contain letters, digits, `-` and `_`. Anything else — a
+space, a `/`, a `:`, or an empty name — produces a class Tailwind generates no rule for.
+
+A **container** name is stricter, because Tailwind also writes it into `container-name:`
+and the `@container` prelude, where CSS requires an identifier: it cannot start with a
+digit, and cannot be `none`, `and`, `or`, `not` or a CSS-wide keyword.
+`container("2xl-panel", …)` compiles to CSS the browser then discards entirely.
+
+Both are checked in development, so a name that cannot work says so.
+
 ### `match` — exhaustive variant selection
 
 Map a discriminant to a class value. Every case must be covered, so a missing one is a
@@ -492,10 +559,32 @@ Every class here is already a literal, so `match` needs no build integration.
 For variants tailess doesn't model as keys.
 
 ```ts
-withPrefix("supports-[display:grid]", "grid");  // → "supports-[display:grid]:grid"
+withPrefix("nth-[3n+1]", "bg-neutral-50");      // → "nth-[3n+1]:bg-neutral-50"
 withPrefix("has-[:checked]", "bg-blue-50");     // → "has-[:checked]:bg-blue-50"
 withPrefix("group-[.open]", "rotate-90");       // → "group-[.open]:rotate-90"
-withPrefix("@lg/sidebar", "grid");              // → "@lg/sidebar:grid"  (named container)
+withPrefix("in-[.dark]", "text-white");         // → "in-[.dark]:text-white"
+```
+
+### `vars` — values a class cannot carry
+
+Every class tailess produces has to be enumerable at build time, so the values inside it
+are written literally in your source. A width that comes from data is not, and
+``w-[`${percent}%`]`` has no CSS behind it however it is built. Keep the class literal and
+put the value in a custom property:
+
+```tsx
+<div
+  className={ss({ base: "w-[var(--w)]", md: "w-[var(--w-md)]" })}
+  style={vars({ "--w": `${percent}%`, "--w-md": "50%" })}
+/>
+```
+
+Numbers are stringified, and `null`, `undefined` or `""` drops the property rather than
+writing an invalid declaration — so a conditional variable reads like a conditional class.
+
+```ts
+vars({ "--w": "42%", "--gap": 8 });        // → { "--w": "42%", "--gap": "8" }
+vars({ "--w": "42%", "--h": undefined });  // → { "--w": "42%" }
 ```
 
 ### Also exported
@@ -507,7 +596,8 @@ window.matchMedia(`(min-width: ${screens.md})`).matches;  // "48rem"
 ```
 
 Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
-`ResponsiveMap`, `ClassValue`.
+`ResponsiveMap`, `ClassValue`, `CssVars`, `CssVarInput`, `CssVarName`,
+`AnyContainerKey`.
 
 ## Keys
 
@@ -535,9 +625,17 @@ nested group, which is how a compound variant is spelled.
 | `not-*` | 58 | those same 36, plus every media query and breakpoint: `not-hover`, `not-dark`, `not-md`, … |
 
 Anything with a value of its own (`data-*`, `aria-*`, `supports-*`, `has-*`, `in-*`,
-`nth-*`, a named container like `@lg/sidebar`, arbitrary `min-[…]`) is deliberately absent — use [`data`/`aria`](#data--aria--attribute-variants)
-or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
+`nth-*`, arbitrary `min-[…]`) is deliberately absent — use
+[`data`/`aria`](#data--aria--attribute-variants),
+[`supports`](#supports--notsupports--feature-queries),
+[`group`/`peer`/`container`](#group--peer--container--named-variants) for the named
+forms, or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
 `stateKeys` and is regenerated and re-verified against the Tailwind compiler in CI.
+
+The breakpoint keys are Tailwind's five defaults. A `@theme` of your own can add to them,
+remove them or move them, and none of that reaches the type — so the plugin reads your CSS
+and [says so at build time](#build-time-checks). A breakpoint you added is reachable as
+`withPrefix("3xl", …)`.
 
 ## Framework examples
 
@@ -648,6 +746,8 @@ ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a group s
 on(["dark", "hover"], "bg-black")                   // compound variants
 data("state", open ? "open" : "closed", "p-2")      // both values
 data("level", 2, "p-2")                             // numbers and booleans
+supports("display: grid", "grid")                   // the space is escaped for you
+group("row", "hover", "underline")                  // group-hover/row:underline
 ```
 
 ❌ **Not seen** — the value isn't in the source to read:
@@ -679,6 +779,10 @@ because every class in it is already a literal:
 const size = match(scale, { sm: "text-sm", lg: "text-2xl" });
 ```
 
+When the value is genuinely continuous — a percentage, a pixel count — there is no set of
+literals to write. Keep the class literal and move the value into a custom property with
+[`vars`](#vars--values-a-class-cannot-carry).
+
 Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`.
 Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
 attribute won't throw the scanner off.
@@ -692,13 +796,30 @@ The plugin reports what it can prove wrong from your source, while the project b
   string. Drop the unused one, or move the override into its own argument.
 [tailess] src/Card.tsx: between("lg", "sm", …) describes an empty range: "lg" is not
   narrower than "sm", so "lg:max-sm:" can never match a viewport.
+[tailess] src/app.css: your theme removes the "sm" breakpoint, but tailess still offers
+  it as a key — ss({ "sm": … }) compiles, emits "sm:", and no rule is generated for it.
 ```
 
-Four things are checked: two conflicting utilities in **one** string, a `between` range
-no viewport can satisfy, an empty prefix, and whitespace inside a variant. Each is a
-class that cannot work — nothing is reported for code that merely looks unusual, and a
-later argument overriding an earlier one is never flagged, since that is the point of
-passing `className` last.
+Six things are checked: two conflicting utilities in **one** string, a `between` range no
+viewport can satisfy, an empty prefix, whitespace inside a variant, a feature query no
+class name can carry, and a `@theme` that moves the breakpoints out from under the keys.
+Each is a class that cannot work — nothing is reported for code that merely looks
+unusual, and a later argument overriding an earlier one is never flagged, since that is
+the point of passing `className` last.
+
+The last one is the only check that reads your **CSS** rather than your source, and the
+only one with a case that is *informational* rather than broken. The breakpoint keys are
+compiled into the package, so `--breakpoint-sm: initial` leaves `ss({ sm: … })` compiling
+and emitting a class nothing generates a rule for, `--breakpoint-md: 50rem` leaves
+`screens.md` returning the old width to your JS, and the resets `--breakpoint-*: initial`
+and `--*: initial` do the first of those to every breakpoint at once. Adding one is
+reported too — that CSS works, so this is the exception to the rule above, and it is
+there because the compile error you get from `ss({ "3xl": … })` says nothing about
+`withPrefix("3xl", …)`, which does.
+
+A `@config` pointing at a v3-style JS config can set `theme.screens` as well. That is a
+JavaScript file this never opens, so a project on `@config` gets no answer here rather
+than a wrong one.
 
 The runtime warns about most of these too, but only once the line renders, in a browser,
 with the console open. A branch that did not run during development ships either way —
@@ -754,19 +875,19 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 
 ### Bundle size
 
-The badge at the top reads **11.2 kB** because it measures the whole dependency tree.
+The badge at the top reads **12.4 kB** because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
 | `tailwind-merge` | ~8.4 kB |
-| tailess itself | **~2.8 kB** |
-| **Total** | **~11.2 kB** |
+| tailess itself | **~4.0 kB** |
+| **Total** | **~12.4 kB** |
 
 `tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
 already pull it in. If yours is one of them your bundler keeps the single shared copy,
-and adding tailess costs the 2.8 kB, not the 11.2.
+and adding tailess costs the 4.0 kB, not the 12.4.
 
 ## Troubleshooting
 

@@ -85,6 +85,22 @@ describe("extractStrings", () => {
     expect(extractStrings("`x-${y}`")).toEqual([]);
   });
 
+  it("decodes a whitespace escape rather than just dropping its backslash", () => {
+    // `"p-4\tp-2"` is two classes. Stripping the backslash alone leaves the single
+    // token `p-4tp-2`, which matches no utility — while the runtime splits the real
+    // tab and emits both. Every helper reads its strings through here, so that gap
+    // costs the style on any class written with an escape.
+    expect(extractStrings(String.raw`"p-4\tp-2"`)).toEqual(["p-4\tp-2"]);
+    expect(extractStrings(String.raw`"a\nb"`)).toEqual(["a\nb"]);
+    expect(extractStrings(String.raw`"a\rb"`)).toEqual(["a\rb"]);
+  });
+
+  it("leaves an escape that is not whitespace as the character itself", () => {
+    // Tailwind spells a literal underscore in an arbitrary value as `\_`.
+    expect(extractStrings(String.raw`"supports-[--my\_var:1]"`)).toEqual(["supports-[--my_var:1]"]);
+    expect(extractStrings(String.raw`"a\\b"`)).toEqual(["a\\b"]);
+  });
+
   it("unescapes escaped quotes", () => {
     expect(extractStrings(`"a\\"b"`)).toEqual(['a"b']);
   });

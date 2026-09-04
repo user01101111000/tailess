@@ -52,7 +52,7 @@ export function importSpecifiers(css: string): string[] {
 }
 
 /** Read a stylesheet, tolerating a missing extension the way bundlers do. */
-async function readStylesheet(path: string): Promise<string | undefined> {
+export async function readStylesheet(path: string): Promise<string | undefined> {
   const candidates = /\.[a-z]+$/i.test(path) ? [path] : [path, `${path}.css`];
   for (const candidate of candidates) {
     const content = await readFile(candidate, "utf8").catch(() => undefined);
