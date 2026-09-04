@@ -4,11 +4,16 @@ import {
   aria,
   between,
   cn,
+  container,
   data,
+  group,
   match,
+  notSupports,
   on,
+  peer,
   responsive,
   ss,
+  supports,
   until,
   withPrefix,
 } from "../../src/index.js";
@@ -25,7 +30,23 @@ import {
  * scanner over-approximates by design, so the assertion is one-directional:
  * runtime output must be a subset of the candidates, never the reverse.
  */
-const helpers = { ss, cn, match, on, until, between, responsive, data, aria, withPrefix } as const;
+const helpers = {
+  ss,
+  cn,
+  match,
+  on,
+  until,
+  between,
+  responsive,
+  data,
+  aria,
+  withPrefix,
+  supports,
+  notSupports,
+  group,
+  peer,
+  container,
+} as const;
 
 /** Run `src` with `env` bound, using the same text the scanner was given. */
 function evaluate(src: string, env: Record<string, unknown>): string {
@@ -123,6 +144,52 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   // Three prefixes deep, which is what these helpers composing produces.
   { src: `on("hover", until("md", withPrefix("has-[:checked]", "p-6")))` },
   { src: `until("md", on("hover", aria("busy", "p-7")))` },
+
+  // A feature query is rewritten before it can be a class name — spaces become `_` —
+  // so the scanner has to perform the identical rewrite or it predicts a string the
+  // runtime never builds. What these cases pin is that the two halves *agree*: give
+  // the scanner a rewrite of its own and the multi-space case fails, drop its escape
+  // entirely and twelve fail. They cannot pin the rewrite itself, since both halves
+  // import one `escapeCondition` and so move together — that is what the unit tests
+  // in `test/utils/supports.test.ts` are for.
+  { src: `supports("display:grid", "grid")` },
+  { src: `supports("display: grid", "grid")` },
+  { src: `supports("display:  grid", "grid")` },
+  { src: `supports("  display: grid  ", "grid")` },
+  { src: `supports("gap", "gap-4")` },
+  { src: `supports("(display:grid) and (gap:1rem)", "grid gap-4")` },
+  { src: `supports("selector(&>*)", "p-5")` },
+  { src: `notSupports("display: grid", "flex")` },
+  { src: `notSupports("backdrop-filter: blur(1px)", "bg-white")` },
+  { src: `supports("display: grid", { grid: yes })`, env: { yes: true } },
+  { src: `supports("display: grid", ["grid", cond && "gap-4"])`, env: { cond: true } },
+
+  // …and the same stacking every other helper gets, in both directions.
+  { src: `ss({ md: supports("display: grid", "grid") })` },
+  { src: `on("hover", supports("display: grid", "underline"))` },
+  { src: `supports("display: grid", on("hover", "underline"))` },
+  { src: `until("md", notSupports("display: grid", "flex"))` },
+  { src: `ss({ dark: { md: supports("gap", "gap-2") } })` },
+
+  // A name is a modifier on the variant rather than part of it, so it lands after a
+  // `/` — a shape no other helper produces, and one the scanner has to rebuild
+  // exactly. The unnamed spellings are already keys, so these are the only way to say
+  // *which* group, peer or container is meant.
+  { src: `group("row", "hover", "underline")` },
+  { src: `group("card", "focus-within", "ring-2")` },
+  { src: `peer("email", "invalid", "text-red-600")` },
+  { src: `peer("terms", "checked", "font-bold")` },
+  { src: `container("sidebar", "@md", "grid-cols-2")` },
+  { src: `container("main", "@max-lg", "hidden")` },
+  { src: `group("row", "hover", { underline: yes })`, env: { yes: true } },
+  { src: `group("row", "hover", ["underline", cond && "font-bold"])`, env: { cond: true } },
+
+  // …and the same stacking every other helper gets, in both directions.
+  { src: `ss({ md: group("row", "hover", "underline") })` },
+  { src: `on("dark", group("row", "hover", "underline"))` },
+  { src: `until("lg", container("sidebar", "@md", "grid"))` },
+  { src: `group("row", "hover", on("focus", "underline"))` },
+  { src: `ss({ dark: { md: peer("email", "invalid", "text-red-600") } })` },
 
   // Every spelling of a numeric literal, since the runtime interpolates the *number*.
   { src: `data("count", 1e3, "opacity-100")` },

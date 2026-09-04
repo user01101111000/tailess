@@ -163,6 +163,63 @@ describe("extractClasses", () => {
     ]);
   });
 
+  it("handles supports() and notSupports(), escaping the query as the runtime does", () => {
+    expect(extractClasses(`supports("display: grid", "grid")`)).toEqual([
+      "supports-[display:_grid]:grid",
+    ]);
+    expect(extractClasses(`notSupports("display: grid", "flex")`)).toEqual([
+      "not-supports-[display:_grid]:flex",
+    ]);
+  });
+
+  it("handles the named group(), peer() and container() variants", () => {
+    expect(extractClasses(`group("row", "hover", "underline")`)).toEqual([
+      "group-hover/row:underline",
+    ]);
+    expect(extractClasses(`peer("email", "invalid", "text-red-600")`)).toEqual([
+      "peer-invalid/email:text-red-600",
+    ]);
+    expect(extractClasses(`container("sidebar", "@md", "grid-cols-2")`)).toEqual([
+      "@md/sidebar:grid-cols-2",
+    ]);
+  });
+
+  it("drops a candidate whose brackets do not close", () => {
+    // `@source inline("…")` is parsed by matching parentheses, so one stray `(`
+    // swallows the rest of the directive — and every later class in that chunk,
+    // from files with nothing to do with it. The sweep reads *every* string
+    // literal at a call site, so a query holding `calc(100% - 2rem)` splits on
+    // whitespace into `calc(100%`, which is otherwise a perfectly safe candidate.
+    const found = extractClasses(
+      `ss({ md: supports("width: calc(100% - 2rem)", "grid") }); ss({ md: "text-2xl" })`,
+    );
+    expect(found).toContain("md:supports-[width:_calc(100%_-_2rem)]:grid");
+    expect(found).toContain("md:text-2xl");
+    for (const candidate of found) {
+      const open = (candidate.match(/[([]/g) ?? []).length;
+      const close = (candidate.match(/[)\]]/g) ?? []).length;
+      expect(open, candidate).toBe(close);
+    }
+    expect(found).not.toContain("md:calc(100%");
+  });
+
+  it("drops a candidate carrying an unclosed quote", () => {
+    // `@source inline("…")` is CSS, so an odd `'` opens a string that runs to the end
+    // of the payload and takes every later candidate in the chunk with it — measured
+    // at 60 of 60. An apostrophe in *any* string a matched call touches does it, and
+    // `console.group("user's session")` is a matched call now.
+    const found = extractClasses(
+      `console.group("[auth]", "login", "user's session expired");\nss({ hover: "underline" })`,
+    );
+    expect(found).toContain("hover:underline");
+    expect(found.filter((c) => (c.match(/'/g) ?? []).length % 2 === 1)).toEqual([]);
+  });
+
+  it("keeps a candidate whose quotes do close", () => {
+    // The test is balance, not absence: `content-['x']` is a real utility.
+    expect(extractClasses(`ss({ hover: "content-['x']" })`)).toEqual(["hover:content-['x']"]);
+  });
+
   it("finds calls nested inside other calls", () => {
     expect(extractClasses(`cn(ss({ md: "flex" }), on("hover", "underline"))`)).toEqual([
       "hover:underline",

@@ -1,3 +1,4 @@
+import { escapeCondition } from "../internal/condition.js";
 import {
   dictionaryKeys,
   extractStrings,
@@ -91,9 +92,56 @@ function staticValue(literal: string): string | null {
 /** Records the classes one bucket produces. `prefix` is `""` for unprefixed ones. */
 type Add = (prefix: string, tokens: string[]) => void;
 
+/**
+ * True if every bracket and quote in `candidate` closes.
+ *
+ * `@source inline("…")` is CSS, parsed by matching parentheses and by tracking string
+ * delimiters, so one malformed candidate swallows the rest of the directive — and with
+ * it every later class in the same chunk, *including ones from files that have nothing
+ * to do with it*. Measured: one bad candidate at the head of a chunk cost all 60 that
+ * followed it.
+ *
+ * Both shapes are reachable because the sweep reads every string literal at a call
+ * site, not only the ones that are classes. An ordinary `calc(100% - 2rem)` in a helper
+ * argument splits on whitespace into the token `calc(100%`; an apostrophe anywhere in
+ * any string a matched call touches — `console.group("user's session")` will do it —
+ * opens a CSS string that runs to the end of the payload.
+ *
+ * The test is *balance*, not absence, because `content-['x']` is a real utility and
+ * banning the character outright would drop it. A real utility always closes what it
+ * opens, so requiring that costs nothing and confines the damage to the junk token.
+ */
+function isBalanced(candidate: string): boolean {
+  let round = 0;
+  let square = 0;
+  let quotes = 0;
+  for (let i = 0; i < candidate.length; i += 1) {
+    const ch = candidate.charCodeAt(i);
+    if (ch === 40) {
+      round += 1;
+    } else if (ch === 41) {
+      round -= 1;
+      if (round < 0) return false;
+    } else if (ch === 91) {
+      square += 1;
+    } else if (ch === 93) {
+      square -= 1;
+      if (square < 0) return false;
+    } else if (ch === 39) {
+      quotes += 1;
+    }
+  }
+  return round === 0 && square === 0 && quotes % 2 === 0;
+}
+
 /** Guards against feeding junk (or a whole expression) to Tailwind as a candidate. */
 function isSafeCandidate(candidate: string): boolean {
-  return candidate.length > 0 && candidate.length <= 255 && !unsafe.test(candidate);
+  return (
+    candidate.length > 0 &&
+    candidate.length <= 255 &&
+    !unsafe.test(candidate) &&
+    isBalanced(candidate)
+  );
 }
 
 /**
@@ -335,6 +383,50 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     case "withPrefix": {
       if (args.length < 2) return;
       emitValue(args[1] ?? "", extractStrings(args[0] ?? ""), add, follow);
+      return;
+    }
+
+    // supports("display: grid", "...") / notSupports(…) — the condition is escaped
+    // through the very function the runtime uses, because a candidate that spells
+    // the spaces differently is worse than no candidate at all: the class still
+    // reaches the element, and `isSafeCandidate` drops the unescaped form outright.
+    // group("row", "hover", "…") / peer("email", "invalid", "…") — the name is a
+    // modifier on the variant, so the prefix is `group-<state>/<name>`.
+    case "group":
+    case "peer": {
+      if (args.length < 3) return;
+      const prefixes: string[] = [];
+      for (const label of extractStrings(args[0] ?? "")) {
+        for (const state of extractStrings(args[1] ?? "")) {
+          prefixes.push(`${name}-${state}/${label}`);
+        }
+      }
+      emitValue(args[2] ?? "", prefixes, add, follow);
+      return;
+    }
+
+    // container("sidebar", "@md", "…") — the key already carries its own `@`.
+    case "container": {
+      if (args.length < 3) return;
+      const prefixes: string[] = [];
+      for (const label of extractStrings(args[0] ?? "")) {
+        for (const key of extractStrings(args[1] ?? "")) prefixes.push(`${key}/${label}`);
+      }
+      emitValue(args[2] ?? "", prefixes, add, follow);
+      return;
+    }
+
+    case "supports":
+    case "notSupports": {
+      if (args.length < 2) return;
+      const kind = name === "supports" ? "supports" : "not-supports";
+      const conditions = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        conditions.map((condition) => `${kind}-[${escapeCondition(condition)}]`),
+        add,
+        follow,
+      );
       return;
     }
   }

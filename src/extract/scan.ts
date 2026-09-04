@@ -17,7 +17,8 @@ export interface RawCall {
  * A lookbehind rather than `\b` so `$ss(` and `_on(` — legal, distinct
  * identifiers — don't match, while `st.ss(` still does.
  */
-const callPattern = /(?<![\w$])(ss|responsive|on|until|between|data|aria|withPrefix)\s*\(/g;
+const callPattern =
+  /(?<![\w$])(ss|responsive|on|until|between|data|aria|withPrefix|supports|notSupports|group|peer|container)\s*\(/g;
 
 /**
  * A second instance of {@link callPattern} for {@link outerCalls}.
@@ -273,9 +274,30 @@ export function extractStrings(text: string): string[] {
   return out;
 }
 
-/** Minimal unescaping of the common escapes that appear inside class strings. */
+/**
+ * The escape sequences that stand for whitespace, which is what separates one class
+ * from the next. Everything else — `\\`, `\"`, `\'` — is the character itself.
+ */
+const controlEscapes: Record<string, string> = {
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  f: "\f",
+  v: "\v",
+};
+
+/**
+ * Minimal unescaping of the common escapes that appear inside class strings.
+ *
+ * The whitespace escapes have to be decoded rather than merely stripped of their
+ * backslash. `"p-4\tp-2"` is two classes, and dropping the backslash alone yields
+ * the single token `p-4tp-2` — a candidate that matches no utility, while the
+ * runtime splits the real tab and emits both classes. That is the parity break this
+ * scanner exists to avoid, and it applies to every helper, not just the ones that
+ * take a value.
+ */
 function unescapeString(s: string): string {
-  return s.replace(/\\(.)/g, "$1");
+  return s.replace(/\\(.)/g, (_, ch: string) => controlEscapes[ch] ?? ch);
 }
 
 /**

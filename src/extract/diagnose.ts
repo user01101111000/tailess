@@ -17,12 +17,22 @@ import { extractStrings, isArrayLiteral, type RawCall, scanCalls } from "./scan.
  */
 export interface Diagnostic {
   /** Machine-readable category, so a caller can group or filter. */
-  kind: "dead-class" | "empty-range" | "blank-prefix" | "spaced-prefix";
+  kind:
+    | "dead-class"
+    | "empty-range"
+    | "blank-prefix"
+    | "spaced-prefix"
+    | "unusable-query"
+    /** Not from a source file: the project's CSS redefines `--breakpoint-*`. */
+    | "theme-drift";
   /** One line, written for whoever has to fix it. */
   message: string;
 }
 
 const whitespace = /\s/;
+
+/** Characters a class name cannot carry, so the build can never enumerate them. */
+const unusableInClassName = /["{}\\;]/;
 
 /** Normalize a class string to a stable token list, so comparison ignores spacing. */
 function tokens(literal: string): string[] {
@@ -130,6 +140,36 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
     case "withPrefix": {
       if (args.length < 2) return;
       checkPrefix(args[0], report);
+      deadClasses(args[1], report);
+      return;
+    }
+
+    case "supports":
+    case "notSupports": {
+      if (args.length < 2) return;
+      // The candidate list is written into a stylesheet, so a query carrying one of
+      // these cannot be enumerated at all — while the runtime still builds the class.
+      // That is the failure this package exists to prevent: the class is on the
+      // element and no rule was ever generated for it.
+      for (const condition of extractStrings(args[0] ?? "")) {
+        const query = condition.trim();
+        if (query === "") {
+          report({
+            kind: "unusable-query",
+            message:
+              `${name}("", …) has an empty feature query, so it builds "supports-[]:" — ` +
+              "a class nothing generates a rule for.",
+          });
+        } else if (unusableInClassName.test(query) || (query.match(/'/g) ?? []).length % 2 === 1) {
+          report({
+            kind: "unusable-query",
+            message:
+              `${name}("${query}", …) has a feature query containing one of \`" { } \\ ;\` ` +
+              "or an unclosed `'`, which cannot appear in a class name, so the class is " +
+              "built but no rule is generated for it.",
+          });
+        }
+      }
       deadClasses(args[1], report);
       return;
     }
