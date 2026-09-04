@@ -9,7 +9,6 @@
 
 <a href="https://www.npmjs.com/package/tailess"><img alt="npm version" src="https://img.shields.io/npm/v/tailess?style=flat-square&labelColor=0A0A0A&color=CB3837&logo=npm&logoColor=white&label=npm"></a>
 <a href="https://www.npmjs.com/package/tailess"><img alt="downloads per month" src="https://img.shields.io/npm/dm/tailess?style=flat-square&labelColor=0A0A0A&color=F59E0B&label=downloads"></a>
-<a href="https://bundlejs.com/?q=tailess"><img alt="bundle size" src="https://img.shields.io/bundlejs/size/tailess?style=flat-square&labelColor=0A0A0A&color=10B981&label=min%2Bgzip"></a>
 <a href="https://github.com/user01101111000/tailess/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/user01101111000/tailess/ci.yml?style=flat-square&labelColor=0A0A0A&color=22C55E&logo=githubactions&logoColor=white&label=CI"></a>
 
 <a href="#requirements"><img alt="Tailwind CSS v4" src="https://img.shields.io/badge/Tailwind_CSS-v4-38BDF8?style=flat-square&labelColor=0A0A0A&logo=tailwindcss&logoColor=white"></a>
@@ -101,7 +100,6 @@ className={ss(
 - [Checking your build](#checking-your-build)
 - [Plugin options](#plugin-options)
 - [Performance](#performance)
-  - [Bundle size](#bundle-size)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Upgrading from 0.8](#upgrading-from-08)
@@ -148,10 +146,9 @@ Add a class and it appears without restarting; delete it and it stops being emit
 <tr>
 <td valign="top">
 
-🪶 &nbsp;**Small**
+🔍 &nbsp;**Provable**
 
-4.6 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
-[What the badge counts →](#bundle-size)
+`tailess check` compiles your project and fails the build if a class has no CSS behind it.
 
 </td>
 <td valign="top">
@@ -173,7 +170,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 | **Tailwind CSS** | v4 — v3 is not supported |
 | **Node** | 18+ (build plugin only; the runtime has no Node dependency) |
 | **Bundler** | anything using `@tailwindcss/vite` or `@tailwindcss/postcss` |
-| **Dependencies** | one — `tailwind-merge`. [Why that one and no others](#bundle-size) |
+| **Dependencies** | one — `tailwind-merge` |
 
 ## Install
 
@@ -1006,22 +1003,6 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 | `ss()` with 8 groups | ~970 ns |
 | Cold scan, 2,000-file project | ~98 ms |
 | Warm rescan, same project | ~17 ms |
-
-### Bundle size
-
-The badge at the top reads **13.0 kB** because it measures the whole dependency tree.
-That number is real, but almost none of it is tailess:
-
-| | min+gzip |
-| --- | --- |
-| `tailwind-merge` | ~8.4 kB |
-| tailess itself | **~4.6 kB** |
-| **Total** | **~13.0 kB** |
-
-`tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
-on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
-already pull it in. If yours is one of them your bundler keeps the single shared copy,
-and adding tailess costs the 4.6 kB, not the 13.0.
 
 ## Troubleshooting
 
