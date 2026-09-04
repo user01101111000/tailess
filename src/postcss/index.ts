@@ -5,7 +5,7 @@ import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceChunks } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
-import { collectBreakpoints, themeDiagnostics } from "../integration/theme.js";
+import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
 /**
  * Options for the tailess PostCSS plugin.
@@ -155,8 +155,9 @@ function ranAfterTailwind(root: Root): boolean {
 }
 
 /**
- * Rebuild the only two things a breakpoint can be declared in — `@theme` blocks and
- * the `@import`s that might hold more of them — as CSS text.
+ * Rebuild the at-rules the theme check reads — `@theme` blocks, `@custom-variant`
+ * definitions, `@config` (which silences the check), and the `@import`s that might
+ * hold more of any of them — as CSS text.
  *
  * The same trick {@link isTailwindStylesheet} uses for imports, and for the same
  * reason: it keeps one parser serving both integrations, when only this one has an
@@ -170,6 +171,8 @@ function themeSource(root: Root): string {
       // Stringify just this block, never the whole AST — the reason `first` is read
       // as a property above rather than the root being serialised.
       parts.push(rule.toString());
+    } else if (name === "custom-variant" || name === "config") {
+      parts.push(`@${name} ${rule.params};`);
     } else if (name === "import") {
       const specifier = /["']([^"']+)["']/.exec(rule.params)?.[1];
       if (specifier) parts.push(`@import "${specifier}";`);
@@ -217,9 +220,12 @@ const tailessPostcss = Object.assign(
         // The breakpoint keys are compiled in, so a `@theme` that moves them is
         // invisible to the source scan — and three of the four ways it can are
         // silent. This is the one place the CSS itself is in hand.
-        const declared = await collectBreakpoints(themeSource(root), from);
+        const theme = await collectTheme(themeSource(root), from);
         reportDiagnostics(
-          themeDiagnostics(declared).map((d) => ({ ...d, file: from ?? "your stylesheet" })),
+          themeDiagnostics(theme.breakpoints, theme.variants).map((d) => ({
+            ...d,
+            file: from ?? "your stylesheet",
+          })),
           process.cwd(),
         );
 

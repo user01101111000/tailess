@@ -1,6 +1,13 @@
 /// <reference types="node" />
 import { dirname, isAbsolute, resolve } from "node:path";
-import { screenKeys, screens } from "../constants.js";
+import {
+  containerKeys,
+  maxContainerKeys,
+  maxScreenKeys,
+  screenKeys,
+  screens,
+  stateKeys,
+} from "../constants.js";
 import type { Diagnostic } from "../extract/diagnose.js";
 import { importSpecifiers, readStylesheet } from "./entry.js";
 
@@ -78,6 +85,46 @@ const stringLiteral = /"[^"\n]*"|'[^'\n]*'/g;
  * none at all rather than a confident one drawn from half the inputs.
  */
 const configAtRule = /@config(?=[\s"'])/i;
+
+/**
+ * `@custom-variant <name>`, in either the `(…)` or the `{ … @slot; }` form.
+ *
+ * Only the name is needed: whatever the body says, Tailwind registers it as a static
+ * variant, and a static variant tailess has no key for is a compile error on a class
+ * that works perfectly.
+ */
+const customVariantAtRule = /@custom-variant\s+([\w-]+)/g;
+
+/** Every key `ss` accepts, for deciding whether a custom variant is already one. */
+const everyKey = new Set<string>([
+  ...stateKeys,
+  ...screenKeys,
+  ...maxScreenKeys,
+  ...containerKeys,
+  ...maxContainerKeys,
+]);
+
+/**
+ * Every `@custom-variant` name `css` defines that tailess has no key for.
+ *
+ * A redefinition of a name that *is* a key is deliberately not reported: Tailwind
+ * simply replaces the variant, the key still resolves, and the class still works —
+ * whether the new meaning is what the author wanted is not something this can judge,
+ * and guessing would fire a warning at working CSS.
+ */
+export function customVariantsIn(source: string): string[] {
+  if (hasJsConfig(source)) return [];
+  const css = source.replace(comment, "").replace(stringLiteral, "");
+  const found: string[] = [];
+
+  customVariantAtRule.lastIndex = 0;
+  for (let m = customVariantAtRule.exec(css); m !== null; m = customVariantAtRule.exec(css)) {
+    const name = m[1] as string;
+    if (!everyKey.has(name) && !found.includes(name)) found.push(name);
+  }
+
+  return found;
+}
 
 /** True if the project defers part of its theme to a JS config. */
 export function hasJsConfig(css: string): boolean {
@@ -159,19 +206,28 @@ export function breakpointsIn(source: string): BreakpointDecl[] {
  * file's text is always the later one. Getting this backwards made a later import
  * that restores a default look like drift.
  */
-export async function collectBreakpoints(
+export interface CollectedTheme {
+  /** `--breakpoint-*` declarations, in the order the browser would apply them. */
+  breakpoints: BreakpointDecl[];
+  /** `@custom-variant` names tailess has no key for. */
+  variants: string[];
+}
+
+export async function collectTheme(
   css: string,
   file?: string,
   depth = maxDepth,
   seen: Set<string> = new Set(),
-): Promise<BreakpointDecl[]> {
-  if (hasJsConfig(css)) return [];
-  const own = breakpointsIn(css);
+): Promise<CollectedTheme> {
+  const empty: CollectedTheme = { breakpoints: [], variants: [] };
+  if (hasJsConfig(css)) return empty;
+
+  const own: CollectedTheme = { breakpoints: breakpointsIn(css), variants: customVariantsIn(css) };
   if (depth <= 0 || !file) return own;
 
   // Comments stripped here too, so a commented-out `@import` is not followed into a
   // file whose theme has nothing to do with this build.
-  const imported: BreakpointDecl[] = [];
+  const imported: CollectedTheme = { breakpoints: [], variants: [] };
   const base = dirname(resolve(file));
   for (const specifier of importSpecifiers(css.replace(comment, ""))) {
     if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue;
@@ -180,13 +236,26 @@ export async function collectBreakpoints(
     seen.add(path);
     const nested = await readStylesheet(path);
     if (nested === undefined) continue;
-    // One `@config` anywhere in the chain silences the whole answer, not just its
-    // own file: the breakpoints it sets would apply to every one of them.
-    if (hasJsConfig(nested)) return [];
-    imported.push(...(await collectBreakpoints(nested, path, depth - 1, seen)));
+    // One `@config` anywhere in the chain silences the whole answer, not just its own
+    // file: what it sets would apply to every one of them.
+    if (hasJsConfig(nested)) return empty;
+    const from = await collectTheme(nested, path, depth - 1, seen);
+    imported.breakpoints.push(...from.breakpoints);
+    imported.variants.push(...from.variants);
   }
 
-  return [...imported, ...own];
+  return {
+    breakpoints: [...imported.breakpoints, ...own.breakpoints],
+    variants: [...new Set([...imported.variants, ...own.variants])],
+  };
+}
+
+/** Just the breakpoints, for callers that want nothing else. */
+export async function collectBreakpoints(
+  css: string,
+  file?: string,
+): Promise<BreakpointDecl[]> {
+  return (await collectTheme(css, file)).breakpoints;
 }
 
 /** True for the value Tailwind reads as "remove this". */
@@ -232,8 +301,22 @@ function resolveBreakpoints(declared: readonly BreakpointDecl[]): Map<string, st
  * Nothing is reported for a theme that merely restates a default, or that customises
  * anything other than the breakpoints.
  */
-export function themeDiagnostics(declared: readonly BreakpointDecl[]): Diagnostic[] {
+export function themeDiagnostics(
+  declared: readonly BreakpointDecl[],
+  variants: readonly string[] = [],
+): Diagnostic[] {
   const out: Diagnostic[] = [];
+
+  for (const name of variants) {
+    out.push({
+      kind: "theme-drift",
+      message:
+        `your CSS defines the "${name}" variant, which tailess has no key for, so ` +
+        `ss({ "${name}": … }) will not compile. The class itself works — reach it with ` +
+        `withPrefix("${name}", …).`,
+    });
+  }
+
   if (declared.length === 0) return out;
 
   const resolved = resolveBreakpoints(declared);

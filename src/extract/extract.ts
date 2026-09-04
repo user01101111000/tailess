@@ -416,6 +416,24 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       return;
     }
 
+    // has(":checked", "…") / notHas(…) / inside(".dark", "…") — an arbitrary selector,
+    // escaped through the same function the runtime uses. The plain state spellings
+    // (`has-checked`, `in-focus`) are keys and need no case here.
+    case "has":
+    case "notHas":
+    case "inside": {
+      if (args.length < 2) return;
+      const variant = name === "has" ? "has" : name === "notHas" ? "not-has" : "in";
+      const selectors = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        selectors.map((selector) => `${variant}-[${escapeCondition(selector)}]`),
+        add,
+        follow,
+      );
+      return;
+    }
+
     case "supports":
     case "notSupports": {
       if (args.length < 2) return;

@@ -189,6 +189,18 @@ export type GroupStateKey = `group-${ElementStateKey}`;
 export type PeerStateKey = `peer-${ElementStateKey}`;
 
 /**
+ * A descendant-state variant, e.g. `has-checked`: the element **contains** one in
+ * that state. Compounds with exactly the same 36 states as `group-*` and `peer-*`.
+ */
+export type HasStateKey = `has-${ElementStateKey}`;
+
+/**
+ * An ancestor-state variant, e.g. `in-focus`: the element is **inside** one in that
+ * state. The complement of {@link HasStateKey}, over the same 36.
+ */
+export type InStateKey = `in-${ElementStateKey}`;
+
+/**
  * The variants Tailwind lets you negate. Wider than the `group-*` / `peer-*` set:
  * a media query can be negated (`not-dark`) and so can a breakpoint (`not-md`,
  * which is `max-md` said the other way round), while a pseudo-element cannot.
@@ -207,6 +219,8 @@ export type StateKey =
   | StandaloneStateKey
   | GroupStateKey
   | PeerStateKey
+  | HasStateKey
+  | InStateKey
   | NotStateKey;
 
 /**
@@ -214,9 +228,10 @@ export type StateKey =
  * pseudo-elements, media queries, the child combinators, and the static
  * `group-*` / `peer-*` pairs.
  *
- * Variants that take a value (`data-*`, `aria-*`, `supports-*`, `has-*`, `not-*`,
- * `in-*`, `min-*`/`max-*` with an arbitrary length, …) are not listed: use the
- * {@link data} / {@link aria} helpers, or `withPrefix` for anything else.
+ * The value-taking spellings of these (`has-[…]`, `in-[…]`, `data-*`, `aria-*`,
+ * `supports-*`, `min-*`/`max-*` with an arbitrary length, …) are not listed, since
+ * their values cannot be enumerated: use the {@link has} / {@link inside} /
+ * {@link data} / {@link aria} / {@link supports} helpers, or `withPrefix`.
  *
  * The test suite enumerates Tailwind's own variant registry and asserts this list
  * matches it exactly — in both directions — so an autocompleted key always
@@ -228,6 +243,8 @@ export const stateKeys: readonly StateKey[] = [
   ...standaloneStates,
   ...elementStates.map((state): GroupStateKey => `group-${state}`),
   ...elementStates.map((state): PeerStateKey => `peer-${state}`),
+  ...elementStates.map((state): HasStateKey => `has-${state}`),
+  ...elementStates.map((state): InStateKey => `in-${state}`),
   ...negatableStates.map((state): NotStateKey => `not-${state}`),
 ];
 

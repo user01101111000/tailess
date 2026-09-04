@@ -18,7 +18,7 @@ export interface RawCall {
  * identifiers — don't match, while `st.ss(` still does.
  */
 const callPattern =
-  /(?<![\w$])(ss|responsive|on|until|between|data|aria|withPrefix|supports|notSupports|group|peer|container)\s*\(/g;
+  /(?<![\w$])(ss|responsive|on|until|between|data|aria|withPrefix|supports|notSupports|group|peer|container|has|notHas|inside)\s*\(/g;
 
 /**
  * A second instance of {@link callPattern} for {@link outerCalls}.

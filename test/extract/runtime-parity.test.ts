@@ -7,8 +7,11 @@ import {
   container,
   data,
   group,
+  has,
+  inside,
   match,
   notSupports,
+  notHas,
   on,
   peer,
   responsive,
@@ -46,6 +49,9 @@ const helpers = {
   group,
   peer,
   container,
+  has,
+  notHas,
+  inside,
 } as const;
 
 /** Run `src` with `env` bound, using the same text the scanner was given. */
@@ -121,8 +127,8 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `data("open", false, "hidden")` },
 
   // A helper called inside a bucket has already built its own prefix, so the
-  // bucket's key stacks on top of it. `has-*` takes a value and so is not one of
-  // the keys, which leaves `withPrefix` with no other spelling.
+  // bucket's key stacks on top of it. `has-[…]` takes a selector, so it is the one
+  // spelling with no key of its own — the plain `has-checked` form is a key.
   { src: `ss({ md: withPrefix("has-[:checked]", "underline") })` },
   { src: `ss({ md: on("hover", "underline") })` },
   { src: `ss({ md: aria("expanded", "rotate-180") })` },
@@ -190,6 +196,21 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `until("lg", container("sidebar", "@md", "grid"))` },
   { src: `group("row", "hover", on("focus", "underline"))` },
   { src: `ss({ dark: { md: peer("email", "invalid", "text-red-600") } })` },
+
+  // An arbitrary selector carries the same space trap a feature query does, and the
+  // plain-state spellings (`has-checked`, `in-focus`) are keys rather than calls.
+  { src: `has(":checked", "bg-blue-50")` },
+  { src: `has("> img", "p-0")` },
+  { src: `has(">  img", "p-1")` },
+  { src: `has("input[type=text]", "ring-2")` },
+  { src: `notHas(":checked", "opacity-50")` },
+  { src: `inside(".dark", "text-white")` },
+  { src: `inside("[data-theme=dark]", "bg-black")` },
+  { src: `has(":checked", { underline: yes })`, env: { yes: true } },
+  { src: `ss({ md: has(":checked", "underline") })` },
+  { src: `on("dark", has("> img", "p-2"))` },
+  { src: `has(":checked", on("hover", "underline"))` },
+  { src: `ss({ "has-checked": "underline", "in-focus": "ring-2" })` },
 
   // Every spelling of a numeric literal, since the runtime interpolates the *number*.
   { src: `data("count", 1e3, "opacity-100")` },

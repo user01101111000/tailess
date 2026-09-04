@@ -3,7 +3,9 @@
 ---
 
 Add `supports` / `notSupports` for CSS feature queries, `group` / `peer` / `container` for
-the named variants, and `vars` for the values a class name cannot carry.
+the named variants, `has` / `notHas` / `inside` for the selector ones, and `vars` for the
+values a class name cannot carry — plus the `has-*` and `in-*` key families, which take
+the key count from 233 to 305, and a `tailess check` CLI that proves the whole thing.
 
 **Feature queries** were reachable only as `withPrefix("supports-[display:grid]", …)`,
 which put the one hard part on the caller: a class name cannot contain a space, so the
@@ -75,6 +77,29 @@ your own by that name, and a build warning fired at someone else's code is worse
 Such a match costs nothing — its candidates resolve to no utility, and Tailwind drops
 them — but only because of the third scanner fix below, which is what makes that true.
 
+**`has` and `in`** were the last two compound variants with no coverage at all. Tailwind
+compounds both with exactly the 36 states `group-*` and `peer-*` use, so they are key
+families rather than helpers: `ss({ "has-checked": … })` for a descendant in that state,
+`ss({ "in-focus": … })` for an ancestor. That takes the key count from 233 to 305, and the
+suite that compares tailess' list against Tailwind's own variant registry now proves both
+families in both directions — the same guard `group-*` and `peer-*` have always had.
+
+The selector form has no enumerable values, so it gets helpers, and they carry the space
+trap a class name cannot hold:
+
+```ts
+has("> img", "p-0");               // → "has-[>_img]:p-0"
+has("input[type=text]", "ring-2"); // → "has-[input[type=text]]:ring-2"
+notHas(":checked", "opacity-50");  // → "not-has-[:checked]:opacity-50"
+inside(".dark", "text-white");     // → "in-[.dark]:text-white"
+```
+
+`inside` is named that way because `in` is a reserved word. Which negation you get is
+worth stating, because both spellings compile and they are not the same thing:
+`not-has-[:checked]` is `:not(:has(…))` — no checked descendant — while `has-not-[:checked]`
+is `:has(:not(…))`, a descendant that is not checked. `notHas` builds the first; the second
+is `has(":not(:checked)", …)`.
+
 **`vars`** answers a question the package could not answer before. Every class tailess
 produces has to be enumerable at build time, so the values inside it are literals in your
 source. A width that comes from data is not one, and no spelling of ``w-[`${percent}%`]``
@@ -124,6 +149,32 @@ And a whitespace escape is now decoded rather than merely stripped of its backsl
 matches no utility, while the runtime split the real tab and emitted both. Any class
 written with `\t`, `\n` or `\r` in it lost its CSS, under any helper.
 
+**`tailess check`** is new, and it is the first thing here that can fail a build. Everything
+else in this package proves the *bridge* — the scanner enumerates what the runtime builds,
+the plugin hands the list to Tailwind. Nothing proved the far end: that Tailwind actually
+generated a rule. A `@theme` that dropped a breakpoint, a `@config` the theme check
+deliberately stays quiet about, an arbitrary value Tailwind rejects, or a future Tailwind
+that renames a variant all leave the bridge intact and the element unstyled.
+
+```
+$ npx tailess check
+[tailess] 1 of 3 runtime-built classes reach the element with no rule behind them:
+
+  md:p-4
+    "p-4" resolves on its own, so the variant is what fails.
+```
+
+It compiles the project with the consumer's own Tailwind — resolved from their tree, not
+this package's — and exits 1 when a class has no rule, so it can gate CI.
+
+The design turns on one comparison. The scanner over-approximates on purpose, so demanding
+a rule for every candidate would report a mountain of junk: `md:state` and `md:open` from a
+`data()` call's name and value, which the sweep reads as strings like any other. But junk
+does not resolve bare either, so the check asks whether the *utility inside* each class
+works on its own first. `p-4` resolves and `md:p-4` does not, so the variant is what broke;
+`state` resolves as nothing, so it was never a class. Run against a file exercising every
+helper in the package, it reports zero.
+
 `vars` produces no class names, so it is deliberately absent from the scanner's name list,
 from the prettier `tailwindFunctions` list, and from the plugin's concerns entirely.
 
@@ -155,12 +206,20 @@ Reporting an *added* breakpoint is the one case here that is informational rathe
 broken: that CSS works. It is reported because the compile error from `ss({ "3xl": … })`
 says nothing about `withPrefix("3xl", …)`, which does.
 
-Not covered: a `@config` pointing at a v3-style JS config can set `theme.screens` too. That
-is a JavaScript file this never opens, so a project on `@config` gets no answer rather than
-a wrong one.
+`@custom-variant` is read on the same pass. Defining one gives a working variant with no
+key, so `ss({ midnight: … })` will not compile and the compile error says nothing about
+`withPrefix("midnight", …)`, which does work — the same shape as an added breakpoint.
+Redefining a name that already is a key is deliberately not reported: Tailwind replaces the
+variant, the key still resolves, and whether the new meaning was intended is not something
+a build check can judge.
 
-The runtime grows 2,855 minified characters, about 1,143 gzipped — 2.8 kB to 4.0 kB — and
+A `@config` pointing at a v3-style JS config can set `theme.screens` and register variants
+of its own. That is a JavaScript file this never opens, so one anywhere in the stylesheet
+chain silences the whole check — no answer rather than a confidently wrong one.
+
+The runtime grows 3,624 minified characters, about 1,344 gzipped — 2.8 kB to 4.2 kB — and
 the size budget was raised deliberately to match. Most of that is warning text. Note what
 the number is and is not: the package sets `sideEffects: false`, so it is the cost of
-importing everything. A project using only `ss` and `cn` bundles 5,123 characters, exactly
-as before, and one that adds `vars` pays 488.
+importing everything. A project using only `ss` and `cn` bundles 5,170 characters — 47 of
+them the two new key families, which `ss` needs for its emission order — and one that adds
+`vars` pays 488.

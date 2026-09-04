@@ -14,7 +14,7 @@
 
 <a href="#requirements"><img alt="Tailwind CSS v4" src="https://img.shields.io/badge/Tailwind_CSS-v4-38BDF8?style=flat-square&labelColor=0A0A0A&logo=tailwindcss&logoColor=white"></a>
 <a href="#api"><img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&labelColor=0A0A0A&logo=typescript&logoColor=white"></a>
-<a href="#keys"><img alt="233 typed keys" src="https://img.shields.io/badge/typed_keys-233-EC4899?style=flat-square&labelColor=0A0A0A"></a>
+<a href="#keys"><img alt="305 typed keys" src="https://img.shields.io/badge/typed_keys-305-EC4899?style=flat-square&labelColor=0A0A0A"></a>
 <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8B5CF6?style=flat-square&labelColor=0A0A0A"></a>
 
 </div>
@@ -87,6 +87,7 @@ className={ss(
   - [`data` / `aria` — attribute variants](#data--aria--attribute-variants)
   - [`supports` / `notSupports` — feature queries](#supports--notsupports--feature-queries)
   - [`group` / `peer` / `container` — named variants](#group--peer--container--named-variants)
+  - [`has` / `notHas` / `inside` — selector variants](#has--nothas--inside--selector-variants)
   - [`match` — exhaustive variant selection](#match--exhaustive-variant-selection)
   - [`withPrefix` — the escape hatch](#withprefix--the-escape-hatch)
   - [`vars` — values a class cannot carry](#vars--values-a-class-cannot-carry)
@@ -95,6 +96,7 @@ className={ss(
 - [Framework examples](#framework-examples)
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
 - [Build-time checks](#build-time-checks)
+- [Checking your build](#checking-your-build)
 - [Plugin options](#plugin-options)
 - [Performance](#performance)
   - [Bundle size](#bundle-size)
@@ -114,7 +116,7 @@ className={ss(
 
 🎯 &nbsp;**Typed against Tailwind itself**
 
-233 keys, every one verified against the real Tailwind compiler in CI.
+305 keys, every one verified against the real Tailwind compiler in CI.
 
 </td>
 <td width="50%" valign="top">
@@ -146,7 +148,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 
 🪶 &nbsp;**Small**
 
-4.0 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
+4.2 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
 [What the badge counts →](#bundle-size)
 
 </td>
@@ -260,7 +262,7 @@ the classes inside them. For that, point Tailwind's own formatter at the helpers
   "tailwindFunctions": [
     "ss", "cn", "responsive", "on", "until", "between",
     "data", "aria", "supports", "notSupports", "match", "withPrefix",
-    "group", "peer", "container"
+    "group", "peer", "container", "has", "notHas", "inside"
   ]
 }
 ```
@@ -295,7 +297,7 @@ Every helper is a plain function. No factory, no instance, no config object.
 import {
   ss, cn, responsive, on, until, between,
   data, aria, supports, notSupports, match, withPrefix, vars,
-  group, peer, container,
+  group, peer, container, has, notHas, inside,
 } from "tailess";
 ```
 
@@ -309,6 +311,7 @@ import {
 | [`data`](#data--aria--attribute-variants) / [`aria`](#data--aria--attribute-variants) | attribute variants, for headless UI | ✅ |
 | [`supports`](#supports--notsupports--feature-queries) / [`notSupports`](#supports--notsupports--feature-queries) | feature queries, spaces escaped for you | ✅ |
 | [`group`](#group--peer--container--named-variants) / [`peer`](#group--peer--container--named-variants) / [`container`](#group--peer--container--named-variants) | the *named* group, peer and container variants | ✅ |
+| [`has`](#has--nothas--inside--selector-variants) / [`notHas`](#has--nothas--inside--selector-variants) / [`inside`](#has--nothas--inside--selector-variants) | `has-[…]` and `in-[…]` from a selector | ✅ |
 | [`match`](#match--exhaustive-variant-selection) | exhaustive lookup by a discriminant | — |
 | [`withPrefix`](#withprefix--the-escape-hatch) | any variant tailess doesn't model | ✅ |
 | [`vars`](#vars--values-a-class-cannot-carry) | custom properties, for values no class can hold | — |
@@ -534,6 +537,28 @@ digit, and cannot be `none`, `and`, `or`, `not` or a CSS-wide keyword.
 
 Both are checked in development, so a name that cannot work says so.
 
+### `has` / `notHas` / `inside` — selector variants
+
+For a plain state these are **keys**, not calls: `has-checked` and `in-focus` cover the
+same 36 states `group-*` and `peer-*` do, so write those in `ss` directly. These helpers
+are for the other form — an arbitrary selector.
+
+```ts
+has(":checked", "bg-blue-50");        // → "has-[:checked]:bg-blue-50"
+has("> img", "p-0");                  // → "has-[>_img]:p-0"
+has("input[type=text]", "ring-2");    // → "has-[input[type=text]]:ring-2"
+notHas(":checked", "opacity-50");     // → "not-has-[:checked]:opacity-50"
+inside(".dark", "text-white");        // → "in-[.dark]:text-white"
+```
+
+Write the selector the way CSS spells it; the space is escaped for you. `inside` is named
+that way because `in` is a reserved word.
+
+Mind which negation you want. `notHas(":checked", …)` builds `not-has-[:checked]:`, which
+is `:not(:has(…))` — *no* checked descendant. Tailwind also accepts `has-not-[:checked]`,
+which is `:has(:not(…))` — a descendant that is *not* checked. Both compile and they mean
+different things; for the second, write `has(":not(:checked)", …)`.
+
 ### `match` — exhaustive variant selection
 
 Map a discriminant to a class value. Every case must be covered, so a missing one is a
@@ -560,9 +585,9 @@ For variants tailess doesn't model as keys.
 
 ```ts
 withPrefix("nth-[3n+1]", "bg-neutral-50");      // → "nth-[3n+1]:bg-neutral-50"
-withPrefix("has-[:checked]", "bg-blue-50");     // → "has-[:checked]:bg-blue-50"
+withPrefix("nth-[3n+1]", "border-t");           // → "nth-[3n+1]:border-t"
 withPrefix("group-[.open]", "rotate-90");       // → "group-[.open]:rotate-90"
-withPrefix("in-[.dark]", "text-white");         // → "in-[.dark]:text-white"
+withPrefix("supports-not-[display:grid]", "block");
 ```
 
 ### `vars` — values a class cannot carry
@@ -601,8 +626,8 @@ Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `Sta
 
 ## Keys
 
-`ss` accepts `base` plus Tailwind's own keys — **233 in total**, and nothing else, so
-autocomplete is exhaustive and a typo can't compile. The same 233 are available inside a
+`ss` accepts `base` plus Tailwind's own keys — **305 in total**, and nothing else, so
+autocomplete is exhaustive and a typo can't compile. The same 305 are available inside a
 nested group, which is how a compound variant is spelled.
 
 | Group | # | Keys |
@@ -622,12 +647,15 @@ nested group, which is how a compound variant is spelled.
 | Descendants | 2 | `*` direct children · `**` all descendants |
 | `group-*` | 36 | the element's own state — the four state rows plus `rtl`/`ltr` — matched on the **parent**: `group-hover`, `group-checked`, … |
 | `peer-*` | 36 | the same 36, matched on a **sibling**: `peer-hover`, `peer-checked`, … |
+| `has-*` | 36 | the same 36, matched on a **descendant**: `has-checked`, `has-focus`, … |
+| `in-*` | 36 | the same 36, matched on an **ancestor**: `in-focus`, `in-hover`, … |
 | `not-*` | 58 | those same 36, plus every media query and breakpoint: `not-hover`, `not-dark`, `not-md`, … |
 
-Anything with a value of its own (`data-*`, `aria-*`, `supports-*`, `has-*`, `in-*`,
-`nth-*`, arbitrary `min-[…]`) is deliberately absent — use
+Anything with a value of its own (`data-*`, `aria-*`, `supports-[…]`, `has-[…]`,
+`in-[…]`, `nth-*`, arbitrary `min-[…]`) is deliberately absent — use
 [`data`/`aria`](#data--aria--attribute-variants),
 [`supports`](#supports--notsupports--feature-queries),
+[`has`/`notHas`/`inside`](#has--nothas--inside--selector-variants),
 [`group`/`peer`/`container`](#group--peer--container--named-variants) for the named
 forms, or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
 `stateKeys` and is regenerated and re-verified against the Tailwind compiler in CI.
@@ -748,6 +776,7 @@ data("state", open ? "open" : "closed", "p-2")      // both values
 data("level", 2, "p-2")                             // numbers and booleans
 supports("display: grid", "grid")                   // the space is escaped for you
 group("row", "hover", "underline")                  // group-hover/row:underline
+has("> img", "p-0")                                 // the space is escaped for you
 ```
 
 ❌ **Not seen** — the value isn't in the source to read:
@@ -802,13 +831,13 @@ The plugin reports what it can prove wrong from your source, while the project b
 
 Six things are checked: two conflicting utilities in **one** string, a `between` range no
 viewport can satisfy, an empty prefix, whitespace inside a variant, a feature query no
-class name can carry, and a `@theme` that moves the breakpoints out from under the keys.
+class name can carry, and CSS that moves the variants out from under the keys.
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
 
 The last one is the only check that reads your **CSS** rather than your source, and the
-only one with a case that is *informational* rather than broken. The breakpoint keys are
+only one with cases that are *informational* rather than broken. The breakpoint keys are
 compiled into the package, so `--breakpoint-sm: initial` leaves `ss({ sm: … })` compiling
 and emitting a class nothing generates a rule for, `--breakpoint-md: 50rem` leaves
 `screens.md` returning the old width to your JS, and the resets `--breakpoint-*: initial`
@@ -817,14 +846,57 @@ reported too — that CSS works, so this is the exception to the rule above, and
 there because the compile error you get from `ss({ "3xl": … })` says nothing about
 `withPrefix("3xl", …)`, which does.
 
-A `@config` pointing at a v3-style JS config can set `theme.screens` as well. That is a
-JavaScript file this never opens, so a project on `@config` gets no answer here rather
-than a wrong one.
+`@custom-variant` is read the same way. Defining one gives you a variant that works —
+`midnight:bg-black` — but no key, so `ss({ midnight: … })` will not compile; the warning
+names `withPrefix("midnight", …)`, which does. Redefining a name that *is* a key is not
+reported: Tailwind just replaces the variant and the key still resolves.
+
+A `@config` pointing at a v3-style JS config can set `theme.screens` and add variants of
+its own. That is a JavaScript file this never opens, so one anywhere in your stylesheet
+chain silences this check entirely — no answer rather than a wrong one.
 
 The runtime warns about most of these too, but only once the line renders, in a browser,
 with the console open. A branch that did not run during development ships either way —
 these run on every build, for every call site, and show up in CI. They warn; they never
-fail the build.
+fail the build — [`tailess check`](#checking-your-build) is the one that does.
+
+## Checking your build
+
+The plugin guarantees the *bridge*: it enumerates the classes tailess builds at runtime
+and hands them to Tailwind. It cannot guarantee the far end — that Tailwind generated a
+rule for each one. A `@theme` that dropped a breakpoint, a `@config` this deliberately
+stays quiet about, or an arbitrary value Tailwind rejects all leave the bridge intact and
+the element unstyled.
+
+`tailess check` compiles your project for real and looks:
+
+```bash
+npx tailess check
+```
+
+```
+[tailess] 1 of 3 runtime-built classes reach the element with no rule behind them:
+
+  md:p-4
+    "p-4" resolves on its own, so the variant is what fails.
+```
+
+It exits `1` when something is wrong, so it can gate a build:
+
+```yaml
+- run: npx tailess check
+```
+
+| | |
+| --- | --- |
+| `--content <dir>` | where your source lives. Repeatable. Defaults to the working directory. |
+| `--css <file>` | your Tailwind entry stylesheet. Found automatically when it sits inside a `--content` root. |
+
+The scanner over-approximates on purpose, so most of what it produces is not a class at
+all. Rather than demand a rule for every candidate — which would report all of that — the
+check asks whether the *utility inside* each class resolves on its own first. `p-4` works
+and `md:p-4` does not, so something between the two is broken; `md:state` has no working
+half, so it was never a class and is not reported.
 
 ## Plugin options
 
@@ -875,19 +947,19 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 
 ### Bundle size
 
-The badge at the top reads **12.4 kB** because it measures the whole dependency tree.
+The badge at the top reads **12.6 kB** because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
 | `tailwind-merge` | ~8.4 kB |
-| tailess itself | **~4.0 kB** |
-| **Total** | **~12.4 kB** |
+| tailess itself | **~4.2 kB** |
+| **Total** | **~12.6 kB** |
 
 `tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
 already pull it in. If yours is one of them your bundler keeps the single shared copy,
-and adding tailess costs the 4.0 kB, not the 12.4.
+and adding tailess costs the 4.2 kB, not the 12.6.
 
 ## Troubleshooting
 

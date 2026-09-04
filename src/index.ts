@@ -2,6 +2,8 @@ export type {
   ContainerKey,
   ElementStateKey,
   GroupStateKey,
+  HasStateKey,
+  InStateKey,
   MaxContainerKey,
   MaxScreenKey,
   NegatableStateKey,
@@ -23,6 +25,7 @@ export {
 export type { ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";
+export { has, inside, notHas } from "./utils/has.js";
 export { match } from "./utils/match.js";
 export type { AnyContainerKey } from "./utils/named.js";
 export { container, group, peer } from "./utils/named.js";

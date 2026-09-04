@@ -7,9 +7,12 @@ import {
   container,
   data,
   group,
+  has,
+  inside,
   match,
   maxScreenKeys,
   notSupports,
+  notHas,
   on,
   peer,
   responsive,
@@ -42,6 +45,9 @@ describe("public API", () => {
       group,
       peer,
       container,
+      has,
+      notHas,
+      inside,
     ]) {
       expect(typeof fn).toBe("function");
     }

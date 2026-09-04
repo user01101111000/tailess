@@ -41,6 +41,7 @@ const warnings = [
   "literal underscore",
   "not a CSS custom property",
   "letters, digits",
+  "empty selector",
   "empty feature query",
   "cannot appear in a class name",
 ];
@@ -81,11 +82,18 @@ describe("the browser bundle", () => {
     // prelude where CSS demands a <custom-ident>. That second alphabet, and the
     // keyword list that goes with it, is most of the cost here.
     //
+    // Raised again to 10,000 for the `has-*` / `in-*` key families and the
+    // `has`/`notHas`/`inside` helpers: 9,020 -> 9,789 chars, 3,978 -> 4,179 gzipped.
+    // Tailwind compounds both with exactly the 36 states `group-*` and `peer-*` use,
+    // so the keys derive from one list rather than being written out, and 72 of them
+    // cost 47 characters — which is the whole of what a consumer importing only `ss`
+    // and `cn` pays, since `ss` needs the key order. The rest is the helpers.
+    //
     // Note what this number is and isn't: the package sets `sideEffects: false`, so
     // it is the cost of importing *everything*. A consumer using only `ss` and `cn`
-    // bundles 5,123 chars — unchanged by any of this — and one adding `vars` pays
-    // 488. Measured, not assumed.
-    expect(code.length).toBeLessThan(9_300);
+    // bundles 5,170 chars — of which 47 are the two new key families — and one
+    // adding `vars` pays 488. Measured, not assumed.
+    expect(code.length).toBeLessThan(10_000);
   });
 
   it("pulls in no Node builtins", async () => {
