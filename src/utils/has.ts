@@ -1,47 +1,13 @@
+import { warnUnusableValue } from "../internal/arbitrary.js";
 import { escapeCondition } from "../internal/condition.js";
 import { isDev } from "../internal/env.js";
 import type { ClassValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
 
-/** Selectors already inspected, so a warning in a render loop is printed once. */
-const checkedSelectors = new Set<string>();
-
-/** Characters a class name cannot carry, so the build never enumerates them. */
-const unusableChar = /["{}\\;]/;
-
-/**
- * Warn, in dev, about a selector that cannot become a working class.
- *
- * Both cases are silent otherwise: the class is built and lands on the element, and
- * either nothing generates a rule for it or the build cannot enumerate it at all.
- */
-function warnUnusableSelector(helper: string, selector: string): void {
-  const seen = `${helper} ${selector}`;
-  if (checkedSelectors.has(seen)) return;
-  checkedSelectors.add(seen);
-
-  if (selector === "") {
-    console.warn(
-      `[tailess] ${helper}() was given an empty selector, which builds "…-[]:" — a ` +
-        "class nothing ever generates a rule for.",
-    );
-    return;
-  }
-  // The candidate list is written into a stylesheet, so a selector carrying one of
-  // these cannot be enumerated: the class reaches the element with no rule behind it.
-  if (unusableChar.test(selector) || (selector.match(/'/g) ?? []).length % 2 === 1) {
-    console.warn(
-      `[tailess] the selector "${selector}" contains one of \`" { } \\ ;\` or an ` +
-        "unclosed `'`, which cannot appear in a class name, so the build generates no " +
-        "rule for it.",
-    );
-  }
-}
-
 /** Build the prefix, checking the selector in development. */
 function prefixFor(helper: string, selector: string, variant: string): string {
-  if (isDev) warnUnusableSelector(helper, selector.trim());
+  if (isDev) warnUnusableValue(helper, "selector", selector.trim());
   return `${variant}-[${escapeCondition(selector)}]`;
 }
 

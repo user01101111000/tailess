@@ -88,7 +88,9 @@ className={ss(
   - [`supports` / `notSupports` — feature queries](#supports--notsupports--feature-queries)
   - [`group` / `peer` / `container` — named variants](#group--peer--container--named-variants)
   - [`has` / `notHas` / `inside` — selector variants](#has--nothas--inside--selector-variants)
+  - [`nth` — position variants](#nth--position-variants)
   - [`match` — exhaustive variant selection](#match--exhaustive-variant-selection)
+  - [`variants` — component recipes](#variants--component-recipes)
   - [`withPrefix` — the escape hatch](#withprefix--the-escape-hatch)
   - [`vars` — values a class cannot carry](#vars--values-a-class-cannot-carry)
   - [Also exported](#also-exported)
@@ -148,7 +150,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 
 🪶 &nbsp;**Small**
 
-4.2 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
+4.6 kB of its own code, one dependency, ESM + CJS, tree-shakeable.
 [What the badge counts →](#bundle-size)
 
 </td>
@@ -262,7 +264,8 @@ the classes inside them. For that, point Tailwind's own formatter at the helpers
   "tailwindFunctions": [
     "ss", "cn", "responsive", "on", "until", "between",
     "data", "aria", "supports", "notSupports", "match", "withPrefix",
-    "group", "peer", "container", "has", "notHas", "inside"
+    "group", "peer", "container", "has", "notHas", "inside",
+    "nth", "nthLast", "nthOfType", "nthLastOfType"
   ]
 }
 ```
@@ -298,6 +301,7 @@ import {
   ss, cn, responsive, on, until, between,
   data, aria, supports, notSupports, match, withPrefix, vars,
   group, peer, container, has, notHas, inside,
+  nth, nthLast, nthOfType, nthLastOfType, variants,
 } from "tailess";
 ```
 
@@ -312,7 +316,9 @@ import {
 | [`supports`](#supports--notsupports--feature-queries) / [`notSupports`](#supports--notsupports--feature-queries) | feature queries, spaces escaped for you | ✅ |
 | [`group`](#group--peer--container--named-variants) / [`peer`](#group--peer--container--named-variants) / [`container`](#group--peer--container--named-variants) | the *named* group, peer and container variants | ✅ |
 | [`has`](#has--nothas--inside--selector-variants) / [`notHas`](#has--nothas--inside--selector-variants) / [`inside`](#has--nothas--inside--selector-variants) | `has-[…]` and `in-[…]` from a selector | ✅ |
+| [`nth`](#nth--position-variants) and its three siblings | `:nth-child()` and friends, by position or expression | ✅ |
 | [`match`](#match--exhaustive-variant-selection) | exhaustive lookup by a discriminant | — |
+| [`variants`](#variants--component-recipes) | a component recipe, with `ss` maps as options | ✅ |
 | [`withPrefix`](#withprefix--the-escape-hatch) | any variant tailess doesn't model | ✅ |
 | [`vars`](#vars--values-a-class-cannot-carry) | custom properties, for values no class can hold | — |
 
@@ -559,6 +565,26 @@ is `:not(:has(…))` — *no* checked descendant. Tailwind also accepts `has-not
 which is `:has(:not(…))` — a descendant that is *not* checked. Both compile and they mean
 different things; for the second, write `has(":not(:checked)", …)`.
 
+### `nth` — position variants
+
+A number is a position, counting from 1. A string is an `An+B` expression or a keyword,
+and goes in brackets — spaces and all, since they are escaped for you.
+
+```ts
+nth(3, "bg-neutral-50");        // → "nth-3:bg-neutral-50"
+nth("3n + 1", "border-t");      // → "nth-[3n_+_1]:border-t"
+nth("-n+3", "font-bold");       // → "nth-[-n+3]:font-bold"
+nthLast(1, "border-b-0");       // → "nth-last-1:border-b-0"
+nthOfType("odd", "bg-white");   // → "nth-of-type-[odd]:bg-white"
+nthLastOfType(1, "mb-0");       // → "nth-last-of-type-1:mb-0"
+```
+
+`odd` and `even` are their own variants and already keys, so reach for those directly:
+`ss({ odd: "bg-neutral-50" })`.
+
+`:nth-child()` counts from 1, so `nth(0, …)` builds a class that can never match — that,
+a fraction, and a negative number all warn in development.
+
 ### `match` — exhaustive variant selection
 
 Map a discriminant to a class value. Every case must be covered, so a missing one is a
@@ -579,13 +605,46 @@ match(tone, { primary: "bg-blue-600", danger: "bg-red-600" }, "bg-gray-200");
 
 Every class here is already a literal, so `match` needs no build integration.
 
+### `variants` — component recipes
+
+A component's `className` built from typed variants, with `defaults` and compound rules.
+The familiar shape, with one difference: every value is an `ss` argument, so **a variant
+option can be an `ss` map** and carry breakpoints and states of its own.
+
+```ts
+const button = variants({
+  base: { base: "rounded font-medium", hover: "brightness-110" },
+  variants: {
+    tone: { primary: "bg-blue-600", danger: "bg-red-600" },
+    size: { sm: "text-sm px-2", lg: { base: "text-lg px-4", md: "px-6" } },
+  },
+  compound: [{ tone: "danger", size: "lg", class: "ring-2" }],
+  defaults: { tone: "primary", size: "sm" },
+});
+
+button();                              // → the defaults
+button({ size: "lg" });                // → "… text-lg px-4 md:px-6"
+button({ tone: "danger" }, className); // extra arguments, exactly like cn
+```
+
+Both halves of `{ size: "lg" }` are checked: a variant you did not declare and an option
+that variant does not have are each a compile error.
+
+Emission is `base`, then each variant in the order you declared it, then the compound
+rules, then whatever the caller passed — so a trailing `className` still wins, and the
+same props always produce the same string. The whole thing ends in `ss`, so conflicts
+merge once, across all of it.
+
+`{ size: undefined }` leaves the default in place, which is what a component writes when
+it forwards an optional prop it did not receive.
+
 ### `withPrefix` — the escape hatch
 
 For variants tailess doesn't model as keys.
 
 ```ts
-withPrefix("nth-[3n+1]", "bg-neutral-50");      // → "nth-[3n+1]:bg-neutral-50"
-withPrefix("nth-[3n+1]", "border-t");           // → "nth-[3n+1]:border-t"
+withPrefix("open", "shadow-lg");                // → "open:shadow-lg"
+withPrefix("details-content", "p-2");           // → "details-content:p-2"
 withPrefix("group-[.open]", "rotate-90");       // → "group-[.open]:rotate-90"
 withPrefix("supports-not-[display:grid]", "block");
 ```
@@ -652,12 +711,13 @@ nested group, which is how a compound variant is spelled.
 | `not-*` | 58 | those same 36, plus every media query and breakpoint: `not-hover`, `not-dark`, `not-md`, … |
 
 Anything with a value of its own (`data-*`, `aria-*`, `supports-[…]`, `has-[…]`,
-`in-[…]`, `nth-*`, arbitrary `min-[…]`) is deliberately absent — use
+`in-[…]`, arbitrary `min-[…]`) is deliberately absent — use
 [`data`/`aria`](#data--aria--attribute-variants),
 [`supports`](#supports--notsupports--feature-queries),
 [`has`/`notHas`/`inside`](#has--nothas--inside--selector-variants),
 [`group`/`peer`/`container`](#group--peer--container--named-variants) for the named
-forms, or [`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
+forms, [`nth`](#nth--position-variants) for positions, or
+[`withPrefix`](#withprefix--the-escape-hatch). The exact list is exported as
 `stateKeys` and is regenerated and re-verified against the Tailwind compiler in CI.
 
 The breakpoint keys are Tailwind's five defaults. A `@theme` of your own can add to them,
@@ -777,6 +837,8 @@ data("level", 2, "p-2")                             // numbers and booleans
 supports("display: grid", "grid")                   // the space is escaped for you
 group("row", "hover", "underline")                  // group-hover/row:underline
 has("> img", "p-0")                                 // the space is escaped for you
+nth(3, "bg-neutral-50")                             // a number, or an expression
+variants({ variants: { s: { lg: { md: "p-6" } } } }) // only the leaves are classes
 ```
 
 ❌ **Not seen** — the value isn't in the source to read:
@@ -947,19 +1009,19 @@ Measured on the built package, Node 22. Runtime numbers are per call, warm:
 
 ### Bundle size
 
-The badge at the top reads **12.6 kB** because it measures the whole dependency tree.
+The badge at the top reads **13.0 kB** because it measures the whole dependency tree.
 That number is real, but almost none of it is tailess:
 
 | | min+gzip |
 | --- | --- |
 | `tailwind-merge` | ~8.4 kB |
-| tailess itself | **~4.2 kB** |
-| **Total** | **~12.6 kB** |
+| tailess itself | **~4.6 kB** |
+| **Total** | **~13.0 kB** |
 
 `tailwind-merge` is the one runtime dependency, and it is what a `cn()` helper is built
 on in essentially every Tailwind codebase — roughly two thirds of Tailwind installs
 already pull it in. If yours is one of them your bundler keeps the single shared copy,
-and adding tailess costs the 4.2 kB, not the 12.6.
+and adding tailess costs the 4.6 kB, not the 13.0.
 
 ## Troubleshooting
 

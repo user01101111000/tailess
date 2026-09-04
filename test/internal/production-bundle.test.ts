@@ -41,7 +41,8 @@ const warnings = [
   "literal underscore",
   "not a CSS custom property",
   "letters, digits",
-  "empty selector",
+  "was given an empty",
+  "positions count from 1",
   "empty feature query",
   "cannot appear in a class name",
 ];
@@ -89,11 +90,22 @@ describe("the browser bundle", () => {
     // cost 47 characters — which is the whole of what a consumer importing only `ss`
     // and `cn` pays, since `ss` needs the key order. The rest is the helpers.
     //
+    // Raised again to 10,800 for the four `nth-*` helpers: 9,789 -> 10,510 chars,
+    // 4,179 -> 4,440 gzipped. Less than it looks: the empty-value and unusable-character
+    // checks `has`, `inside` and `supports` each carried a copy of now live in one
+    // `internal/arbitrary.ts`, which paid for about half of what the four added.
+    //
+    // Raised again to 11,200 for `variants()`: 10,510 -> 10,935 chars, 4,440 -> 4,601
+    // gzipped, and 425 of those characters are the whole recipe builder — it is a
+    // wrapper over `ss`, not a second engine, which is the reason it costs so little
+    // and the reason a variant option can be an `ss` map at all.
+    //
     // Note what this number is and isn't: the package sets `sideEffects: false`, so
     // it is the cost of importing *everything*. A consumer using only `ss` and `cn`
-    // bundles 5,170 chars — of which 47 are the two new key families — and one
-    // adding `vars` pays 488. Measured, not assumed.
-    expect(code.length).toBeLessThan(10_000);
+    // bundles 5,170 chars — of which 47 are the two new key families — one adding
+    // `vars` pays 488, and one importing only `variants` bundles 5,634. Measured,
+    // not assumed.
+    expect(code.length).toBeLessThan(11_200);
   });
 
   it("pulls in no Node builtins", async () => {

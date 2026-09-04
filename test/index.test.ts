@@ -13,6 +13,10 @@ import {
   maxScreenKeys,
   notSupports,
   notHas,
+  nth,
+  nthLast,
+  nthLastOfType,
+  nthOfType,
   on,
   peer,
   responsive,
@@ -22,6 +26,7 @@ import {
   stateKeys,
   supports,
   until,
+  variants,
   vars,
   withPrefix,
 } from "../src/index.js";
@@ -48,6 +53,11 @@ describe("public API", () => {
       has,
       notHas,
       inside,
+      nth,
+      nthLast,
+      nthOfType,
+      nthLastOfType,
+      variants,
     ]) {
       expect(typeof fn).toBe("function");
     }

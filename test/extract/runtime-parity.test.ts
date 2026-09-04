@@ -12,12 +12,17 @@ import {
   match,
   notSupports,
   notHas,
+  nth,
+  nthLast,
+  nthLastOfType,
+  nthOfType,
   on,
   peer,
   responsive,
   ss,
   supports,
   until,
+  variants,
   withPrefix,
 } from "../../src/index.js";
 
@@ -52,6 +57,11 @@ const helpers = {
   has,
   notHas,
   inside,
+  nth,
+  nthLast,
+  nthOfType,
+  nthLastOfType,
+  variants,
 } as const;
 
 /** Run `src` with `env` bound, using the same text the scanner was given. */
@@ -211,6 +221,34 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `on("dark", has("> img", "p-2"))` },
   { src: `has(":checked", on("hover", "underline"))` },
   { src: `ss({ "has-checked": "underline", "in-focus": "ring-2" })` },
+
+  // A position goes in bare and an expression in brackets, and the scanner has to make
+  // the same call from the source text alone — a quoted 3 is the bracket form.
+  { src: `nth(3, "bg-neutral-50")` },
+  { src: `nth("3", "p-1")` },
+  { src: `nth("3n+1", "border-t")` },
+  { src: `nth("3n + 1", "border-t")` },
+  { src: `nth("-n+3", "font-bold")` },
+  { src: `nthLast(1, "border-b-0")` },
+  { src: `nthOfType(2, "mt-4")` },
+  { src: `nthOfType("odd", "bg-white")` },
+  { src: `nthLastOfType(1, "mb-0")` },
+  { src: `ss({ md: nth(3, "p-4") })` },
+  { src: `on("hover", nth("2n", "underline"))` },
+
+  // The one call site whose object keys are not prefixes: `tone` and `size` name
+  // variants, `primary` and `lg` name options, and only the leaves hold classes. The
+  // config is evaluated and called here, so what the component actually emits is what
+  // the scanner has to have found.
+  {
+    src: `variants({ base: { base: "rounded", hover: "brightness-110" }, variants: { tone: { primary: "bg-blue-600", danger: { base: "bg-red-600", dark: "bg-red-400" } }, size: { sm: "text-sm", lg: { base: "text-lg", md: "px-6", "2xl": "px-8" } } }, compound: [{ tone: "danger", size: "lg", class: { base: "ring-2", focus: "ring-4" } }], defaults: { tone: "primary", size: "sm" } })({ tone: "danger", size: "lg" })`,
+  },
+  {
+    src: `variants({ variants: { pad: { lots: { base: "p-8", md: "p-12" } } } })({ pad: "lots" })`,
+  },
+  {
+    src: `variants({ base: { md: "gap-2" }, variants: { s: { a: { hover: "underline" } } }, defaults: { s: "a" } })()`,
+  },
 
   // Every spelling of a numeric literal, since the runtime interpolates the *number*.
   { src: `data("count", 1e3, "opacity-100")` },

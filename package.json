@@ -28,7 +28,9 @@
     "url": "https://github.com/user01101111000/tailess/issues"
   },
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/cli.js"
+  ],
   "exports": {
     ".": {
       "import": {

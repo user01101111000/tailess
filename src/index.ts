@@ -29,6 +29,8 @@ export { has, inside, notHas } from "./utils/has.js";
 export { match } from "./utils/match.js";
 export type { AnyContainerKey } from "./utils/named.js";
 export { container, group, peer } from "./utils/named.js";
+export type { NthValue } from "./utils/nth.js";
+export { nth, nthLast, nthLastOfType, nthOfType } from "./utils/nth.js";
 export { on } from "./utils/on.js";
 export { withPrefix } from "./utils/prefix.js";
 export { between, until } from "./utils/range.js";
@@ -36,4 +38,12 @@ export { responsive } from "./utils/responsive.js";
 export { ss } from "./utils/ss.js";
 export { notSupports, supports } from "./utils/supports.js";
 export type { CssVarInput, CssVarName, CssVars } from "./utils/vars.js";
+export type {
+  VariantComponent,
+  VariantGroups,
+  VariantOptions,
+  VariantProps,
+  VariantsConfig,
+} from "./utils/variants.js";
+export { variants } from "./utils/variants.js";
 export { vars } from "./utils/vars.js";

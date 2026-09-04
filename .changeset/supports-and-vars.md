@@ -5,7 +5,8 @@
 Add `supports` / `notSupports` for CSS feature queries, `group` / `peer` / `container` for
 the named variants, `has` / `notHas` / `inside` for the selector ones, and `vars` for the
 values a class name cannot carry — plus the `has-*` and `in-*` key families, which take
-the key count from 233 to 305, and a `tailess check` CLI that proves the whole thing.
+the key count from 233 to 305, the four `nth-*` position helpers, `variants()` for
+component recipes, and a `tailess check` CLI that proves the whole thing.
 
 **Feature queries** were reachable only as `withPrefix("supports-[display:grid]", …)`,
 which put the one hard part on the caller: a class name cannot contain a space, so the
@@ -99,6 +100,51 @@ worth stating, because both spellings compile and they are not the same thing:
 `not-has-[:checked]` is `:not(:has(…))` — no checked descendant — while `has-not-[:checked]`
 is `:has(:not(…))`, a descendant that is not checked. `notHas` builds the first; the second
 is `has(":not(:checked)", …)`.
+
+**The `nth` family** closes the last functional variants with no coverage. A number is a
+position and goes in bare; a string is an `An+B` expression or a keyword and goes in
+brackets, escaped like every other arbitrary value — `nth("3n + 1", …)` is
+`nth-[3n_+_1]:`. The scanner makes the same split from the source text, so a quoted `"3"`
+is the bracket form on both sides.
+
+`:nth-child()` counts from 1, so `nth(0, …)` compiles, passes every other check, and
+selects nothing; that, a fraction, and a negative number warn. The empty-value and
+unusable-character checks that `has`, `inside` and `supports` each carried a copy of now
+live in one place, which paid for about half of what the four new helpers added.
+
+**`variants()`** is a component recipe of the familiar shape, with one difference: every
+value is an `SsArg`, so a variant option can be an `ss` map. `lg: { base: "text-lg",
+md: "px-6" }` is a variant that carries its own breakpoint, which a flat string cannot
+express and which is the reason this belongs here rather than in a separate library.
+
+```ts
+const button = variants({
+  base: { base: "rounded font-medium", hover: "brightness-110" },
+  variants: { size: { sm: "text-sm px-2", lg: { base: "text-lg px-4", md: "px-6" } } },
+  compound: [{ tone: "danger", size: "lg", class: "ring-2" }],
+  defaults: { tone: "primary", size: "sm" },
+});
+```
+
+It is a wrapper over `ss`, not a second engine — 425 minified characters — which is what
+keeps it cheap and what makes the map-valued option work at all. Emission is `base`, then
+each variant in declaration order, then the compounds, then the caller's own arguments, so
+a trailing `className` still wins and the same props always produce the same string.
+`{ size: undefined }` leaves the default alone, which is what a component writes when it
+forwards an optional prop it did not receive.
+
+The scanner needed a rule unlike any other here, and this is the one place in the package
+where an object key is *not* a prefix: `tone` and `size` name variants, `primary` and `lg`
+name options, and only the leaves hold classes. Reading the config as an `ss` map would
+have enumerated `tone:size:primary:bg-blue-600` and — far worse — missed the map inside an
+option, which is exactly the class that needs enumerating. So the three places a class can
+hide are walked explicitly and the rest of the config is left alone. `compound` needed its
+own unwrapping: it is a real array of rule objects, where everywhere else an object inside
+an array is a `clsx` dictionary, which is why the shared reader deliberately skips brace
+groups inside brackets.
+
+Both halves are pinned by the parity suite, which evaluates the recipe and calls it:
+skipping `compound` fails one case, and skipping the variant groups fails three.
 
 **`vars`** answers a question the package could not answer before. Every class tailess
 produces has to be enumerable at build time, so the values inside it are literals in your
@@ -217,9 +263,9 @@ A `@config` pointing at a v3-style JS config can set `theme.screens` and registe
 of its own. That is a JavaScript file this never opens, so one anywhere in the stylesheet
 chain silences the whole check — no answer rather than a confidently wrong one.
 
-The runtime grows 3,624 minified characters, about 1,344 gzipped — 2.8 kB to 4.2 kB — and
+The runtime grows 4,770 minified characters, about 1,766 gzipped — 2.8 kB to 4.6 kB — and
 the size budget was raised deliberately to match. Most of that is warning text. Note what
 the number is and is not: the package sets `sideEffects: false`, so it is the cost of
 importing everything. A project using only `ss` and `cn` bundles 5,170 characters — 47 of
 them the two new key families, which `ss` needs for its emission order — and one that adds
-`vars` pays 488.
+`vars` pays 488, while one importing only `variants` bundles 5,634.
