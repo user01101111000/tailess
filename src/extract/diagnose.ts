@@ -1,6 +1,6 @@
 import { twMerge } from "tailwind-merge";
 import { screenKeys } from "../constants.js";
-import { extractStrings, isArrayLiteral, type RawCall, scanCalls } from "./scan.js";
+import { extractStrings, helperNames, isArrayLiteral, type RawCall, scanCalls } from "./scan.js";
 
 /**
  * Problems the scanner can prove from the source alone, reported while the project
@@ -24,7 +24,11 @@ export interface Diagnostic {
     | "spaced-prefix"
     | "unusable-query"
     /** Not from a source file: the project's CSS redefines `--breakpoint-*`. */
-    | "theme-drift";
+    | "theme-drift"
+    /** Not from a source file either: Tailwind was imported with a `prefix(…)`. */
+    | "unsupported-prefix"
+    /** A helper imported under another name, which the scanner cannot follow. */
+    | "renamed-import";
   /** One line, written for whoever has to fix it. */
   message: string;
 }
@@ -279,6 +283,42 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
  */
 const maxPerFile = 20;
 
+/** A named import from tailess, with the whole specifier list in hand. */
+const tailessImport = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
+/** One `original as local` specifier inside it. */
+const renamedSpecifier = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g;
+const scannedHelpers = new Set<string>(helperNames);
+
+/**
+ * Report a helper imported under another name.
+ *
+ * The scanner finds calls by identifier, so `import { ss as tw } from "tailess"` is one
+ * line that removes *every* class in the file from the candidate list. Nothing else
+ * notices: the file compiles, type-checks, renders the right `class` attribute, and
+ * every variant on it is unstyled. It is the largest silent failure the package has and
+ * the only one provable from the import statement alone.
+ */
+function renamedImports(code: string, report: (d: Diagnostic) => void): void {
+  tailessImport.lastIndex = 0;
+  for (let m = tailessImport.exec(code); m !== null; m = tailessImport.exec(code)) {
+    const list = m[1] as string;
+    renamedSpecifier.lastIndex = 0;
+    for (let s = renamedSpecifier.exec(list); s !== null; s = renamedSpecifier.exec(list)) {
+      const original = s[1] as string;
+      const local = s[2] as string;
+      if (!scannedHelpers.has(original) || original === local) continue;
+      report({
+        kind: "renamed-import",
+        message:
+          `${original}() is imported as "${local}", and the scanner finds calls by name — ` +
+          `so every class ${local}() builds in this file reaches the element with no rule ` +
+          `behind it. Import it under its own name, or re-export a wrapper the scanner ` +
+          `also knows.`,
+      });
+    }
+  }
+}
+
 /** Every problem the scanner can prove from `code`. */
 export function diagnose(code: string): Diagnostic[] {
   const found: Diagnostic[] = [];
@@ -297,6 +337,7 @@ export function diagnose(code: string): Diagnostic[] {
     found.push(d);
   };
 
+  renamedImports(code, report);
   for (const call of scanCalls(code)) check(call, report);
 
   if (suppressed > 0) {

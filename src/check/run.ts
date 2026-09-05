@@ -1,10 +1,11 @@
 /// <reference types="node" />
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
-import { isTailwindEntry } from "../integration/entry.js";
+import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
+import { reportDiagnostics } from "../integration/report.js";
 import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
 /**
@@ -20,15 +21,22 @@ export interface Options {
   content: string[];
   css: string | undefined;
   cwd: string;
+  /** Make the build-time diagnostics fail the gate too, not just print. */
+  strict: boolean;
 }
 
 export function parse(argv: readonly string[]): Options | "help" {
   const content: string[] = [];
   let css: string | undefined;
+  let strict = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") return "help";
+    if (arg === "--strict") {
+      strict = true;
+      continue;
+    }
     if (arg === "--content" || arg === "--css") {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("-")) {
@@ -42,19 +50,24 @@ export function parse(argv: readonly string[]): Options | "help" {
     throw new Error(`unknown option ${arg}`);
   }
 
-  return { content, css, cwd: process.cwd() };
+  return { content, css, cwd: process.cwd(), strict };
 }
 
 export const help = `tailess check — prove every class tailess builds has CSS behind it.
 
-  npx tailess check [--content <dir>]... [--css <file>]
+  npx tailess check [--content <dir>]... [--css <file>] [--strict]
 
   --content <dir>   where your source lives. Repeatable. Defaults to the working
                     directory.
   --css <file>      your Tailwind entry stylesheet. Found automatically when it is
                     inside a --content root.
+  --strict          also fail on the build-time diagnostics, which are otherwise
+                    printed and do not affect the exit code.
 
-Exits 1 when a class the runtime can build has no rule, so it can gate a build.`;
+Exit codes:
+  0  every runtime-built class has a rule (or the scan found no tailess calls)
+  1  a class reaches the element with no rule behind it
+  2  nothing could be checked — no stylesheet, no files scanned, or a bad option`;
 
 /**
  * Resolve an `@import` the way a bundler would.
@@ -150,6 +163,54 @@ async function loadCompiler(cwd: string): Promise<Compile> {
   return compile as Compile;
 }
 
+/** A config file a build tool would read from the project root. */
+const configFile = /^(?:\..*rc(?:\..*)?|.*\.config\.[cm]?[jt]sx?|.*\.config\.json|package\.json)$/;
+
+/**
+ * True when nothing in the project's root config mentions tailess.
+ *
+ * The plugin not being wired up is the first failure the troubleshooting section
+ * lists, and it is the one that unstyles an entire application — yet the check cannot
+ * see it by compiling. It scans the source itself and hands the candidates straight to
+ * Tailwind, so whether the *project's* build would have done that never comes into it,
+ * and a project with the plugin deleted passes green.
+ *
+ * Compiling for the marker would not answer it either: the PostCSS plugin injects
+ * `:root{--tailess:1}` into the AST and the Vite one imports a sidecar at transform
+ * time, so neither reaches the stylesheet on disk. What is left is the config, which
+ * is where a reader would look too. Heuristic, so it warns rather than failing unless
+ * asked — a gate that fails on a guess is a gate teams delete.
+ */
+async function pluginLooksUnwired(cwd: string): Promise<boolean> {
+  const entries = await readdir(cwd, { withFileTypes: true }).catch(() => []);
+  let sawConfig = false;
+  for (const entry of entries) {
+    if (!entry.isFile() || !configFile.test(entry.name)) continue;
+    const text = await readFile(join(cwd, entry.name), "utf8").catch(() => "");
+
+    // `package.json` names tailess in `dependencies` for every consumer, which proves
+    // installation and nothing about wiring. Only its `postcss` key — the one place a
+    // build config can actually live in there — counts as evidence.
+    if (entry.name === "package.json") {
+      let postcss: unknown;
+      try {
+        postcss = (JSON.parse(text) as { postcss?: unknown }).postcss;
+      } catch {
+        continue;
+      }
+      if (postcss === undefined) continue;
+      sawConfig = true;
+      if (JSON.stringify(postcss).includes("tailess")) return false;
+      continue;
+    }
+
+    sawConfig = true;
+    if (text.includes("tailess")) return false;
+  }
+  // No config at all means this is not a project root worth guessing about.
+  return sawConfig;
+}
+
 /** Every Tailwind entry stylesheet under `roots`. */
 async function findEntries(roots: string[]): Promise<string[]> {
   const { files } = await collect({ roots, extensions: ["css"] });
@@ -178,10 +239,60 @@ export async function run(options: Options): Promise<number> {
     return 2;
   }
 
-  const { classes } = await collect({ roots });
+  const { classes, files, diagnostics } = await collect({ roots });
+
+  // A gate that cannot say "I checked nothing" is worse than no gate: a mistyped
+  // --content, or a monorepo task runner in the wrong directory, would otherwise
+  // print a cheerful line and exit 0 forever after.
+  if (files.length === 0) {
+    const glob = roots.some((path) => path.includes("*"))
+      ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
+      : "";
+    console.error(
+      `[tailess] scanned no files, so there is nothing to check. Looked in: ` +
+        `${roots.join(", ")}.${glob}`,
+    );
+    return 2;
+  }
+
+  // The six checks the scanner can prove from the source alone. `tailess check`
+  // computed them on the way past and used to drop them — and they are precisely the
+  // failures compiling cannot find, since a class carrying an unusable value never
+  // reaches the compiler to be found missing.
+  reportDiagnostics(diagnostics, options.cwd);
+
   if (classes.length === 0) {
-    console.log("[tailess] no runtime-built classes found — nothing to check.");
-    return 0;
+    console.log(
+      `[tailess] scanned ${files.length} file${files.length === 1 ? "" : "s"} and found ` +
+        "no runtime-built classes — nothing to check.",
+    );
+    return options.strict && diagnostics.length > 0 ? 1 : 0;
+  }
+
+  if (await pluginLooksUnwired(options.cwd)) {
+    console.warn(
+      "[tailess] no build config here mentions tailess, so the plugin may not be " +
+        "running at all — in which case every variant class on the page is unstyled and " +
+        "this check cannot see it: it scans your source itself rather than reading what " +
+        'your build produced. Add tailess() to vite.config, or "tailess/postcss" to ' +
+        'postcss.config before "@tailwindcss/postcss".',
+    );
+    if (options.strict) return 1;
+  }
+
+  // Ask before compiling. With a Tailwind prefix every candidate fails, so the report
+  // would be hundreds of classes under a heading blaming a moved breakpoint — true only
+  // in the sense that everything is broken, and useless for finding out why.
+  for (const entry of entries) {
+    const prefix = tailwindPrefixIn(await readFile(entry, "utf8"));
+    if (prefix === undefined) continue;
+    console.error(
+      `[tailess] ${relative(options.cwd, entry) || entry} imports Tailwind with ` +
+        `prefix("${prefix}"), which tailess does not support: it builds "hover:underline" ` +
+        `where the working class is "${prefix}:hover:underline", so every runtime-built ` +
+        "class is unstyled. There is nothing to check until the prefix is gone.",
+    );
+    return 2;
   }
 
   const compile = await loadCompiler(options.cwd);
@@ -206,6 +317,13 @@ export async function run(options: Options): Promise<number> {
       `[tailess] ${classes.length} runtime-built classes checked against ` +
         `${entries.length} stylesheet${entries.length === 1 ? "" : "s"} — every one has CSS.`,
     );
+    if (options.strict && diagnostics.length > 0) {
+      console.error(
+        `\n[tailess] --strict: ${diagnostics.length} build-time ` +
+          `diagnostic${diagnostics.length === 1 ? "" : "s"} above.`,
+      );
+      return 1;
+    }
     return 0;
   }
 

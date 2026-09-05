@@ -36,11 +36,14 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm run test:coverage
-
+      # Before the tests, not after: `test/integration/plugin-shape.test.ts` asserts on
+      # `dist/` and skips itself when there is none, so running the suite first left the
+      # one check guarding the string-named PostCSS entry green *by never running*.
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm run test:coverage
 
   package:
     # Lint and the packaging checks are platform-independent, so run them once.

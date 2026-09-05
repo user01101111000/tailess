@@ -64,3 +64,41 @@ describe("reportDiagnostics", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+const one = [diagnostic("p-4 is dead")];
+const two = [diagnostic("p-4 is dead"), diagnostic("flex is dead", join(root, "src", "Row.tsx"))];
+
+describe("what a build does about them", () => {
+  it("prints and keeps going by default", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => reportDiagnostics(one, root)).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("says nothing at all when switched off", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    reportDiagnostics(one, root, "off");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("prints the whole list before failing, so one build shows everything", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => reportDiagnostics(two, root, "error")).toThrow(/2 build-time diagnostics/);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it("fails on a repeat the dedupe already swallowed", () => {
+    // The class is still unstyled on the second build; only the printing is deduped.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => reportDiagnostics(one, root, "error")).toThrow();
+    expect(() => reportDiagnostics(one, root, "error")).toThrow();
+    warn.mockRestore();
+  });
+
+  it("does not fail a clean build", () => {
+    expect(() => reportDiagnostics([], root, "error")).not.toThrow();
+  });
+});

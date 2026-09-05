@@ -17,8 +17,33 @@ export interface RawCall {
  * A lookbehind rather than `\b` so `$ss(` and `_on(` — legal, distinct
  * identifiers — don't match, while `st.ss(` still does.
  */
-const callPattern =
-  /(?<![\w$])(ss|variants|responsive|on|until|between|data|aria|withPrefix|supports|notSupports|group|peer|container|has|notHas|inside|nth|nthLast|nthOfType|nthLastOfType)\s*\(/g;
+export const helperNames = [
+  "ss",
+  "variants",
+  "responsive",
+  "on",
+  "until",
+  "between",
+  "data",
+  "aria",
+  "withPrefix",
+  "supports",
+  "notSupports",
+  "group",
+  "peer",
+  "container",
+  "has",
+  "notHas",
+  "inside",
+  "nth",
+  "nthLast",
+  "nthOfType",
+  "nthLastOfType",
+] as const;
+
+// Built from the list rather than written twice: the diagnostics ask the same
+// question about the same names, and two copies only have to disagree once.
+const callPattern = new RegExp(`(?<![\\w$])(${helperNames.join("|")})\\s*\\(`, "g");
 
 /**
  * A second instance of {@link callPattern} for {@link outerCalls}.

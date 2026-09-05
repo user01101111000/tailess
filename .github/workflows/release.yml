@@ -35,14 +35,19 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm run test
-
+      # Built before the tests, so the suite that asserts on `dist/` actually runs —
+      # see the note in ci.yml.
       - name: Build
         run: npm run build
 
+      - name: Test
+        run: npm run test
+
+      # Pinned to a commit, not the moving `v1` tag: this step runs with `id-token:
+      # write` and the npm token in its environment, so whoever can move that tag can
+      # publish as this package. Bump it deliberately, the way a dependency is bumped.
       - name: Create release PR or publish to npm
-        uses: changesets/action@v1
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           publish: npm run release
           version: npm run changeset -- version

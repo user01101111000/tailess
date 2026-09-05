@@ -259,10 +259,9 @@ the classes inside them. For that, point Tailwind's own formatter at the helpers
   "plugins": ["prettier-plugin-tailwindcss"],
   "tailwindStylesheet": "./src/index.css",
   "tailwindFunctions": [
-    "ss", "cn", "responsive", "on", "until", "between",
-    "data", "aria", "supports", "notSupports", "match", "withPrefix",
-    "group", "peer", "container", "has", "notHas", "inside",
-    "nth", "nthLast", "nthOfType", "nthLastOfType", "variants"
+    "ss", "cn", "variants", "responsive", "match",
+    "on", "until", "between", "data", "aria",
+    "group", "peer", "container", "withPrefix"
   ]
 }
 ```
@@ -270,6 +269,16 @@ the classes inside them. For that, point Tailwind's own formatter at the helpers
 `tailwindStylesheet` is the CSS entry holding your `@import "tailwindcss"` — on Next.js
 usually `./app/globals.css`. Leave it out and anything from your own `@theme` or
 `@utility` is treated as an unknown class and sorted to the front.
+
+> [!WARNING]
+> Do **not** add `supports`, `notSupports`, `has`, `notHas`, `inside` or the `nth*`
+> helpers to that list. The plugin sorts *every* string argument of a listed function,
+> and the first argument of those is a selector or a feature query, not a class list.
+> It reorders that too: `has("table [data-open]", …)` is rewritten to
+> `has("[data-open] table", …)` — Tailwind knows `table` as a utility and `[data-open]`
+> as unknown, so it moves them — and the selector now means the opposite of what it
+> said. Format-on-save does it silently. Their class arguments go unsorted; that is the
+> trade, and it is the right way round.
 
 ```tsx
 // before
@@ -902,13 +911,26 @@ The plugin reports what it can prove wrong from your source, while the project b
   it as a key — ss({ "sm": … }) compiles, emits "sm:", and no rule is generated for it.
 ```
 
-Six things are checked: two conflicting utilities in **one** string, a `between` range no
-viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value no
-class name can carry — a `supports` query, a `has`/`inside` selector, an `nth` position —
-and CSS that moves the variants out from under the keys.
+Eight things are checked: two conflicting utilities in **one** string, a `between` range
+no viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value
+no class name can carry — a `supports` query, a `has`/`inside` selector, an `nth`
+position — a helper imported under another name, CSS that moves the variants out from
+under the keys, and CSS that imports Tailwind with a `prefix(…)`.
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
+
+**A renamed import** is the widest of them. The scanner finds calls by identifier, so
+`import { ss as tw } from "tailess"` is one line that removes every class in that file
+from the candidate list — while the file compiles, type-checks and renders exactly the
+`class` attribute you wrote. Renaming `cn` or `match` is free; renaming a helper that
+builds a variant prefix is not, and that is what this reports.
+
+**A Tailwind `prefix(…)`** is the one failure that is total rather than local.
+`@import "tailwindcss" prefix(tw)` makes the working class `tw:hover:underline`, and
+tailess builds `hover:underline` — so nothing on the page has styles. tailess does not
+support a Tailwind prefix; the check exists so you find that out from your build rather
+than from a blank screen.
 
 The last one is the only check that reads your **CSS** rather than your source, and the
 only one with cases that are *informational* rather than broken. The breakpoint keys are
@@ -965,6 +987,23 @@ It exits `1` when something is wrong, so it can gate a build:
 | --- | --- |
 | `--content <dir>` | where your source lives. Repeatable. Defaults to the working directory. |
 | `--css <file>` | your Tailwind entry stylesheet. Found automatically when it sits inside a `--content` root. |
+| `--strict` | also fail on the [build-time checks](#build-time-checks), which are otherwise printed without affecting the exit code. |
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | every runtime-built class has a rule — or the scan ran and found no tailess calls |
+| `1` | a class reaches the element with no rule behind it |
+| `2` | nothing could be checked: no entry stylesheet, no files scanned, or a bad option |
+
+`2` is the one worth wiring an alert to. It means the gate did not run, which in CI looks
+nothing like a failure but proves exactly as much: a `--content` typo, a task runner in
+the wrong directory, or a glob where a directory was expected all land here rather than
+passing quietly. When the scan does find files but no tailess calls, the exit is `0` and
+the line says how many files it read, so the two are distinguishable in a log.
+
+It also prints the build-time checks it computes on the way past. Those are the failures
+compiling *cannot* find — a class carrying an unusable value never reaches Tailwind to be
+found missing — so `--strict` is what makes one gate cover both.
 
 The scanner over-approximates on purpose, so most of what it produces is not a class at
 all. Rather than demand a rule for every candidate — which would report all of that — the
@@ -978,14 +1017,25 @@ plugin counts as generated rather than missing.
 
 ## Plugin options
 
-Both plugins take the same three options:
+Both plugins take the same four options:
 
 ```ts
 tailess({
   content: ["src", "../ui/src"],  // files or dirs to scan
   ignore: ["fixtures"],           // extra dir names to skip
   extensions: ["tsx", "vue"],     // replaces the default list
+  diagnostics: "error",           // "warn" (default) | "error" | "off"
 });
+```
+
+`diagnostics` is what the build does about the [checks](#build-time-checks) the scanner
+can prove from your source. `"warn"` prints and keeps going, which is right in dev — a
+dead class should not stop you seeing the rest of the page. `"error"` prints the whole
+list and then fails, which is right in CI, where a warning about an unstyled element is
+an unstyled element that ships:
+
+```ts
+tailess({ diagnostics: process.env.CI ? "error" : "warn" })
 ```
 
 The PostCSS plugin takes one more, `cacheDir`, since it has no host to borrow one
@@ -1012,7 +1062,8 @@ warns rather than quietly producing a stylesheet with nothing in it.
 | `content` | Vite's `root` / `process.cwd()` |
 | `ignore` | added on top of the built-in list |
 | `extensions` | `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro` |
-| `cacheDir` | `node_modules/.cache` (Vite uses its own `cacheDir`) |
+| `diagnostics` | `"warn"` |
+| `cacheDir` | `node_modules/.cache` (Vite uses its own `cacheDir`) — PostCSS only |
 
 By default the whole project is scanned, skipping dependencies, build output (`dist`,
 `build`, `.next`, `.output`, …) and caches. Dot-directories are *not* skipped wholesale,

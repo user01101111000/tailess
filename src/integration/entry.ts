@@ -41,6 +41,33 @@ export function hasUtilitiesAtRule(css: string): boolean {
   return utilitiesAtRule.test(css);
 }
 
+/**
+ * A Tailwind `@import` together with whatever options follow it, up to the `;` or the
+ * start of a block. `@import "tailwindcss" source(none) prefix(tw);` is one match.
+ */
+const importWithOptions = /@import\s+(?:url\(\s*)?["']([^"']+)["'][^;{}]*/gi;
+/** Tailwind v4's `prefix(…)` import option, which renames every class it generates. */
+const prefixOption = /\bprefix\(\s*([\w-]+)\s*\)/i;
+const cssComment = /\/\*[\s\S]*?\*\//g;
+
+/**
+ * The prefix Tailwind was imported with, if any.
+ *
+ * `@import "tailwindcss" prefix(tw)` makes the working class `tw:hover:underline`, so
+ * every class tailess builds — which carries no prefix — generates no rule at all. The
+ * failure is completely silent otherwise: the plugin runs, the marker is written, the
+ * integration check passes, and nothing on the page has styles.
+ */
+export function tailwindPrefixIn(css: string): string | undefined {
+  for (const match of css.replace(cssComment, "").matchAll(importWithOptions)) {
+    const specifier = match[1];
+    if (!specifier || !isTailwindSpecifier(specifier)) continue;
+    const found = prefixOption.exec(match[0]);
+    if (found?.[1]) return found[1];
+  }
+  return undefined;
+}
+
 /** Every `@import` specifier in `css`, in source order. */
 export function importSpecifiers(css: string): string[] {
   const out: string[] = [];
