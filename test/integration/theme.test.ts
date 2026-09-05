@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   breakpointsIn,
   collectBreakpoints,
+  collectTheme,
+  customVariantsIn,
   themeDiagnostics,
 } from "../../src/integration/theme.js";
 
@@ -145,6 +147,32 @@ describe("what the theme changed", () => {
     expect(messages(`@theme { --breakpoint-md: 48rem; }`)).toEqual([]);
   });
 
+  it("says nothing when the theme restates a default in the units v3 used", () => {
+    // Pinning the v3 numbers in `@theme` is the standard v3 -> v4 migration, and
+    // 768px is the width tailess already exports as 48rem — a media query resolves
+    // rem against the initial font size, so the two are the same query. Warning here
+    // fired five times on a build that was fine.
+    expect(
+      messages(`@theme {
+        --breakpoint-sm: 640px;
+        --breakpoint-md: 768px;
+        --breakpoint-lg: 1024px;
+        --breakpoint-xl: 1280px;
+        --breakpoint-2xl: 1536px;
+      }`),
+    ).toEqual([]);
+    expect(messages(`@theme { --breakpoint-md: 48em; }`)).toEqual([]);
+  });
+
+  it("still reports a width that really moved", () => {
+    const [first, ...rest] = messages(`@theme { --breakpoint-md: 800px; }`);
+    expect(rest).toEqual([]);
+    expect(first).toContain('sets "md" to 800px');
+    expect(messages(`@theme { --breakpoint-md: 47.9rem; }`)).toHaveLength(1);
+    // Nothing to compare a non-length against, so it is reported rather than assumed.
+    expect(messages(`@theme { --breakpoint-md: calc(48rem + 1px); }`)).toHaveLength(1);
+  });
+
   it("says nothing about a theme that customises anything else", () => {
     expect(
       messages(`@theme { --color-brand: oklch(0.7 0.1 250); --font-display: serif; }`),
@@ -223,6 +251,61 @@ describe("what the theme changed", () => {
   });
 });
 
+describe("a @custom-variant the keys do not know about", () => {
+  // Compiled against Tailwind first: all three spellings register a *static* variant,
+  // `midnight-only:underline` gets a rule, and redefining an existing name simply
+  // replaces it — the key still resolves and the class still works.
+  it("reads every spelling of the at-rule", () => {
+    // Names that Tailwind does not already ship — `pointer-coarse` and friends are
+    // built in, so a definition of one of those is a redefinition, not a new variant.
+    expect(
+      customVariantsIn(`@custom-variant midnight-only (@media (prefers-contrast: more));`),
+    ).toEqual(["midnight-only"]);
+    expect(customVariantsIn(`@custom-variant midnight (&:where([data-theme=x] *));`)).toEqual([
+      "midnight",
+    ]);
+    expect(
+      customVariantsIn(`@custom-variant hocus {\n &:hover { @slot; }\n &:focus { @slot; }\n}`),
+    ).toEqual(["hocus"]);
+  });
+
+  it("says nothing about a name that is already a key", () => {
+    // Tailwind replaces the variant; the key still resolves and the class still works,
+    // and whether the new meaning is the intended one is not ours to judge.
+    expect(customVariantsIn(`@custom-variant hover (&:hover);`)).toEqual([]);
+    expect(customVariantsIn(`@custom-variant md (@media (width >= 50rem));`)).toEqual([]);
+  });
+
+  it("reports each name once, with the escape hatch that works", () => {
+    const [first, ...rest] = themeDiagnostics(
+      [],
+      customVariantsIn(`@custom-variant midnight-only (@media (prefers-contrast: more));`),
+    ).map((d) => d.message);
+    expect(rest).toEqual([]);
+    expect(first).toContain('defines the "midnight-only" variant');
+    expect(first).toContain('withPrefix("midnight-only"');
+  });
+
+  it("does not repeat a name declared twice", () => {
+    expect(customVariantsIn(`@custom-variant a (&:hover);\n@custom-variant a (&:focus);`)).toEqual([
+      "a",
+    ]);
+  });
+
+  it("ignores a commented-out or quoted definition", () => {
+    expect(customVariantsIn(`/* @custom-variant ghost (&:hover); */`)).toEqual([]);
+    expect(customVariantsIn(`.a::after { content: "@custom-variant ghost (&:hover);" }`)).toEqual(
+      [],
+    );
+  });
+
+  it("goes quiet when a @config could be adding variants of its own", () => {
+    expect(
+      customVariantsIn(`@config "./tailwind.config.js";\n@custom-variant ghost (&:hover);`),
+    ).toEqual([]);
+  });
+});
+
 describe("following the stylesheets a theme is split across", () => {
   let dir = "";
 
@@ -295,6 +378,19 @@ describe("following the stylesheets a theme is split across", () => {
       join(dir, "app.css"),
     );
     expect(found).toEqual([]);
+  });
+
+  it("finds a @custom-variant in an imported file", async () => {
+    await writeFile(
+      join(dir, "variants.css"),
+      `@custom-variant midnight-only (@media (pointer: coarse));`,
+    );
+    const theme = await collectTheme(
+      `@import "tailwindcss";
+@import "./variants.css";`,
+      join(dir, "app.css"),
+    );
+    expect(theme.variants).toEqual(["midnight-only"]);
   });
 
   it("does not follow a bare specifier, which needs a resolver we do not have", async () => {

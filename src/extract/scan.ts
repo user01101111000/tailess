@@ -18,7 +18,7 @@ export interface RawCall {
  * identifiers — don't match, while `st.ss(` still does.
  */
 const callPattern =
-  /(?<![\w$])(ss|responsive|on|until|between|data|aria|withPrefix|supports|notSupports|group|peer|container)\s*\(/g;
+  /(?<![\w$])(ss|variants|responsive|on|until|between|data|aria|withPrefix|supports|notSupports|group|peer|container|has|notHas|inside|nth|nthLast|nthOfType|nthLastOfType)\s*\(/g;
 
 /**
  * A second instance of {@link callPattern} for {@link outerCalls}.
@@ -424,9 +424,21 @@ function matchBrace(text: string, open: number): number {
  * Braces inside `[ … ]` are skipped, because at runtime an object inside an array
  * is a `clsx` dictionary, not a nested map — its keys are class names, and the
  * caller reads them as such.
+ *
+ * Braces inside another *call* are skipped for the reason {@link dictionaryKeys}
+ * skips them: `match(tone, { danger: "bg-red-50" })` is a lookup whose keys are
+ * discriminant values, not breakpoints, and `ss(…, match(tone, {…}), …)` is the
+ * documented way to write one. Reading it as a bucket map safelists `danger:bg-red-50`
+ * — which nothing generates a rule for, so `tailess check` fails a healthy build. A
+ * call this module *does* know is found by `scanCalls` on its own, and reaches here as
+ * its own argument text, so nothing is lost by not descending into calls here.
  */
 export function objectLiterals(text: string): string[] {
   const out: string[] = [];
+  // One entry per open paren, true when it opens a call; a grouping paren is
+  // transparent, so `ss((cond ? { md: "p-6" } : { md: "p-2" }))` still reads both.
+  const frames: boolean[] = [];
+  let calls = 0;
   let brackets = 0;
   let i = 0;
   while (i < text.length) {
@@ -450,7 +462,13 @@ export function objectLiterals(text: string): string[] {
     if (c === "[") brackets += 1;
     else if (c === "]") {
       if (brackets > 0) brackets -= 1;
-    } else if (c === "{" && brackets === 0) {
+    } else if (c === "(") {
+      const isCall = calleeBefore(text, i) !== "";
+      frames.push(isCall);
+      if (isCall) calls += 1;
+    } else if (c === ")") {
+      if (frames.pop() === true) calls -= 1;
+    } else if (c === "{" && brackets === 0 && calls === 0) {
       const end = matchBrace(text, i);
       out.push(text.slice(i, end));
       i = end;

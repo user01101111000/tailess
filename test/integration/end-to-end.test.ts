@@ -178,6 +178,15 @@ describe("PostCSS integration (Next.js and any PostCSS setup)", () => {
     expect(said.some((m) => m.includes('removes the "sm" breakpoint'))).toBe(true);
   });
 
+  it("reports a @custom-variant the keys do not cover", async () => {
+    // The other half of the CSS check, and the half that reaches the plugin through a
+    // different at-rule — so the wiring is worth pinning separately.
+    const said = await warningsFrom(
+      `@import "tailwindcss";\n@custom-variant midnight-only (&:where([data-theme=midnight] *));`,
+    );
+    expect(said.some((m) => m.includes('defines the "midnight-only" variant'))).toBe(true);
+  });
+
   it("stays quiet about a stylesheet with no @theme", async () => {
     const said = await warningsFrom(`@import "tailwindcss";`);
     expect(said.filter((m) => m.includes("breakpoint"))).toEqual([]);

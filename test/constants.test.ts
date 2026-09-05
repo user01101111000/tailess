@@ -42,8 +42,10 @@ const plain = allStatic.filter((name) => !(screenKeys as readonly string[]).incl
  * `plain` set. `not` reaches further — a media query and a breakpoint can both be
  * negated — so it is asked about every static variant there is.
  */
-const compoundable = (prefix: "group" | "peer" | "not", from: string[] = plain): string[] =>
-  from.filter((name) => design.variants.compoundsWith(prefix, name));
+const compoundable = (
+  prefix: "group" | "peer" | "not" | "has" | "in",
+  from: string[] = plain,
+): string[] => from.filter((name) => design.variants.compoundsWith(prefix, name));
 
 /** Compile a stylesheet that safelists `candidates`, and return the CSS. */
 async function build(candidates: readonly string[]): Promise<string> {
@@ -106,11 +108,20 @@ describe("built-in keys cover every static Tailwind variant", () => {
     ...plain,
     ...compoundable("group").map((name) => `group-${name}`),
     ...compoundable("peer").map((name) => `peer-${name}`),
+    ...compoundable("has").map((name) => `has-${name}`),
+    ...compoundable("in").map((name) => `in-${name}`),
     ...compoundable("not", allStatic).map((name) => `not-${name}`),
   ].sort();
 
   it("lists exactly the variants Tailwind registers — no more, no fewer", () => {
     expect([...stateKeys].sort()).toEqual(expected);
+  });
+
+  it("keeps the four descendant/sibling families symmetric", () => {
+    // Tailwind compounds all four with the same 36, so a name in one and not another
+    // is always an oversight.
+    expect(compoundable("has")).toEqual(compoundable("group"));
+    expect(compoundable("in")).toEqual(compoundable("group"));
   });
 
   it("keeps the group-* and peer-* families symmetric", () => {

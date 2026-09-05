@@ -89,6 +89,39 @@ function staticValue(literal: string): string | null {
   return String(negative ? -value : value);
 }
 
+/**
+ * Anything that could open a numeric literal, taken as far as it runs. Validating the
+ * token afterwards is what keeps `0x10` and `1e3` whole while `item2` and `a.length`
+ * are never mistaken for numbers at all.
+ */
+const numericToken = /(?<![\w$.])(?:\d[\w.]*|\.\d[\w.]*)/g;
+
+/**
+ * Every numeric literal in a fragment of source — the counterpart of `extractStrings`,
+ * and needed for the same reason.
+ *
+ * A ternary is the shape that makes it necessary. `on(cond ? "hover" : "focus", …)`
+ * enumerates both branches because the string sweep finds both literals; a helper that
+ * reads its argument only when the *whole* argument is one literal enumerates neither,
+ * and a class the runtime builds lands with no rule behind it.
+ */
+function staticValues(text: string): string[] {
+  const out: string[] = [];
+  for (const [token] of text.matchAll(numericToken)) {
+    const value = staticValue(token);
+    if (value !== null && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+/** Helper name to the variant it builds, for the four `nth-*` families. */
+const nthVariants: Record<string, string> = {
+  nth: "nth",
+  nthLast: "nth-last",
+  nthOfType: "nth-of-type",
+  nthLastOfType: "nth-last-of-type",
+};
+
 /** Records the classes one bucket produces. `prefix` is `""` for unprefixed ones. */
 type Add = (prefix: string, tokens: string[]) => void;
 
@@ -286,6 +319,17 @@ function enumerateValue(
   if (nested.length === 0 || !isObjectLiteral(text)) add(scope, bucketTokens(text));
 }
 
+/**
+ * Enumerate every `ss` map inside one value.
+ *
+ * A plain string needs nothing: it is unprefixed, so Tailwind reads it out of the
+ * source itself and `add` drops it anyway. Only a map carries a prefix that has to
+ * be predicted here.
+ */
+function emitMaps(text: string, depth: number, add: Add, follow: number): void {
+  for (const map of objectLiterals(text)) enumerateMap(map, "", depth, add, follow);
+}
+
 function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void {
   const { name, args } = call;
 
@@ -413,6 +457,83 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
         for (const key of extractStrings(args[1] ?? "")) prefixes.push(`${key}/${label}`);
       }
       emitValue(args[2] ?? "", prefixes, add, follow);
+      return;
+    }
+
+    // has(":checked", "…") / notHas(…) / inside(".dark", "…") — an arbitrary selector,
+    // escaped through the same function the runtime uses. The plain state spellings
+    // (`has-checked`, `in-focus`) are keys and need no case here.
+    case "has":
+    case "notHas":
+    case "inside": {
+      if (args.length < 2) return;
+      const variant = name === "has" ? "has" : name === "notHas" ? "not-has" : "in";
+      const selectors = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        selectors.map((selector) => `${variant}-[${escapeCondition(selector)}]`),
+        add,
+        follow,
+      );
+      return;
+    }
+
+    // variants({ base, variants: { name: { option: … } }, compound: [{ …, class }] })
+    //
+    // The one call site here whose object keys are *not* prefixes. `tone` and `size`
+    // name variants, `primary` and `lg` name options, and neither reaches a class —
+    // only the leaves do. Reading the config as an `ss` map would enumerate
+    // `tone:size:primary:bg-blue-600` and, worse, miss the map inside an option that
+    // does need enumerating. So each of the three places a class can hide is walked
+    // to explicitly, and everything else in the config is left alone.
+    case "variants": {
+      const [config] = objectLiterals(args[0] ?? "");
+      if (config === undefined) return;
+      for (const { key, value } of parseObject(config)) {
+        if (key === "base") {
+          emitMaps(value, depth, add, follow);
+        } else if (key === "variants") {
+          for (const group of objectLiterals(value)) {
+            for (const option of parseObject(group)) {
+              for (const choices of objectLiterals(option.value)) {
+                for (const leaf of parseObject(choices)) emitMaps(leaf.value, depth, add, follow);
+              }
+            }
+          }
+        } else if (key === "compound") {
+          // A real array of rule objects, which is not what an array means anywhere
+          // else here: inside an `ss` value an object is a `clsx` dictionary, so
+          // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
+          // the one level so the rules themselves are visible to it.
+          const list = value.trim();
+          const rules = list.startsWith("[") && list.endsWith("]") ? list.slice(1, -1) : list;
+          for (const rule of objectLiterals(rules)) {
+            for (const field of parseObject(rule)) {
+              if (field.key === "class") emitMaps(field.value, depth, add, follow);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // nth(3, "…") / nth("3n+1", "…") and the three siblings. A number is a position
+    // and goes in bare; a string is an expression and goes in brackets — the same
+    // split the runtime makes, so the two agree on which spelling was built.
+    case "nth":
+    case "nthLast":
+    case "nthOfType":
+    case "nthLastOfType": {
+      if (args.length < 2) return;
+      const variant = nthVariants[name];
+      const arg = args[0] ?? "";
+      const prefixes = extractStrings(arg).map((value) => `${variant}-[${escapeCondition(value)}]`);
+      // Only when the argument holds no string at all, so the digits inside `"3n+1"`
+      // are never read as a position of their own.
+      if (prefixes.length === 0) {
+        for (const value of staticValues(arg)) prefixes.push(`${variant}-${value}`);
+      }
+      emitValue(args[1] ?? "", prefixes, add, follow);
       return;
     }
 

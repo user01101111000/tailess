@@ -209,4 +209,31 @@ describe("supports — a query that compiles but cannot work", () => {
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it("warns about a combined query with no parentheses at all", () => {
+    // The shape the docs lead with, and the one a reader is most likely to write
+    // before reading further. Tailwind wraps it as a single declaration, so the rule
+    // exists and is false in every browser — nothing else reports it.
+    const seen = warnings(() => supports("display: grid and gap: 1rem", "grid"));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("false in every browser");
+    expect(warnings(() => notSupports("display: flex and gap: 1rem", "block"))).toHaveLength(1);
+  });
+
+  it("reads a second colon as the tell, so one declaration is left alone", () => {
+    // What separates the two is how many declarations were run together, not the
+    // keyword: `--or` and `'and'` are single declarations that happen to contain one.
+    expect(warnings(() => supports("anchor-name: --or", "p-13"))).toEqual([]);
+    expect(warnings(() => supports("transition: color 1s and 2s", "p-14"))).toEqual([]);
+    expect(warnings(() => supports("grid-template-columns: 1fr and 2fr", "p-15"))).toEqual([]);
+  });
+
+  it("warns about an unclosed quote, which drops the class from the build", () => {
+    // The same check every other arbitrary-value helper runs. An odd `'` ends the
+    // `@source inline("…")` string early and takes the rest of the chunk with it.
+    const seen = warnings(() => supports("content: 'a", "p-16"));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("cannot appear in a class name");
+    expect(warnings(() => supports("content: 'a' 'b'", "p-17"))).toEqual([]);
+  });
 });

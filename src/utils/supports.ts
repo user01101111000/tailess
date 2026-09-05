@@ -1,3 +1,4 @@
+import { warnUnusableValue } from "../internal/arbitrary.js";
 import { escapeCondition } from "../internal/condition.js";
 import { isDev } from "../internal/env.js";
 import type { ClassValue } from "../types.js";
@@ -14,9 +15,6 @@ import { withPrefix } from "./prefix.js";
  */
 const checkedConditions = new Set<string>();
 
-/** Characters a class name cannot carry, so the build never enumerates them. */
-const unusableChar = /["{}\\;]/;
-
 /** `and` / `or` joining two feature queries. CSS keywords are case-insensitive. */
 const combinator = /\b(?:and|or)\b/i;
 
@@ -26,12 +24,8 @@ const keywords = /\b(?:and|or|not)\b/gi;
 /** A leading `not`, which CSS forbids combining with `and` / `or`. */
 const leadingNot = /^not\b/i;
 
-/**
- * The custom-property *name* inside `var(…)` — the one place Tailwind keeps a `_`.
- * A fallback (`var(--a, my_value)`) is decoded like anything else, so only the name
- * is skipped when looking for a literal underscore.
- */
-const varName = /var\(\s*--[\w-]+/g;
+/** Every `:` left in a shape, for counting the declarations it ran together. */
+const colons = /:/g;
 
 /**
  * A condition with each top-level `(…)` group replaced by `#`.
@@ -74,34 +68,30 @@ function warnUnusableCondition(condition: string, negated: boolean): void {
   if (checkedConditions.has(seen)) return;
   checkedConditions.add(seen);
 
-  if (condition === "") {
-    console.warn(
-      "[tailess] supports() was given an empty feature query, which builds " +
-        '"supports-[]:…" — a class nothing ever generates a rule for.',
-    );
-    return;
-  }
-
-  // The build enumerates candidates by writing them into a stylesheet, so a query
-  // carrying one of these cannot be enumerated at all: the class reaches the element
-  // and no rule is ever generated for it.
-  if (unusableChar.test(condition)) {
-    console.warn(
-      `[tailess] the feature query "${condition}" contains one of \`" { } \\ ;\`, which ` +
-        "cannot appear in a class name, so the build generates no rule for it.",
-    );
-    return;
-  }
+  // An empty query, a character no class name can carry, and a literal underscore
+  // are shared with every other helper that takes an arbitrary value, and are checked
+  // in one place. The first two mean no rule is generated at all, so there is nothing
+  // left worth saying about the query's shape.
+  const helper = negated ? "notSupports" : "supports";
+  if (warnUnusableValue(helper, "feature query", condition)) return;
 
   const shape = outline(condition);
-  // Only a query with a parenthesised group can be a combined one. An `and` or `or`
-  // anywhere else belongs to a value — `anchor-name: --or` is a single declaration —
-  // and warning about those would fire on working code.
-  if (shape.includes("#") && combinator.test(shape)) {
+  if (combinator.test(shape)) {
+    // What gives a combined query away depends on whether it has any groups at all.
+    // With one, whatever is left between the groups is a term that was never
+    // parenthesised. With none, a second top-level `:` is the tell: one feature query
+    // is one declaration, so two of them ran together — while a lone `and`/`or` inside
+    // a single value (`anchor-name: --or`, `content: 'and'`) is left alone, because a
+    // warning that fires on working code teaches people to ignore warnings.
+    const grouped = shape.includes("#");
+    const runTogether = grouped
+      ? shape.replace(/#/g, " ").replace(keywords, " ").trim() !== ""
+      : (shape.match(colons) ?? []).length > 1;
     // A top-level `not` beside `and`/`or` is a parse error, so the browser discards
-    // the rule. `notSupports` puts one there whatever the query says.
-    const invalidNot = negated || leadingNot.test(condition);
-    if (invalidNot || shape.replace(/#/g, " ").replace(keywords, " ").trim() !== "") {
+    // the rule. `notSupports` puts one there whatever the query says — but only where
+    // Tailwind emits the query verbatim, which is where it opens with a group.
+    const invalidNot = grouped && (negated || leadingNot.test(condition));
+    if (invalidNot || runTogether) {
       console.warn(
         `[tailess] "${condition}" ` +
           (invalidNot
@@ -110,17 +100,7 @@ function warnUnusableCondition(condition: string, negated: boolean): void {
             : "combines queries without parenthesising each term, so it compiles to one " +
               'condition that is false in every browser. Write "(a) and (b)".'),
       );
-      return;
     }
-  }
-
-  // A literal `_` is indistinguishable from the one this helper writes for a space,
-  // and Tailwind decodes both — so `--my_var` silently becomes `--my var`.
-  if (condition.replace(varName, "").includes("_")) {
-    console.warn(
-      `[tailess] the query "${condition}" has a literal underscore, which Tailwind ` +
-        'reads as a space. Spaces are escaped for you; use withPrefix for a real "\\_".',
-    );
   }
 }
 
