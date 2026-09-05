@@ -911,12 +911,20 @@ screens.md;                                               // "48rem"
 window.matchMedia(`(min-width: ${screens.md})`).matches;  // true above 768px
 ```
 
-Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `CustomKeys`, `TailessSettings`,
-`SlotDefaults`, `SlotValue`, `SlottedComponent`, `SlottedConfig`, `SlottedGroups`,
-`CompoundRule`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
-`HasStateKey`, `InStateKey`, `ResponsiveMap`, `ClassValue`, `CssVars`, `CssVarInput`,
-`CssVarName`, `AnyContainerKey`, `NthValue`, `VariantProps`, `VariantsConfig`,
-`VariantComponent`, `VariantGroups`, `VariantOptions`.
+Every exported type, grouped by what it is for. A test holds this list to what
+`src/index.ts` actually exports, so it cannot fall behind.
+
+| | |
+| --- | --- |
+| **`ss` itself** | `SsInput` `SsValue` `SsArg` `SsKey` `ClassValue` `ResponsiveMap` |
+| **Key families** — for a `Record<…>` keyed by one | `ScreenKey` `MaxScreenKey` `ContainerKey` `MaxContainerKey` `AnyContainerKey` `StateKey` `ElementStateKey` `StandaloneStateKey` `GroupStateKey` `PeerStateKey` `HasStateKey` `InStateKey` `NotStateKey` `NegatableStateKey` |
+| **Recipes** | `VariantProps` `VariantsConfig` `VariantComponent` `VariantGroups` `VariantOptions` `CompoundRule` `SlotDefaults` `SlotValue` `SlottedConfig` `SlottedComponent` `SlottedGroups` |
+| **The rest** | `NthValue` `CssVars` `CssVarInput` `CssVarName` `CustomKeys` `TailessSettings` |
+
+The plugin option types are on their own entries: `TailessViteOptions` from
+`tailess/vite`, `TailessPostcssOptions` from `tailess/postcss`, and `CollectOptions`,
+`CollectResult`, `FileDiagnostic`, `Diagnostic`, `DiagnosticMode`, `BreakpointDecl` and
+`CollectedTheme` from [`tailess/build`](#tailessbuild--the-scanner-as-a-library).
 
 ## Keys
 
@@ -1423,15 +1431,26 @@ so `.storybook/preview.tsx` is still found.
 
 ## Performance
 
-Measured on the built package, Node 22. Runtime numbers are per call, warm:
+Reproduce these yourself — they come from a script in the repository, not from memory:
+
+```bash
+npm run build && npm run bench
+```
 
 | | |
 | --- | --- |
-| `cn("px-2 py-1", …, "px-4")` | ~123 ns |
-| `ss()` with 3 groups | ~385 ns |
-| `ss()` with 8 groups | ~970 ns |
-| Cold scan, 2,000-file project | ~98 ms |
-| Warm rescan, same project | ~17 ms |
+| `cn("px-2 py-1", …, "px-4")` | ~53 ns |
+| `ss()` with 3 groups | ~244 ns |
+| `ss()` with 8 groups | ~592 ns |
+| Cold scan, 2,000-file project | ~287 ms |
+| Warm rescan, same project | ~52 ms |
+
+Measured on the **built** package — `src/` through a transform is a different program —
+on Node 24, Windows, one middling laptop. The absolute numbers will differ on yours; the
+two worth reading are the shapes. Runtime cost is per call and warm, because
+`tailwind-merge` keeps its own cache and a rendering app never pays the cold price twice.
+The scanner's warm rescan is what a dev server does on every keystroke, and it is ~5×
+faster than the cold one because the per-file cache is keyed on mtime and size.
 
 ## Troubleshooting
 

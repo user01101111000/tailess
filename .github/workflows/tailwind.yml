@@ -1,0 +1,58 @@
+name: Tailwind
+
+# The whole package is a contract with Tailwind's variant registry: 305 keys compiled
+# in, and a runtime that builds class names Tailwind has to have a rule for. The
+# lockfile pins one version, so a Tailwind release that renames a variant, drops one, or
+# changes how an arbitrary value is parsed would land in a consumer's project before it
+# ever landed here. This asks the question on a schedule instead.
+on:
+  schedule:
+    # Weekly, Monday morning UTC. Often enough to hear about a release the week it
+    # happens; rare enough that a red badge means something.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  latest:
+    name: against the latest Tailwind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Deliberately outside the lockfile. Everything else in CI runs against the pinned
+      # version; this one job exists to run against the version consumers will actually
+      # get tomorrow.
+      - name: Take the latest Tailwind
+        run: |
+          npm install --no-save tailwindcss@latest @tailwindcss/postcss@latest
+          node -p "'testing against tailwindcss ' + require('tailwindcss/package.json').version"
+
+      - name: Build
+        run: npm run build
+
+      # `test/constants.test.ts` compiles every one of the 305 keys with the real
+      # compiler, so a variant that changed meaning or stopped existing fails here.
+      - name: Test
+        run: npm test
+
+      - name: Gate the example app
+        run: |
+          npm install --no-audit --no-fund
+          npm install --no-save tailwindcss@latest @tailwindcss/vite@latest
+          npm run build
+          npx tailess check --content src --strict
+        working-directory: examples/vite-react
+
+      - name: Say what broke
+        if: failure()
+        run: |
+          echo "::error::tailess does not pass against the current Tailwind release."
+          echo "::error::Compare the pinned version in package-lock.json with the one above."

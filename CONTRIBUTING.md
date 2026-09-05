@@ -127,6 +127,32 @@ Handy extras: `npm run lint:fix` (auto-fix formatting), `npm run test:coverage`,
 `npm run test:watch`, and `node dist/cli.js check --content src` to run the gate against
 this repo itself.
 
+## 🧭 What counts as stable
+
+tailess is `0.x`, so semver's own answer is "nothing" — which is not useful. What the
+project actually promises:
+
+| Surface | Promise |
+| --- | --- |
+| The runtime helpers and their signatures | A breaking change is a **minor**, called out at the top of the changeset with the line to change. |
+| The key set | Keys are only ever **added**. One is removed only if Tailwind removes the variant. |
+| `tailess/vite`, `tailess/postcss` and their options | Same as the helpers. The plugin's *shape* — a default export that is the creator itself — never changes; a named export there breaks every string-named PostCSS config. |
+| `tailess check` exit codes | `0`, `1` and `2` mean what the README says and will not be renumbered. New failures reuse the existing three. |
+| `tailess/build` | Newer and narrower. Expect it to grow; anything removed gets a minor and a note. |
+| Anything reachable only through `dist/` internals | Not a surface. It may change in a patch. |
+
+**Deprecation.** A helper on the way out keeps working for at least one minor, with a
+dev-time warning naming its replacement, before it is removed.
+
+**Tailwind.** `tailwindcss` is a peer dependency at `^4.0.0`. A weekly CI job runs the
+whole suite against the *latest* Tailwind rather than the pinned one, because the 305
+keys are a contract with Tailwind's variant registry and a change there would otherwise
+reach a consumer before it reached us.
+
+**Node.** `engines` says what is tested, not the lowest that happens to work — the floor
+tracks what a Tailwind v4 toolchain already requires. CI loads the built package on
+exactly that version.
+
 ## 📦 Versioning & Releases
 
 tailess uses [**Changesets**](https://github.com/changesets/changesets), **not** commit
@@ -150,6 +176,24 @@ This creates a small markdown file under `.changeset/`. Commit it with your PR. 
 > **Do not edit `CHANGELOG.md` by hand** — it is generated from your changesets.
 
 Docs-only or tooling-only PRs that don't affect the published package don't need a changeset.
+
+### Trying a release before it is one
+
+An npm version cannot be unpublished, so anything large goes out on a tag first:
+
+```sh
+npx changeset pre enter next   # subsequent releases publish as 0.x.y-next.N under `next`
+npx changeset pre exit         # back to `latest`
+```
+
+Install it with `npm i tailess@next`. Use it for a change big enough that you want it in
+a real project before it reaches everyone — the slots work, or anything touching the
+scanner.
+
+**Check the version before merging a release PR.** `changeset version` computes the next
+number from `package.json`, not from npm, so a branch that is behind `main` will compute
+one that is already published and the release fails at `npm publish`. `git merge main`
+first.
 
 ## 📝 Commit Messages
 

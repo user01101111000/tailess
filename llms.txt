@@ -1,0 +1,71 @@
+# tailess
+
+> Write Tailwind classes as a typed object grouped by breakpoint and state. A build
+> plugin enumerates every class the runtime can build and hands the list to Tailwind, so
+> the classes actually get CSS.
+
+## The one rule
+
+**Every class must be a literal at the call site.**
+
+The runtime builds `md:p-6` while the page renders. Tailwind never sees that string in
+the source, so a build plugin predicts it from the call site and safelists it. When the
+prediction is impossible, the class still lands on the element and **no rule is ever
+generated** — no console error, no build error, nothing. The element is simply unstyled.
+
+This is the opposite of several habits that are normally good:
+
+```ts
+// ❌ every one of these is silently unstyled
+const size = "p-4";
+ss({ md: size });                     // a variable
+ss({ md: `text-${scale}` });          // an interpolated template
+ss({ ...spread });                    // a spread
+ss({ [key]: "grid" });                // a computed key
+withPrefix(dynamicPrefix, "p-4");     // a computed prefix
+import { ss as tw } from "tailess";   // a renamed import — kills the whole file
+
+// ✅ keep the class literal, move the choice
+ss({ md: "p-4" });
+match(size, { sm: "p-2", lg: "p-8" });          // a lookup, all branches literal
+ss({ md: cond ? "p-4" : "p-2" });               // both branches are read
+ss({ base: "w-[var(--w)]" });                   // a value from data goes in a CSS var
+style={vars({ "--w": `${percent}%` })}
+```
+
+`base` is the exception: it adds no prefix, so its value passes through and Tailwind
+finds the literal wherever it really lives.
+
+## API
+
+- `ss(...)` — the whole `className` in one call. Keys are `base`, breakpoints (`sm`…`2xl`),
+  `max-*` ranges, container queries (`@md`, `@max-md`), and states (`hover`, `dark`,
+  `group-hover`, `peer-checked`, `has-focus`, `not-first`, …). 305 keys, closed union.
+- `cn(...)` — join + `tailwind-merge`, nothing else.
+- `responsive`, `on`, `until`, `between`, `data`, `aria`, `match`, `withPrefix`
+- `supports` / `notSupports` — feature queries. Negation is only ever `not-supports-*`.
+- `group` / `peer` / `container` — named variants.
+- `has` / `notHas` / `inside`, `nth` / `nthLast` / `nthOfType` / `nthLastOfType`
+- `variants(...)` — component recipes, with `slots`, `extend`, boolean variants and
+  compound rules. Accepts `cva`'s call shape and key names.
+- `vars(...)` — CSS custom properties for values a class cannot carry.
+- `configure({ merge, onWarn, keys })`
+
+Nesting runs one way: a helper goes **inside** an `ss` bucket, never the reverse.
+`ss({ hover: on("hover", "underline") })` is right; `on("hover", { base: … })` builds
+the class `hover:base`.
+
+## Checking
+
+```bash
+npx tailess doctor   # is the plugin wired up at all?
+npx tailess check    # compile for real; exits 1 if a class has no rule
+```
+
+The build plugin reports eleven things it can prove wrong from the source, including
+every shape listed above.
+
+## Docs
+
+- README: https://github.com/user01101111000/tailess#readme
+- Contributing: https://github.com/user01101111000/tailess/blob/main/CONTRIBUTING.md
