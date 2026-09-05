@@ -42,6 +42,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./build": {
+      "import": {
+        "types": "./dist/build.d.ts",
+        "default": "./dist/build.js"
+      },
+      "require": {
+        "types": "./dist/build.d.cts",
+        "default": "./dist/build.cjs"
+      }
+    },
     "./postcss": {
       "import": {
         "types": "./dist/postcss/index.d.ts",
@@ -77,6 +87,9 @@
       ],
       "vite": [
         "./dist/vite/index.d.ts"
+      ],
+      "build": [
+        "./dist/build.d.ts"
       ]
     }
   },

@@ -7,6 +7,7 @@ import { collect } from "../extract/collect.js";
 import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
+import { runDoctor, runInit, wired } from "./setup.js";
 import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
 /**
@@ -20,7 +21,7 @@ import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
 export interface Options {
   /** Which command to run. `check` compiles and verifies; `emit` writes the prelude. */
-  command: "check" | "emit";
+  command: "check" | "emit" | "init" | "doctor";
   content: string[];
   css: string | undefined;
   cwd: string;
@@ -36,6 +37,8 @@ export interface Options {
   max: number;
   /** Where `emit` writes its stylesheet. */
   out: string | undefined;
+  /** Let `init` actually change the config, rather than only showing the edit. */
+  write: boolean;
 }
 
 /** Options that take a comma-separated list as well as being repeatable. */
@@ -50,12 +53,13 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
   let out: string | undefined;
   let strict = false;
   let json = false;
+  let write = false;
   let max = 20;
   // `tailess check …` and a bare `tailess …` are the same thing; `emit` is the one
   // other command, so the subcommand is read here rather than in the binary.
-  let command: "check" | "emit" = "check";
+  let command: Options["command"] = "check";
   let rest = argv;
-  if (rest[0] === "check" || rest[0] === "emit") {
+  if (rest[0] === "check" || rest[0] === "emit" || rest[0] === "init" || rest[0] === "doctor") {
     command = rest[0];
     rest = rest.slice(1);
   }
@@ -66,6 +70,10 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
     if (arg === "--version" || arg === "-v") return "version";
     if (arg === "--strict") {
       strict = true;
+      continue;
+    }
+    if (arg === "--write") {
+      write = true;
       continue;
     }
     if (arg === "--json") {
@@ -101,12 +109,26 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
     throw new Error(`unknown option ${arg}`);
   }
 
-  return { command, content, css, cwd: process.cwd(), strict, extensions, ignore, json, max, out };
+  return {
+    command,
+    content,
+    css,
+    cwd: process.cwd(),
+    strict,
+    extensions,
+    ignore,
+    json,
+    write,
+    max,
+    out,
+  };
 }
 
 export const help = `tailess — prove every class tailess builds has CSS behind it.
 
   npx tailess check [options]     compile the project and verify every class
+  npx tailess doctor              say whether the plugin is wired up, and how
+  npx tailess init [--write]      wire it up, after showing the edit
   npx tailess emit --out <file>   write the @source inline(...) stylesheet
 
   --content <dir>       where your source lives. Repeatable, or comma-separated.
@@ -119,8 +141,11 @@ export const help = `tailess — prove every class tailess builds has CSS behind
                         printed and do not affect the exit code. (check only)
   --max <n>             how many broken classes to name before summarising.
                         Default 20; 0 for all of them. (check only)
-  --json                print one JSON object instead of prose.
+  --json                print one JSON object instead of prose. On emit, that is the
+                        candidate list itself rather than the stylesheet.
   --out <file>          where to write. (emit only)
+  --write               let init change the config. Without it, it only shows the
+                        edit it would make.
   --version, -h --help
 
 Give --extensions and --ignore the same values as the plugin, or the gate checks a
@@ -246,22 +271,6 @@ async function loadCompiler(cwd: string): Promise<Compile> {
 const configFile = /^(?:\..*rc(?:\..*)?|.*\.config\.[cm]?[jt]sx?|.*\.config\.json|package\.json)$/;
 
 /**
- * True when `text` wires the plugin in, rather than merely naming it.
- *
- * The Vite plugin has to be *called*: deleting `tailess()` from the `plugins` array and
- * leaving the import behind is exactly the shape this check exists to catch, and reading
- * for the word alone would have called that wired. The import is still read, but only to
- * learn what the plugin was bound to, so an aliased one is not a false alarm.
- */
-function wiresPlugin(text: string): boolean {
-  if (/["']tailess\/postcss["']/.test(text)) return true;
-  const imported =
-    /(?:import|require\(?)\s*\{?\s*(\w+)\s*\}?\s*(?:from)?\s*\(?["']tailess\/vite["']/.exec(text);
-  const name = imported?.[1] ?? "tailess";
-  return new RegExp(`\\b${name}\\s*\\(`).test(text);
-}
-
-/**
  * True when nothing in the project's root config mentions tailess.
  *
  * The plugin not being wired up is the first failure the troubleshooting section
@@ -295,12 +304,12 @@ async function pluginLooksUnwired(cwd: string): Promise<boolean> {
       }
       if (postcss === undefined) continue;
       sawConfig = true;
-      if (wiresPlugin(JSON.stringify(postcss))) return false;
+      if (wired(JSON.stringify(postcss))) return false;
       continue;
     }
 
     sawConfig = true;
-    if (wiresPlugin(text)) return false;
+    if (wired(text)) return false;
   }
   // No config at all means this is not a project root worth guessing about.
   return sawConfig;
@@ -347,13 +356,42 @@ function scanOptions(options: Options, roots: string[]) {
 /** `tailess emit` — write the stylesheet the plugins would have injected. */
 async function runEmit(options: Options): Promise<number> {
   const roots = rootsFor(options);
-  const { classes, files } = await collect(scanOptions(options, roots));
+  const { classes, files, sources } = await collect({
+    ...scanOptions(options, roots),
+    provenance: options.json,
+  });
 
   if (files.length === 0) {
     console.error(
       `[tailess] scanned no files, so there is nothing to emit. Looked in: ${roots.join(", ")}.`,
     );
     return 2;
+  }
+
+  // The candidate list itself, for anyone who has to look at what the scanner found
+  // rather than at the stylesheet it wrapped them in. The documented way to answer
+  // "did it see my class?" was reading escaped selectors out of the built CSS.
+  if (options.json) {
+    const body = JSON.stringify({
+      tailess: 1,
+      command: "emit",
+      ok: true,
+      code: 0,
+      files: files.length,
+      classes: classes.map((cls) => ({
+        class: cls,
+        files: shown(sources?.get(cls), options.cwd),
+      })),
+    });
+    if (options.out === undefined) {
+      console.log(body);
+    } else {
+      const path = isAbsolute(options.out) ? options.out : resolve(options.cwd, options.out);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, body, "utf8");
+      console.log(`[tailess] ${classes.length} classes written to ${relative(options.cwd, path)}.`);
+    }
+    return 0;
   }
 
   const css = buildPrelude(classes);
@@ -550,5 +588,8 @@ async function runCheck(options: Options): Promise<number> {
 }
 
 export async function run(options: Options): Promise<number> {
-  return options.command === "emit" ? runEmit(options) : runCheck(options);
+  if (options.command === "emit") return runEmit(options);
+  if (options.command === "doctor") return runDoctor(options.cwd);
+  if (options.command === "init") return runInit(options.cwd, options.write);
+  return runCheck(options);
 }

@@ -273,6 +273,20 @@ export function variants<
   const V extends VariantGroups,
   const E extends AnyRecipe | undefined = undefined,
 >(config: VariantsConfig<V> & { extend?: E }): VariantComponent<V & Inherited<E>>;
+/**
+ * `cva`'s own call shape: the base classes first, everything else second.
+ *
+ * With `compoundVariants` and `defaultVariants` already accepted as aliases, this is
+ * the last thing that differed — so porting a `cva` codebase is `cva(` → `variants(`
+ * and nothing else, which is why there is no codemod to write.
+ */
+export function variants<
+  const V extends VariantGroups,
+  const E extends AnyRecipe | undefined = undefined,
+>(
+  base: SsArg,
+  config: Omit<VariantsConfig<V>, "base"> & { extend?: E },
+): VariantComponent<V & Inherited<E>>;
 
 /**
  * Build a component's `className` from a set of typed variants.
@@ -323,7 +337,10 @@ export function variants<
 // The two overloads above are the contract; this signature only has to be wide enough
 // to serve both, which no shared type would be without giving up on either.
 // biome-ignore lint/suspicious/noExplicitAny: an implementation signature, never called
-export function variants(config: any): any {
+export function variants(first: any, second?: any): any {
+  // `cva`'s shape: base classes first, config second. A config object always has
+  // `variants`; a base value never does, so the two cannot be confused.
+  const config = second === undefined ? first : { ...second, base: first };
   const resolved = resolve(config);
   const groups = resolved.variants;
   const names = Object.keys(groups);

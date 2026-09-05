@@ -314,3 +314,48 @@ describe("an ss map handed to a helper that takes a flat class value", () => {
     expect(kinds(`on("hover", { block: a, flex: b })`)).toEqual([]);
   });
 });
+
+describe("a bucket the scanner cannot read", () => {
+  it("reports the shapes the README lists as invisible", () => {
+    // The package's most common support case, and the type system cannot express any
+    // of it: `ss({ md: size })` is perfectly well typed and completely unstyled.
+    expect(kinds(`ss({ md: size })`)).toEqual(["dynamic-value"]);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the fixture
+    expect(kinds("ss({ md: `text-${scale}` })")).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ hover: props.className })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`responsive("p-4", { md: size })`)).toEqual(["dynamic-value"]);
+  });
+
+  it("names the value and the way out", () => {
+    const [first] = diagnose(`ss({ md: size })`);
+    expect(first?.message).toContain('"md" bucket is set to `size`');
+    expect(first?.message).toContain("match(size, { … })");
+    expect(first?.message).toContain("vars()");
+  });
+
+  it("says nothing about base, where the value passes through unprefixed", () => {
+    // Tailwind finds the literal wherever it really lives, so the same shape works —
+    // and reporting it would be a warning fired at code that is fine.
+    expect(kinds(`ss({ base: size })`)).toEqual([]);
+    expect(kinds(`ss({ base: props.className })`)).toEqual([]);
+  });
+
+  it("says nothing when a literal is in reach", () => {
+    expect(kinds(`ss({ md: cond && "p-4" })`)).toEqual([]);
+    expect(kinds(`ss({ md: cond ? "p-4" : "p-2" })`)).toEqual([]);
+    expect(kinds(`ss({ md: [x, "p-4"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: { hover: "underline" } })`)).toEqual([]);
+    expect(kinds(`ss({ md: on("hover", "underline") })`)).toEqual([]);
+  });
+
+  it("says nothing about a value that contributes no class at all", () => {
+    for (const value of ["true", "false", "null", "undefined", "0"]) {
+      expect(kinds(`ss({ md: ${value} })`)).toEqual([]);
+    }
+  });
+
+  it("says nothing about a later argument, which is not a bucket", () => {
+    expect(kinds(`ss({ md: "p-4" }, className)`)).toEqual([]);
+    expect(kinds(`ss(base, cond && { md: "p-4" })`)).toEqual([]);
+  });
+});

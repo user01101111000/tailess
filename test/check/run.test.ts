@@ -47,6 +47,7 @@ async function check(extra: Partial<Parameters<typeof run>[0]> = {}) {
     json: false,
     max: 20,
     out: undefined,
+    write: false,
     ...extra,
   });
   return { code, output: out.join("\n") };
@@ -414,6 +415,7 @@ describe("tailess emit", () => {
       json: false,
       max: 20,
       out: join(dir, "tailess.css"),
+      write: false,
       ...extra,
     });
     return { code, output: out.join("\n") };
@@ -488,6 +490,7 @@ describe("whether the plugin is wired up", () => {
       json: false,
       max: 20,
       out: undefined,
+      write: false,
     });
     return out.join("\n");
   }
@@ -515,5 +518,36 @@ describe("whether the plugin is wired up", () => {
       `const tailess = require("tailess/vite");\nmodule.exports = { plugins: [tailess()] };`,
     );
     expect(output).not.toContain("may not be running");
+  });
+});
+
+describe("tailess emit --json", () => {
+  it("prints the candidate list itself, with where each class came from", async () => {
+    // The documented way to answer "did the scanner see my class?" was reading escaped
+    // selectors out of the built CSS by hand.
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    await writeFile(join(dir, "Card.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "Row.tsx"), `on("hover", "underline"); ss({ md: "p-4" })`);
+    const code = await run({
+      command: "emit",
+      content: [dir],
+      css: undefined,
+      cwd: dir,
+      strict: false,
+      extensions: [],
+      ignore: [],
+      json: true,
+      max: 20,
+      out: undefined,
+      write: false,
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out.join("\n"));
+    expect(parsed).toMatchObject({ tailess: 1, command: "emit", ok: true, files: 2 });
+    expect(parsed.classes).toEqual([
+      { class: "hover:underline", files: ["Row.tsx"] },
+      { class: "md:p-4", files: ["Card.tsx", "Row.tsx"] },
+    ]);
   });
 });

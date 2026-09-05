@@ -487,7 +487,15 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     // does need enumerating. So each of the three places a class can hide is walked
     // to explicitly, and everything else in the config is left alone.
     case "variants": {
-      const [config] = objectLiterals(args[0] ?? "");
+      // `cva`'s shape puts the base classes first and the config second. Which argument
+      // is which is decided by the `variants` key: a config always has one, and a base
+      // value never does — including when it is an `ss` map, which a string-only test
+      // would have read as the config.
+      const first = objectLiterals(args[0] ?? "")[0];
+      const isConfig = first !== undefined && parseObject(first).some((f) => f.key === "variants");
+      const cva = args.length > 1 && !isConfig;
+      if (cva) emitMaps(args[0] ?? "", depth, add, follow);
+      const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
       if (config === undefined) return;
       const fields = parseObject(config);
 

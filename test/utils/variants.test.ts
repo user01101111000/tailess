@@ -384,3 +384,36 @@ describe("what the scanner has to agree with", () => {
     expect(extractClasses(aliases)).toEqual(extractClasses(own));
   });
 });
+
+describe("cva's own call shape", () => {
+  it("takes the base classes as a first argument", async () => {
+    // With `compoundVariants` and `defaultVariants` already aliased, this was the last
+    // thing that differed — so porting a cva codebase is `cva(` -> `variants(` and
+    // nothing else, which is why there is no codemod to write.
+    const button = variants("rounded font-medium", {
+      variants: { tone: { primary: "bg-blue-600", danger: "bg-red-600" } },
+      compoundVariants: [{ tone: "danger", className: "ring-2" }],
+      defaultVariants: { tone: "primary" },
+    });
+    expect(button()).toBe("rounded font-medium bg-blue-600");
+    expect(button({ tone: "danger" })).toBe("rounded font-medium bg-red-600 ring-2");
+    expectTypeOf<VariantProps<typeof button>>().toEqualTypeOf<{
+      tone?: "primary" | "danger" | undefined;
+    }>();
+  });
+
+  it("takes an ss map as the base, which cva could not", () => {
+    const t = variants({ base: "p-2", hover: "underline" } as never, {
+      variants: { s: { a: "p-4" } },
+    });
+    expect(t({ s: "a" })).toBe("hover:underline p-4");
+  });
+
+  it("is read by the scanner the same as the config form", async () => {
+    const { extractClasses } = await import("../../src/extract/extract.js");
+    const cva = `variants({ base: "rounded", md: "p-6" }, { variants: { t: { a: { hover: "ring-2" } } } })`;
+    const own = `variants({ base: { base: "rounded", md: "p-6" }, variants: { t: { a: { hover: "ring-2" } } } })`;
+    expect(extractClasses(cva)).toEqual(["hover:ring-2", "md:p-6"]);
+    expect(extractClasses(cva)).toEqual(extractClasses(own));
+  });
+});

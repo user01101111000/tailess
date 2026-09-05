@@ -104,6 +104,7 @@ className={ss(
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
 - [Build-time checks](#build-time-checks)
 - [Checking your build](#checking-your-build)
+- [`tailess/build` — the scanner, as a library](#tailessbuild--the-scanner-as-a-library)
 - [`tailess emit` — the stylesheet, as a file](#tailess-emit--the-stylesheet-as-a-file)
 - [Plugin options](#plugin-options)
 - [Performance](#performance)
@@ -197,6 +198,19 @@ push, and asserts the gate goes red when the plugin is removed.
 
 Add one line to the config file you already have for Tailwind. There is no
 `tailess.config`, nothing to add to your CSS, and no generated file to commit.
+
+```bash
+npx tailess init          # shows the edit it would make
+npx tailess init --write  # makes it
+npx tailess doctor        # says whether the plugin is wired up, and exits 1 if not
+```
+
+`init` reads your project, picks the right integration, and writes the edit — after
+printing it. `doctor` is the same reading without the edit, and is worth a CI step: a
+missing plugin is the one failure nothing else reports, because the build succeeds and
+the class attributes are correct while nothing on the page has styles.
+
+Or do it by hand — it is one line either way.
 
 ### Vite
 
@@ -749,7 +763,8 @@ includes the inherited options. Slotted recipes extend the same way, gaining par
 
 #### Coming from `cva` or `tailwind-variants`
 
-Same shape, three renamed keys. Every line below is verified against the current build.
+Same shape, and the renamed keys are accepted as aliases — so a port is `cva(` ->
+`variants(` and nothing else. Every line below is verified against the current build.
 
 | `cva` / `tv` | tailess | |
 | --- | --- | --- |
@@ -757,7 +772,7 @@ Same shape, three renamed keys. Every line below is verified against the current
 | `defaultVariants` | `defaults` | |
 | `compoundVariants` | `compound` | |
 | `class` / `className` in a compound rule | `class` | no `className` alias |
-| `cva("base", { … })` | `variants({ base: "…", … })` | `base` is a config key, not the first argument |
+| `cva("base", { … })` | `variants("base", { … })` | the same call shape; `base` also works as a config key |
 | `button({ tone: "danger", class: "mt-2" })` | `button({ tone: "danger" }, "mt-2")` | extra classes are a second argument, like `cn` |
 | `VariantProps<typeof button>` | `VariantProps<typeof button>` | unchanged |
 | `slots` | `slots` | returns a record of strings, not slot functions |
@@ -765,15 +780,20 @@ Same shape, three renamed keys. Every line below is verified against the current
 | `{ intent: ["a", "b"] }` in a compound | same | |
 | `disabled?: boolean` | same | |
 
-```ts
-// cva                                     // tailess
-const button = cva("rounded", {            const button = variants({
-  variants: { tone: { … }, size: { … } },    base: "rounded",
-  compoundVariants: [{ … }],                 variants: { tone: { … }, size: { … } },
-  defaultVariants: { tone: "primary" },      compound: [{ … }],
-});                                          defaults: { tone: "primary" },
-                                           });
+```diff
+- import { cva } from "class-variance-authority";
++ import { variants } from "tailess";
+
+- const button = cva("rounded", {
++ const button = variants("rounded", {
+    variants: { tone: { … }, size: { … } },
+    compoundVariants: [{ tone: "danger", className: "ring-2" }],
+    defaultVariants: { tone: "primary" },
+  });
 ```
+
+That is the whole port — the renamed keys are accepted as written and the call shape is
+the same, which is why there is no codemod to run.
 
 **What you gain.** A variant option can be an `ss` map, so it carries its own breakpoints
 and states — `lg: { base: "text-lg px-4", md: "px-6" }`, which a flat string cannot say.
@@ -1106,12 +1126,13 @@ The plugin reports what it can prove wrong from your source, while the project b
   it as a key — ss({ "sm": … }) compiles, emits "sm:", and no rule is generated for it.
 ```
 
-Nine things are checked: two conflicting utilities in **one** string, a `between` range
+Eleven things are checked: two conflicting utilities in **one** string, a `between` range
 no viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value
 no class name can carry — a `supports` query, a `has`/`inside` selector, an `nth`
 position — a helper imported under another name, an `ss` map handed to a helper
-that takes a flat class value, CSS that moves the variants out from under the keys, and
-CSS that imports Tailwind with a `prefix(…)`.
+that takes a flat class value, a prefixed bucket whose value the scanner cannot read, CSS
+that moves the variants out from under the keys, and CSS that imports Tailwind with a
+`prefix(…)`.
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
@@ -1121,6 +1142,19 @@ the point of passing `className` last.
 from the candidate list — while the file compiles, type-checks and renders exactly the
 `class` attribute you wrote. Renaming `cn` or `match` is free; renaming a helper that
 builds a variant prefix is not, and that is what this reports.
+
+**A bucket the scanner cannot read** is the package's most common support case, and the
+type system cannot express any of it — `ss({ md: size })` is perfectly well typed and
+completely unstyled. Everything the
+[scanner cannot see](#what-the-scanner-can-and-cannot-see) under a *prefixed* key is
+reported by name:
+
+```ts
+ss({ md: size })                 // ❌ reported
+ss({ md: `text-${scale}` })      // ❌ reported
+ss({ base: size })               // ✅ no prefix, so Tailwind finds the literal itself
+ss({ md: cond && "p-4" })        // ✅ the sweep reads both halves
+```
 
 **An `ss` map in the wrong place.** Composition runs one way — a helper nests *inside*
 an `ss` bucket, never the reverse. Every helper's class argument is a `ClassValue`, where
@@ -1247,6 +1281,25 @@ half, so it was never a class and is not reported.
 It uses your Tailwind, resolved from your tree, and loads your `@plugin`s and `@config`
 the way Tailwind itself does — so a variant or utility that only exists because of a
 plugin counts as generated rather than missing.
+
+## `tailess/build` — the scanner, as a library
+
+Everything here that is not the runtime rests on one question — *which classes can this
+source build at runtime?* — and the two plugins and the binary were the only ways to ask.
+A webpack or rspack loader, an esbuild plugin, an Astro or Nuxt module, an editor
+extension, a lint rule, your own CI script: all of them need the same answer.
+
+```ts
+import { collect, buildPrelude, diagnose, themeDiagnostics } from "tailess/build";
+
+const { classes, files, diagnostics } = await collect({ roots: ["src"] });
+const css = buildPrelude(classes);   // the @source inline(...) Tailwind needs
+```
+
+It is Node-only — it walks the file system — which is why it is a subpath rather than
+part of `tailess` itself: the runtime pulls in no Node types at all, and that stays true.
+Also exported: `extractClasses`, `isTailwindEntry`, `tailwindPrefixIn`, `collectTheme`,
+`reportDiagnostics`, `hasRule`, `selectorFor`, `defaultExtensions`, `defaultIgnore`.
 
 ## `tailess emit` — the stylesheet, as a file
 

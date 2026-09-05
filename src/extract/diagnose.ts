@@ -5,6 +5,8 @@ import {
   extractStrings,
   helperNames,
   isArrayLiteral,
+  objectLiterals,
+  parseObject,
   type RawCall,
   scanCalls,
 } from "./scan.js";
@@ -37,7 +39,9 @@ export interface Diagnostic {
     /** A helper imported under another name, which the scanner cannot follow. */
     | "renamed-import"
     /** An `ss` map handed to a helper whose class argument is a clsx value. */
-    | "bucket-as-dictionary";
+    | "bucket-as-dictionary"
+    /** A prefixed bucket whose value the scanner cannot read. */
+    | "dynamic-value";
   /** One line, written for whoever has to fix it. */
   message: string;
 }
@@ -133,6 +137,45 @@ function bucketMapAsDictionary(
         `other way round: ss({ ${key}: ${name}(…) }).`,
     });
     return;
+  }
+}
+
+/** Values that contribute no class at all, so being unreadable costs nothing. */
+const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '""', "''", "``"]);
+
+/**
+ * Report a bucket whose value the scanner cannot read.
+ *
+ * The README lists these as things the scanner cannot see — a variable, an interpolated
+ * template, a call it does not know — and every one of them is silent: the runtime
+ * builds `md:p-4` from whatever the value turns out to be, and no candidate was ever
+ * enumerated for it, so the class lands with no rule. It is the package's most common
+ * support case and the type system cannot express any of it, because `ss({ md: size })`
+ * is perfectly well typed.
+ *
+ * Only a *prefixed* bucket is reported. `base` adds no prefix, so its value passes
+ * through unchanged and Tailwind finds the literal wherever it really lives — which is
+ * why the same shape there is fine, and reporting it would be a warning on working code.
+ */
+function dynamicBuckets(text: string | undefined, report: (d: Diagnostic) => void): void {
+  if (!text) return;
+  for (const map of objectLiterals(text)) {
+    for (const { key, value } of parseObject(map)) {
+      if (key === "base") continue;
+      const trimmed = value.trim();
+      if (trimmed === "" || contributesNothing.has(trimmed)) continue;
+      // A literal anywhere in the value is enough: the sweep reads both branches of a
+      // ternary and both halves of `cond && "p-4"`, so those are not dynamic.
+      if (extractStrings(value).length > 0 || objectLiterals(value).length > 0) continue;
+      report({
+        kind: "dynamic-value",
+        message:
+          `the "${key}" bucket is set to \`${trimmed}\`, which the scanner cannot read — so ` +
+          `nothing enumerates the class it builds and it reaches the element with no rule. ` +
+          `Keep the class literal at the call site: match(${trimmed}, { … }) for a lookup, ` +
+          `or vars() when the value is a number.`,
+      });
+    }
   }
 }
 
@@ -320,8 +363,12 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       // Every argument of these is (or contains) class values; the literals inside
       // are what matter, and `extractStrings` reaches them wherever they sit.
       // No `bucketMapAsDictionary` here: for these two an object argument really is a
-      // bucket map, which is the whole point of them.
-      for (const arg of args) deadClasses(arg, report);
+      // bucket map, which is the whole point of them — and is what makes it the one
+      // place a bucket the scanner cannot read is worth reporting.
+      for (const arg of args) {
+        deadClasses(arg, report);
+        dynamicBuckets(arg, report);
+      }
       return;
     }
   }
