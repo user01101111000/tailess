@@ -1,7 +1,7 @@
 import { rankOf, unknownRank } from "../constants.js";
 import { isDev } from "../internal/env.js";
 import { join } from "../internal/join.js";
-
+import { isCustomKey, warn } from "../internal/settings.js";
 import type { ClassValue, SsArg, SsInput, SsValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
@@ -30,7 +30,7 @@ function isMap(value: SsValue): value is SsInput {
 }
 
 function warnUnknownKey(key: string): void {
-  console.warn(
+  warn(
     `[tailess] ss(): "${key}" is not a Tailwind breakpoint or state variant. ` +
       `It is still emitted as a "${key}:" prefix, but nothing validates it — ` +
       `use withPrefix("${key}", ...) if that's intentional.`,
@@ -38,7 +38,7 @@ function warnUnknownKey(key: string): void {
 }
 
 function warnTooDeep(scope: string): void {
-  console.warn(
+  warn(
     `[tailess] ss(): buckets under "${scope}:" nest more than ${maxDepth} deep and ` +
       "were dropped. That is almost always an object that contains itself.",
   );
@@ -70,7 +70,9 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
     let rank = rankOf(key);
     if (rank === undefined) {
       rank = unknownRank;
-      if (isDev) warnUnknownKey(key);
+      // A key the project declared for its own `@theme` or `@custom-variant` is not
+      // unknown — it just is not one Tailwind ships, which is a different thing.
+      if (isDev && !isCustomKey(key)) warnUnknownKey(key);
     }
     keys.push(key);
     values.push(value);

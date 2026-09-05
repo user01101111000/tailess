@@ -1,6 +1,7 @@
 import { warnUnusableValue } from "../internal/arbitrary.js";
 import { escapeCondition } from "../internal/condition.js";
 import { isDev } from "../internal/env.js";
+import { firstTime, warn } from "../internal/settings.js";
 import type { ClassValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
@@ -26,9 +27,8 @@ const warnedPositions = new Set<string>();
 function warnUnusablePosition(helper: string, position: number): void {
   if (Number.isInteger(position) && position > 0) return;
   const seen = `${helper} ${position}`;
-  if (warnedPositions.has(seen)) return;
-  warnedPositions.add(seen);
-  console.warn(
+  if (!firstTime(warnedPositions, seen)) return;
+  warn(
     `[tailess] ${helper}(${position}, …) — positions count from 1 and must be whole, so ` +
       "this builds a class that can never match. Pass an expression as a string for " +
       `anything else: ${helper}("2n+1", …).`,

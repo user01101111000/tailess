@@ -96,6 +96,8 @@ className={ss(
     - [Coming from cva or tailwind-variants](#coming-from-cva-or-tailwind-variants)
   - [`withPrefix` — the escape hatch](#withprefix--the-escape-hatch)
   - [`vars` — values a class cannot carry](#vars--values-a-class-cannot-carry)
+  - [`configure` — the two things that depend on your project](#configure--the-two-things-that-depend-on-your-project)
+  - [Keys your own CSS adds](#keys-your-own-css-adds)
   - [Also exported](#also-exported)
 - [Keys](#keys)
 - [Framework examples](#framework-examples)
@@ -827,6 +829,59 @@ vars({ "--w": "42%", "--gap": 8 });        // → { "--w": "42%", "--gap": "8" }
 vars({ "--w": "42%", "--h": undefined });  // → { "--w": "42%" }
 ```
 
+### `configure` — the two things that depend on your project
+
+```ts
+// entry.ts, before anything renders
+import { configure } from "tailess";
+import { extendTailwindMerge } from "tailwind-merge";
+
+configure({
+  merge: extendTailwindMerge({ extend: { classGroups: { "font-size": ["text-hero"] } } }),
+  onWarn: process.env.CI ? (m) => { throw new Error(m); } : undefined,
+  keys: ["3xl", "sidebar-open"],
+});
+```
+
+**`merge`** is how conflicting classes are resolved, `twMerge` by default.
+`tailwind-merge` only knows Tailwind's own utilities, so a project with its own
+`@utility` or theme scale needs `extendTailwindMerge` — without it `cn("text-sm",
+"text-hero")` emits both and the winner is decided by CSS source order rather than by
+argument order, which is the one guarantee `cn` makes. Pass `(classes) => classes` to
+skip merging entirely.
+
+**`onWarn`** is where a development warning goes, `console.warn` by default. Throw to
+make them fatal in CI, collect to assert on them in a test, or pass `() => {}` to
+silence them.
+
+**`keys`** is the runtime half of the next section.
+
+### Keys your own CSS adds
+
+The built-in keys are a closed union on purpose — that is what makes a typo a compile
+error rather than an unstyled element. But a `@theme` that adds `--breakpoint-3xl`, or a
+`@custom-variant sidebar-open`, creates a variant that genuinely works and that tailess
+cannot know about. [Declare it](#build-time-checks) and it joins the union:
+
+```ts
+// tailess.d.ts, anywhere your tsconfig includes
+declare module "tailess" {
+  interface CustomKeys {
+    "3xl": true;
+    "sidebar-open": true;
+  }
+}
+```
+
+```ts
+ss({ md: "p-6", "3xl": "p-12", "sidebar-open": "translate-x-0" });
+```
+
+Name them in `configure({ keys: [...] })` too, or the runtime — which cannot see a type —
+goes on calling them unknown on every render. Declared keys are emitted after the
+built-in ones, in the order given: Tailwind's ordering has no place for them, and a
+stable position is what `tailwind-merge` needs.
+
 ### Also exported
 
 ```ts
@@ -836,7 +891,9 @@ screens.md;                                               // "48rem"
 window.matchMedia(`(min-width: ${screens.md})`).matches;  // true above 768px
 ```
 
-Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
+Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `CustomKeys`, `TailessSettings`,
+`SlotDefaults`, `SlotValue`, `SlottedComponent`, `SlottedConfig`, `SlottedGroups`,
+`CompoundRule`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
 `HasStateKey`, `InStateKey`, `ResponsiveMap`, `ClassValue`, `CssVars`, `CssVarInput`,
 `CssVarName`, `AnyContainerKey`, `NthValue`, `VariantProps`, `VariantsConfig`,
 `VariantComponent`, `VariantGroups`, `VariantOptions`.
@@ -1078,11 +1135,13 @@ and emitting a class nothing generates a rule for, `--breakpoint-md: 50rem` leav
 and `--*: initial` do the first of those to every breakpoint at once. Adding one is
 reported too — that CSS works, so this is the exception to the rule above, and it is
 there because the compile error you get from `ss({ "3xl": … })` says nothing about
-`withPrefix("3xl", …)`, which does.
+`withPrefix("3xl", …)`, which does — or [declare the key](#keys-your-own-css-adds) and
+use it like any other.
 
 `@custom-variant` is read the same way. Defining one gives you a variant that works —
 `midnight:bg-black` — but no key, so `ss({ midnight: … })` will not compile; the warning
-names `withPrefix("midnight", …)`, which does. Redefining a name that *is* a key is not
+names `withPrefix("midnight", …)`, which does — [declaring it](#keys-your-own-css-adds)
+is the other answer. Redefining a name that *is* a key is not
 reported: Tailwind just replaces the variant and the key still resolves.
 
 A `@config` pointing at a v3-style JS config can set `theme.screens` and add variants of

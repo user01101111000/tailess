@@ -1,5 +1,5 @@
-import { twMerge } from "tailwind-merge";
 import { join } from "../internal/join.js";
+import { merge } from "../internal/settings.js";
 import type { ClassValue } from "../types.js";
 
 /**
@@ -12,5 +12,5 @@ import type { ClassValue } from "../types.js";
  * // => "py-1 bg-blue-500 px-4"  (px-2 dropped in favor of px-4)
  */
 export function cn(...inputs: ClassValue[]): string {
-  return twMerge(join(inputs));
+  return merge(join(inputs));
 }

@@ -1,5 +1,6 @@
 import { isDev } from "../internal/env.js";
 import { join } from "../internal/join.js";
+import { firstTime, warn } from "../internal/settings.js";
 import { verifyIntegration } from "../internal/verify.js";
 import type { ClassValue } from "../types.js";
 
@@ -34,9 +35,8 @@ const warnedPrefixes = new Set<string>();
 function warnUnusablePrefix(prefix: string): void {
   for (let i = 0; i < prefix.length; i += 1) {
     if (!isBlank(prefix.charCodeAt(i))) continue;
-    if (warnedPrefixes.has(prefix)) return;
-    warnedPrefixes.add(prefix);
-    console.warn(
+    if (!firstTime(warnedPrefixes, prefix)) return;
+    warn(
       `[tailess] the variant prefix "${prefix}" contains whitespace, so it does not ` +
         "form a single class name and will never match anything. Tailwind writes a " +
         `space inside an arbitrary value as "_" — e.g. "${prefix.replace(unicodeSpaceGlobal, "_")}".`,
@@ -66,7 +66,7 @@ export function withPrefix(prefix: string, value: ClassValue): string {
 
   if (prefix === "") {
     if (isDev) {
-      console.warn(
+      warn(
         "[tailess] withPrefix() was called with an empty prefix. The classes are " +
           'returned unprefixed, since an empty prefix would produce ":class", ' +
           "which matches nothing.",

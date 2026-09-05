@@ -1,6 +1,6 @@
 import { type ScreenKey, screenKeys } from "../constants.js";
 import { isDev } from "../internal/env.js";
-
+import { warn } from "../internal/settings.js";
 import type { ClassValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
@@ -28,7 +28,7 @@ export function between(min: ScreenKey, max: ScreenKey, classes: ClassValue): st
     // `lg:max-sm:` is a perfectly valid class that no viewport can ever satisfy, so
     // it produces CSS, passes every check, and styles nothing. Reversed arguments are
     // the obvious way to land here.
-    console.warn(
+    warn(
       `[tailess] between("${min}", "${max}", …) describes an empty range: "${min}" is ` +
         `not narrower than "${max}", so the classes can never apply. Did you mean ` +
         `between("${max}", "${min}", …)?`,

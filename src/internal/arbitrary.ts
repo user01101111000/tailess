@@ -1,3 +1,5 @@
+import { firstTime, warn } from "./settings.js";
+
 /**
  * The checks every helper that takes an *arbitrary value* needs.
  *
@@ -38,12 +40,10 @@ const varName = /var\(\s*--[\w-]+/g;
  * it just generates the wrong one.
  */
 export function warnUnusableValue(helper: string, noun: string, value: string): boolean {
-  const seen = `${helper} ${value}`;
-  if (checked.has(seen)) return false;
-  checked.add(seen);
+  if (!firstTime(checked, `${helper} ${value}`)) return false;
 
   if (value === "") {
-    console.warn(
+    warn(
       `[tailess] ${helper}() was given an empty ${noun}, which builds "…-[]:" — a ` +
         "class nothing ever generates a rule for.",
     );
@@ -51,7 +51,7 @@ export function warnUnusableValue(helper: string, noun: string, value: string): 
   }
 
   if (unusableChar.test(value) || (value.match(/'/g) ?? []).length % 2 === 1) {
-    console.warn(
+    warn(
       `[tailess] the ${noun} "${value}" contains one of \`" { } \\ ;\` or an unclosed ` +
         "`'`, which cannot appear in a class name, so the build generates no rule for it.",
     );
@@ -61,7 +61,7 @@ export function warnUnusableValue(helper: string, noun: string, value: string): 
   // A literal `_` is indistinguishable from the one these helpers write for a space,
   // and Tailwind decodes both — so `.my_class` silently becomes `.my class`.
   if (value.replace(varName, "").includes("_")) {
-    console.warn(
+    warn(
       `[tailess] the ${noun} "${value}" has a literal underscore, which Tailwind reads ` +
         'as a space. Spaces are escaped for you; use withPrefix for a real "\\_".',
     );

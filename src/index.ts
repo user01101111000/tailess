@@ -1,5 +1,6 @@
 export type {
   ContainerKey,
+  CustomKeys,
   ElementStateKey,
   GroupStateKey,
   HasStateKey,
@@ -22,6 +23,8 @@ export {
   screens,
   stateKeys,
 } from "./constants.js";
+export type { TailessSettings } from "./internal/settings.js";
+export { configure } from "./internal/settings.js";
 export type { ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";

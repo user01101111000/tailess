@@ -1,4 +1,5 @@
 import { isDev } from "./env.js";
+import { warn } from "./settings.js";
 
 /**
  * Custom property the build integration injects into your Tailwind stylesheet.
@@ -39,7 +40,7 @@ export function verifyIntegration(): void {
       .trim();
     if (value !== "") return;
 
-    console.warn(
+    warn(
       `[tailess] Your Tailwind CSS doesn't include tailess' generated classes, so
 variants like "md:" and "hover:" will have no styles.
 

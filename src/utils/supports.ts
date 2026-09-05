@@ -1,6 +1,7 @@
 import { warnUnusableValue } from "../internal/arbitrary.js";
 import { escapeCondition } from "../internal/condition.js";
 import { isDev } from "../internal/env.js";
+import { firstTime, warn } from "../internal/settings.js";
 import type { ClassValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
@@ -64,9 +65,7 @@ function outline(condition: string): string {
  * never generated at all, nothing reports a problem — the styles just never apply.
  */
 function warnUnusableCondition(condition: string, negated: boolean): void {
-  const seen = `${negated ? 1 : 0} ${condition}`;
-  if (checkedConditions.has(seen)) return;
-  checkedConditions.add(seen);
+  if (!firstTime(checkedConditions, `${negated ? 1 : 0} ${condition}`)) return;
 
   // An empty query, a character no class name can carry, and a literal underscore
   // are shared with every other helper that takes an arbitrary value, and are checked
@@ -92,7 +91,7 @@ function warnUnusableCondition(condition: string, negated: boolean): void {
     // Tailwind emits the query verbatim, which is where it opens with a group.
     const invalidNot = grouped && (negated || leadingNot.test(condition));
     if (invalidNot || runTogether) {
-      console.warn(
+      warn(
         `[tailess] "${condition}" ` +
           (invalidNot
             ? 'combines a top-level "not" with "and"/"or", which is not valid CSS — the ' +
