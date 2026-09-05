@@ -89,6 +89,31 @@ function staticValue(literal: string): string | null {
   return String(negative ? -value : value);
 }
 
+/**
+ * Anything that could open a numeric literal, taken as far as it runs. Validating the
+ * token afterwards is what keeps `0x10` and `1e3` whole while `item2` and `a.length`
+ * are never mistaken for numbers at all.
+ */
+const numericToken = /(?<![\w$.])(?:\d[\w.]*|\.\d[\w.]*)/g;
+
+/**
+ * Every numeric literal in a fragment of source — the counterpart of `extractStrings`,
+ * and needed for the same reason.
+ *
+ * A ternary is the shape that makes it necessary. `on(cond ? "hover" : "focus", …)`
+ * enumerates both branches because the string sweep finds both literals; a helper that
+ * reads its argument only when the *whole* argument is one literal enumerates neither,
+ * and a class the runtime builds lands with no rule behind it.
+ */
+function staticValues(text: string): string[] {
+  const out: string[] = [];
+  for (const [token] of text.matchAll(numericToken)) {
+    const value = staticValue(token);
+    if (value !== null && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
 /** Helper name to the variant it builds, for the four `nth-*` families. */
 const nthVariants: Record<string, string> = {
   nth: "nth",
@@ -503,9 +528,10 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       const variant = nthVariants[name];
       const arg = args[0] ?? "";
       const prefixes = extractStrings(arg).map((value) => `${variant}-[${escapeCondition(value)}]`);
+      // Only when the argument holds no string at all, so the digits inside `"3n+1"`
+      // are never read as a position of their own.
       if (prefixes.length === 0) {
-        const resolved = staticValue(arg.trim());
-        if (resolved !== null) prefixes.push(`${variant}-${resolved}`);
+        for (const value of staticValues(arg)) prefixes.push(`${variant}-${value}`);
       }
       emitValue(args[1] ?? "", prefixes, add, follow);
       return;

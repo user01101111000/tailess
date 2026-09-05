@@ -87,6 +87,50 @@ function deadClasses(text: string | undefined, report: (d: Diagnostic) => void):
   }
 }
 
+/** What each helper that writes into `…-[…]` calls the text it puts there. */
+const arbitraryNoun: Record<string, string> = {
+  supports: "feature query",
+  notSupports: "feature query",
+  has: "selector",
+  notHas: "selector",
+  inside: "selector",
+  nth: "position",
+  nthLast: "position",
+  nthOfType: "position",
+  nthLastOfType: "position",
+};
+
+/**
+ * Report an arbitrary value that cannot survive the trip into a class name.
+ *
+ * The candidate list is written into a stylesheet, so a value carrying one of these
+ * cannot be enumerated at all — while the runtime still builds the class. That is the
+ * failure this package exists to prevent, and it is the one case `tailess check` cannot
+ * catch either: the candidate never reaches the compiler to be found missing.
+ */
+function unusableValues(name: string, arg: string, report: (d: Diagnostic) => void): void {
+  const noun = arbitraryNoun[name] as string;
+  for (const literal of extractStrings(arg)) {
+    const value = literal.trim();
+    if (value === "") {
+      report({
+        kind: "unusable-query",
+        message:
+          `${name}("", …) has an empty ${noun}, so it builds "…-[]:" — a class nothing ` +
+          "generates a rule for.",
+      });
+    } else if (unusableInClassName.test(value) || (value.match(/'/g) ?? []).length % 2 === 1) {
+      report({
+        kind: "unusable-query",
+        message:
+          `${name}("${value}", …) has a ${noun} containing one of \`" { } \\ ;\` or an ` +
+          "unclosed `'`, which cannot appear in a class name, so the class is built but " +
+          "no rule is generated for it.",
+      });
+    }
+  }
+}
+
 /** Report a prefix that cannot form a working class name. */
 function checkPrefix(text: string | undefined, report: (d: Diagnostic) => void): void {
   if (!text) return;
@@ -144,33 +188,30 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       return;
     }
 
+    // Every helper whose first argument becomes the inside of a `…-[…]`, and whose
+    // second is the class value. One shape, one pair of checks.
     case "supports":
-    case "notSupports": {
+    case "notSupports":
+    case "has":
+    case "notHas":
+    case "inside":
+    case "nth":
+    case "nthLast":
+    case "nthOfType":
+    case "nthLastOfType": {
       if (args.length < 2) return;
-      // The candidate list is written into a stylesheet, so a query carrying one of
-      // these cannot be enumerated at all — while the runtime still builds the class.
-      // That is the failure this package exists to prevent: the class is on the
-      // element and no rule was ever generated for it.
-      for (const condition of extractStrings(args[0] ?? "")) {
-        const query = condition.trim();
-        if (query === "") {
-          report({
-            kind: "unusable-query",
-            message:
-              `${name}("", …) has an empty feature query, so it builds "supports-[]:" — ` +
-              "a class nothing generates a rule for.",
-          });
-        } else if (unusableInClassName.test(query) || (query.match(/'/g) ?? []).length % 2 === 1) {
-          report({
-            kind: "unusable-query",
-            message:
-              `${name}("${query}", …) has a feature query containing one of \`" { } \\ ;\` ` +
-              "or an unclosed `'`, which cannot appear in a class name, so the class is " +
-              "built but no rule is generated for it.",
-          });
-        }
-      }
+      unusableValues(name, args[0] ?? "", report);
       deadClasses(args[1], report);
+      return;
+    }
+
+    // The named variants: the name is checked at runtime, where the rules differ per
+    // helper; the class value is the same everywhere.
+    case "group":
+    case "peer":
+    case "container": {
+      if (args.length < 3) return;
+      deadClasses(args[2], report);
       return;
     }
 

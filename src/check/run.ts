@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
 import { type BrokenClass, findBroken, probeList } from "./verify.js";
@@ -88,10 +89,38 @@ async function loadStylesheet(id: string, base: string) {
   return { base: dirname(path), path, content: await readFile(path, "utf8") };
 }
 
+/**
+ * Resolve an `@plugin` or `@config` the way Tailwind's own Node host would.
+ *
+ * Without this, `compile()` throws "No `loadModule` function provided" the moment the
+ * stylesheet reaches an `@plugin` line, so a project using typography or forms — or a
+ * v3 config kept through the migration — could not be checked at all. Loading them is
+ * also what makes the answer right rather than merely available: a plugin registers
+ * utilities and variants, and a class that only exists because of one would otherwise
+ * be reported as broken.
+ */
+async function loadModule(id: string, base: string) {
+  const req = createRequire(join(base, "_"));
+  let resolved: string;
+  try {
+    resolved = id.startsWith(".") ? req.resolve(resolve(base, id)) : req.resolve(id);
+  } catch {
+    throw new Error(`could not resolve "${id}" from ${base}`);
+  }
+  // A plugin is usually CJS, which `import()` exposes under `default`; an ESM one
+  // exposes the plugin itself. Tailwind's own loader makes the same choice.
+  const mod = (await import(pathToFileURL(resolved).href)) as { default?: unknown };
+  return { path: resolved, base: dirname(resolved), module: mod.default ?? mod };
+}
+
 /** The slice of Tailwind's own API this needs, so no dependency on it is declared. */
 type Compile = (
   css: string,
-  options: { base: string; loadStylesheet: typeof loadStylesheet },
+  options: {
+    base: string;
+    loadModule: typeof loadModule;
+    loadStylesheet: typeof loadStylesheet;
+  },
 ) => Promise<{ build(candidates: string[]): string }>;
 
 /**
@@ -110,7 +139,7 @@ async function loadCompiler(cwd: string): Promise<Compile> {
   }
   // `require.resolve` picks the `require` condition, so this is usually Tailwind's
   // CJS build — importing that puts its named exports under `default`.
-  const mod = (await import(`file://${entry.replace(/\\/g, "/")}`)) as {
+  const mod = (await import(pathToFileURL(entry).href)) as {
     compile?: unknown;
     default?: { compile?: unknown };
   };
@@ -164,7 +193,7 @@ export async function run(options: Options): Promise<number> {
   const perEntry: Array<Map<string, BrokenClass>> = [];
   for (const entry of entries) {
     const source = await readFile(entry, "utf8");
-    const compiler = await compile(source, { base: dirname(entry), loadStylesheet });
+    const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
     const css = compiler.build(probe);
     perEntry.push(new Map(findBroken(classes, css).map((b) => [b.candidate, b])));
   }

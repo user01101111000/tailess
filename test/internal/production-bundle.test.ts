@@ -43,7 +43,6 @@ const warnings = [
   "letters, digits",
   "was given an empty",
   "positions count from 1",
-  "empty feature query",
   "cannot appear in a class name",
 ];
 

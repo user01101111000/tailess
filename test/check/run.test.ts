@@ -116,6 +116,37 @@ describe("the check itself", () => {
     expect(code).toBe(0);
   });
 
+  it("loads an @plugin, which Tailwind refuses to compile without", async () => {
+    // `compile()` throws "No `loadModule` function provided" the moment it reaches an
+    // `@plugin` line, so a project using typography or forms could not be checked at
+    // all — a healthy project, exiting 2.
+    await writeFile(
+      join(dir, "plugin.cjs"),
+      `module.exports = ({ addVariant }) => addVariant("sidebar-open", "&:is(.sidebar-open *)");`,
+    );
+    await writeFile(join(dir, "a.tsx"), `withPrefix("sidebar-open", "p-4")`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "./plugin.cjs";`);
+    const { code, output } = await check();
+    expect(code).toBe(0);
+    expect(output).toContain("every one has CSS");
+  });
+
+  it("counts a variant only the plugin defines, rather than calling it broken", async () => {
+    // Loading the plugin is also what makes the answer right: without it the variant
+    // does not exist, and the class that uses it would be reported as having no rule.
+    await writeFile(join(dir, "a.tsx"), `withPrefix("sidebar-open", "p-4")`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    const { code, output } = await check();
+    expect(code).toBe(1);
+    expect(output).toContain("sidebar-open:p-4");
+  });
+
+  it("says which module it could not resolve, rather than Tailwind's own error", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "./missing.cjs";`);
+    await expect(check()).rejects.toThrow(/could not resolve "\.\/missing\.cjs"/);
+  });
+
   it("passes a class that works in one of several stylesheets", async () => {
     // A project can have more than one entry, and a component is styled by whichever
     // its page loads — so failing every one of them is what makes a class broken.

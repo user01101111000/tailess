@@ -5,11 +5,13 @@ import {
   between,
   cn,
   container,
+  containerKeys,
   data,
   group,
   has,
   inside,
   match,
+  maxContainerKeys,
   maxScreenKeys,
   notHas,
   notSupports,
@@ -78,6 +80,15 @@ describe("public API", () => {
     expect(screenKeys).toEqual(["sm", "md", "lg", "xl", "2xl"]);
     expect(screens.md).toBe("48rem");
     expect(maxScreenKeys).toEqual(["max-2xl", "max-xl", "max-lg", "max-md", "max-sm"]);
+  });
+
+  it("exposes the container-query keys, which only the public entry can be asked for", () => {
+    // Pinned here rather than only against `constants.js`: this file is what says
+    // `import { containerKeys } from "tailess"` resolves, and dropping the re-export
+    // left the whole suite green.
+    expect(containerKeys).toContain("@md");
+    expect(maxContainerKeys).toContain("@max-md");
+    expect(containerKeys).toHaveLength(maxContainerKeys.length);
   });
 
   it("exposes the state variant keys, with no duplicates", () => {

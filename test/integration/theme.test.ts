@@ -147,6 +147,32 @@ describe("what the theme changed", () => {
     expect(messages(`@theme { --breakpoint-md: 48rem; }`)).toEqual([]);
   });
 
+  it("says nothing when the theme restates a default in the units v3 used", () => {
+    // Pinning the v3 numbers in `@theme` is the standard v3 -> v4 migration, and
+    // 768px is the width tailess already exports as 48rem — a media query resolves
+    // rem against the initial font size, so the two are the same query. Warning here
+    // fired five times on a build that was fine.
+    expect(
+      messages(`@theme {
+        --breakpoint-sm: 640px;
+        --breakpoint-md: 768px;
+        --breakpoint-lg: 1024px;
+        --breakpoint-xl: 1280px;
+        --breakpoint-2xl: 1536px;
+      }`),
+    ).toEqual([]);
+    expect(messages(`@theme { --breakpoint-md: 48em; }`)).toEqual([]);
+  });
+
+  it("still reports a width that really moved", () => {
+    const [first, ...rest] = messages(`@theme { --breakpoint-md: 800px; }`);
+    expect(rest).toEqual([]);
+    expect(first).toContain('sets "md" to 800px');
+    expect(messages(`@theme { --breakpoint-md: 47.9rem; }`)).toHaveLength(1);
+    // Nothing to compare a non-length against, so it is reported rather than assumed.
+    expect(messages(`@theme { --breakpoint-md: calc(48rem + 1px); }`)).toHaveLength(1);
+  });
+
   it("says nothing about a theme that customises anything else", () => {
     expect(
       messages(`@theme { --color-brand: oklch(0.7 0.1 250); --font-display: serif; }`),

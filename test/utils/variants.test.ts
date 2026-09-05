@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { variants } from "../../src/utils/variants.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { type VariantProps, variants } from "../../src/utils/variants.js";
 
 /**
  * A `cva`-shaped recipe, with the one difference that makes it worth having here:
@@ -77,6 +77,29 @@ describe("variants", () => {
       defaults: { s: "a" },
     });
     expect(t()).toBe("p-6");
+  });
+
+  it("carries its variants, so VariantProps can be read off the component", () => {
+    // `VariantProps<typeof button>` is the spelling every cva-shaped library uses,
+    // and the one a component reaches for to declare its own props. Parameterising
+    // the type on the groups alone left that spelling a compile error.
+    type Props = VariantProps<typeof button>;
+    expectTypeOf<Props>().toEqualTypeOf<{
+      tone?: "primary" | "danger" | undefined;
+      size?: "sm" | "lg" | undefined;
+    }>();
+
+    // @ts-expect-error "medium" is not one of size's options.
+    const bad: Props = { size: "medium" };
+    expect(bad).toBeDefined();
+
+    // The same type off the groups, for a config written apart from the call.
+    expectTypeOf<VariantProps<{ tone: { primary: string } }>>().toEqualTypeOf<{
+      tone?: "primary" | undefined;
+    }>();
+
+    expect(Object.keys(button.variants)).toEqual(["tone", "size"]);
+    expect(Object.keys(button.variants.size)).toEqual(["sm", "lg"]);
   });
 
   it("keeps each variant's order stable, whatever order the props arrive in", () => {

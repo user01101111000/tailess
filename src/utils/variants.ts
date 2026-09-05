@@ -9,8 +9,7 @@ export type VariantOptions = Record<string, SsArg>;
 export type VariantGroups = Record<string, VariantOptions>;
 
 /**
- * The props a built component accepts — one optional key per variant, whose value is
- * one of that variant's own options. A typo in either half is a compile error.
+ * One optional key per variant, whose value is one of that variant's own options.
  *
  * Each is spelled `| undefined` for the same reason the plugin options are: under
  * `exactOptionalPropertyTypes` a bare optional refuses a value that may be
@@ -18,9 +17,22 @@ export type VariantGroups = Record<string, VariantOptions>;
  * optional prop it did not receive — is precisely that. The runtime already treats it
  * as "leave the default alone", so the type has to let it through.
  */
-export type VariantProps<V extends VariantGroups> = {
-  [K in keyof V]?: (keyof V[K] & string) | undefined;
+type PropsOf<V extends VariantGroups> = {
+  // `-readonly` because `variants` infers its config `const`, and a component's own
+  // props type should not inherit that: `VariantProps<typeof button>` is something a
+  // caller builds objects of, not a view of the recipe.
+  -readonly [K in keyof V]?: (keyof V[K] & string) | undefined;
 };
+
+/**
+ * The props a built component accepts. A typo in either half is a compile error.
+ *
+ * Takes the component itself — `VariantProps<typeof button>`, the spelling every
+ * `cva`-shaped library uses — or the variant groups directly, since a config written
+ * apart from the call has no component to point at yet.
+ */
+export type VariantProps<T extends VariantComponent<VariantGroups> | VariantGroups> =
+  T extends VariantComponent<infer V> ? PropsOf<V> : T extends VariantGroups ? PropsOf<T> : never;
 
 /** What {@link variants} is given. */
 export interface VariantsConfig<V extends VariantGroups> {
@@ -29,16 +41,21 @@ export interface VariantsConfig<V extends VariantGroups> {
   /** The variants themselves. */
   variants: V;
   /** Extra classes for a *combination* of variants, applied after the singles. */
-  compound?: Array<VariantProps<V> & { class: SsArg }>;
+  compound?: Array<PropsOf<V> & { class: SsArg }>;
   /** What each variant is when the caller does not say. */
-  defaults?: VariantProps<V>;
+  defaults?: PropsOf<V>;
 }
 
 /** A component built by {@link variants}. */
-export type VariantComponent<V extends VariantGroups> = (
-  props?: VariantProps<V>,
-  ...rest: SsArg[]
-) => string;
+export interface VariantComponent<V extends VariantGroups> {
+  (props?: PropsOf<V>, ...rest: SsArg[]): string;
+  /**
+   * The variants it was built from, kept so `VariantProps<typeof button>` has
+   * something to read the option names back out of — and useful in its own right for
+   * anything that has to enumerate them, a story or a docs table.
+   */
+  readonly variants: V;
+}
 
 /**
  * Build a component's `className` from a set of typed variants.
@@ -74,7 +91,7 @@ export function variants<const V extends VariantGroups>(
   const { base, variants: groups, compound, defaults } = config;
   const names = Object.keys(groups);
 
-  return (props, ...rest) => {
+  const component = (props?: PropsOf<V>, ...rest: SsArg[]): string => {
     // Spread would let an explicitly-`undefined` prop erase a default, and
     // `{ size: undefined }` is what a component writes when it forwards an optional
     // prop it did not receive.
@@ -112,4 +129,6 @@ export function variants<const V extends VariantGroups>(
 
     return ss(...parts, ...rest);
   };
+
+  return Object.assign(component, { variants: groups });
 }

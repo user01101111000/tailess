@@ -262,7 +262,7 @@ the classes inside them. For that, point Tailwind's own formatter at the helpers
     "ss", "cn", "responsive", "on", "until", "between",
     "data", "aria", "supports", "notSupports", "match", "withPrefix",
     "group", "peer", "container", "has", "notHas", "inside",
-    "nth", "nthLast", "nthOfType", "nthLastOfType"
+    "nth", "nthLast", "nthOfType", "nthLastOfType", "variants"
   ]
 }
 ```
@@ -635,15 +635,27 @@ merge once, across all of it.
 `{ size: undefined }` leaves the default in place, which is what a component writes when
 it forwards an optional prop it did not receive.
 
+`VariantProps` reads the prop type back off the component, so a component declares its
+own props against the recipe rather than restating it:
+
+```tsx
+type ButtonProps = VariantProps<typeof button> & { children: ReactNode };
+
+const Button = ({ tone, size, children }: ButtonProps) => (
+  <button className={button({ tone, size })}>{children}</button>
+);
+```
+
 ### `withPrefix` — the escape hatch
 
-For variants tailess doesn't model as keys.
+For variants tailess doesn't model as keys: an arbitrary variant, an arbitrary
+`group-*`/`peer-*` modifier, or one a plugin or your own `@custom-variant` defines.
 
 ```ts
-withPrefix("open", "shadow-lg");                // → "open:shadow-lg"
-withPrefix("details-content", "p-2");           // → "details-content:p-2"
+withPrefix("[&>li]", "border-b");               // → "[&>li]:border-b"
 withPrefix("group-[.open]", "rotate-90");       // → "group-[.open]:rotate-90"
-withPrefix("supports-not-[display:grid]", "block");
+withPrefix("peer-[.is-invalid]", "text-red-600");
+withPrefix("sidebar-open", "translate-x-0");    // a @custom-variant of your own
 ```
 
 ### `vars` — values a class cannot carry
@@ -671,14 +683,16 @@ vars({ "--w": "42%", "--h": undefined });  // → { "--w": "42%" }
 ### Also exported
 
 ```ts
-import { screens, screenKeys, maxScreenKeys, stateKeys } from "tailess";
+import { screens, screenKeys, maxScreenKeys, containerKeys, maxContainerKeys, stateKeys } from "tailess";
 
-window.matchMedia(`(min-width: ${screens.md})`).matches;  // "48rem"
+screens.md;                                               // "48rem"
+window.matchMedia(`(min-width: ${screens.md})`).matches;  // true above 768px
 ```
 
 Types: `SsInput`, `SsValue`, `SsArg`, `SsKey`, `ScreenKey`, `MaxScreenKey`, `StateKey`,
-`ResponsiveMap`, `ClassValue`, `CssVars`, `CssVarInput`, `CssVarName`,
-`AnyContainerKey`.
+`HasStateKey`, `InStateKey`, `ResponsiveMap`, `ClassValue`, `CssVars`, `CssVarInput`,
+`CssVarName`, `AnyContainerKey`, `NthValue`, `VariantProps`, `VariantsConfig`,
+`VariantComponent`, `VariantGroups`, `VariantOptions`.
 
 ## Keys
 
@@ -823,7 +837,7 @@ ss({ md: isWide ? "grid-cols-3" : "grid-cols-1" })  // both branches
 ss({ md: ["flex", cond && "gap-4"] })               // arrays
 ss({ md: [{ "text-lg": cond }] })                   // clsx dictionaries, quoted…
 until("md", { hidden: !open })                      // …or not
-ss({ md: "text-lg", /* both survive */ lg: "xl" })  // comments anywhere
+ss({ md: "p-4", /* both survive */ lg: "p-6" })     // comments anywhere
 ss({ dark: { hover: "bg-black" } })                 // nesting — dark:hover:bg-black
 ss(a, cond && { sm: "bg-red-500" })                 // a map behind a condition
 ss(a, open ? { md: "p-6" } : { md: "p-2" })         // both branches, as maps
@@ -834,7 +848,7 @@ data("level", 2, "p-2")                             // numbers and booleans
 supports("display: grid", "grid")                   // the space is escaped for you
 group("row", "hover", "underline")                  // group-hover/row:underline
 has("> img", "p-0")                                 // the space is escaped for you
-nth(3, "bg-neutral-50")                             // a number, or an expression
+nth(open ? 3 : 4, "bg-neutral-50")                  // a number, or an expression
 variants({ variants: { s: { lg: { md: "p-6" } } } }) // only the leaves are classes
 ```
 
@@ -889,8 +903,9 @@ The plugin reports what it can prove wrong from your source, while the project b
 ```
 
 Six things are checked: two conflicting utilities in **one** string, a `between` range no
-viewport can satisfy, an empty prefix, whitespace inside a variant, a feature query no
-class name can carry, and CSS that moves the variants out from under the keys.
+viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value no
+class name can carry — a `supports` query, a `has`/`inside` selector, an `nth` position —
+and CSS that moves the variants out from under the keys.
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
@@ -957,17 +972,30 @@ check asks whether the *utility inside* each class resolves on its own first. `p
 and `md:p-4` does not, so something between the two is broken; `md:state` has no working
 half, so it was never a class and is not reported.
 
+It uses your Tailwind, resolved from your tree, and loads your `@plugin`s and `@config`
+the way Tailwind itself does — so a variant or utility that only exists because of a
+plugin counts as generated rather than missing.
+
 ## Plugin options
 
-Both plugins take the same options (`cacheDir` is PostCSS-only).
+Both plugins take the same three options:
 
 ```ts
 tailess({
-  content: ["src", "../ui/src"],   // files or dirs to scan
-  ignore: ["fixtures"],            // extra dir names to skip
-  extensions: ["tsx", "vue"],      // replaces the default list
-  cacheDir: "node_modules/.cache", // PostCSS only
+  content: ["src", "../ui/src"],  // files or dirs to scan
+  ignore: ["fixtures"],           // extra dir names to skip
+  extensions: ["tsx", "vue"],     // replaces the default list
 });
+```
+
+The PostCSS plugin takes one more, `cacheDir`, since it has no host to borrow one
+from — on Vite it is not an option at all, and Vite's own `cacheDir` is used.
+
+```js
+// postcss.config.mjs
+export default {
+  plugins: { "tailess/postcss": { cacheDir: "node_modules/.cache" }, "@tailwindcss/postcss": {} },
+};
 ```
 
 On Vite, a relative `content` path resolves against Vite's `root` — not the directory you
@@ -1097,8 +1125,11 @@ grouping a breakpoint's own states; a flat object stays perfectly idiomatic.
 because those are literals Tailwind finds by itself. Anything with a variant prefix
 needs the plugin.
 
-**Is there a runtime cost in production?** Only the string building above. The
-integration check and every warning are dev-only and drop out of a production bundle.
+**Is there a runtime cost in production?** Only the string building above. Every
+warning and the integration check sit behind `process.env.NODE_ENV !== "production"`,
+so none of them runs. The message *text* still ships: the guard is written to survive
+a bundler that leaves `process` undefined, and that is what keeps a minifier from
+folding it away.
 
 **Tailwind v3?** No. v4's `@source inline(...)` is what makes the bridge possible.
 

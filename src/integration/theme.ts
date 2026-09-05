@@ -291,12 +291,35 @@ function resolveBreakpoints(declared: readonly BreakpointDecl[]): Map<string, st
   return resolved;
 }
 
+/** A breakpoint written as a plain length, which is the only form worth comparing. */
+const length = /^([+-]?(?:\d+\.?\d*|\.\d+))(px|rem|em)$/i;
+
+/**
+ * True when two breakpoint values describe the same width.
+ *
+ * v4 spells the defaults in `rem` where v3 spelled them in `px`, so a project that
+ * pins the v3 numbers — the standard migration, and a very common `@theme` — declares
+ * `--breakpoint-md: 768px` for the width tailess already exports as `48rem`. Nothing
+ * has drifted there, and saying so would fire five warnings on a build that is fine.
+ *
+ * Inside a media query `rem` and `em` both resolve against the *initial* font size
+ * rather than the root element's, so 16 is exact rather than an assumption.
+ */
+function sameWidth(a: string, b: string): boolean {
+  if (a === b) return true;
+  const left = length.exec(a);
+  const right = length.exec(b);
+  if (!left || !right) return false;
+  const px = (m: RegExpExecArray) => Number(m[1]) * (m[2]?.toLowerCase() === "px" ? 1 : 16);
+  return px(left) === px(right);
+}
+
 /**
  * Compare what the theme leaves in place against what tailess ships, and report only
  * the differences that change what a call site can do.
  *
- * Nothing is reported for a theme that merely restates a default, or that customises
- * anything other than the breakpoints.
+ * Nothing is reported for a theme that merely restates a default — in any unit — or
+ * that customises anything other than the breakpoints.
  */
 export function themeDiagnostics(
   declared: readonly BreakpointDecl[],
@@ -329,7 +352,7 @@ export function themeDiagnostics(
           `key — ss({ "${key}": … }) compiles, emits "${key}:", and no rule is generated ` +
           "for it.",
       });
-    } else if (value !== screens[key]) {
+    } else if (!sameWidth(value, screens[key])) {
       out.push({
         kind: "theme-drift",
         message:

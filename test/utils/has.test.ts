@@ -105,4 +105,19 @@ describe("a selector that cannot become a class", () => {
   it("names the helper that was called", () => {
     expect(warnings(() => notHas("", "p-9"))[0]).toContain("notHas(");
   });
+
+  it("warns about a literal underscore, which Tailwind reads as a space", () => {
+    // `has-[.my_class]` compiles to `:has(:is(.my class))` — a rule that exists and
+    // matches something else entirely. `supports` has always warned about this; the
+    // helpers that run the same escaping have to as well.
+    const seen = warnings(() => has(".my_class", "p-10"));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("underscore");
+    expect(warnings(() => inside(".side_bar", "p-11"))).toHaveLength(1);
+    expect(warnings(() => notHas("[data-x=a_b]", "p-12"))).toHaveLength(1);
+  });
+
+  it("leaves an underscore inside var() alone, which Tailwind keeps", () => {
+    expect(warnings(() => has("[style*=var(--brand_ink)]", "p-13"))).toEqual([]);
+  });
 });

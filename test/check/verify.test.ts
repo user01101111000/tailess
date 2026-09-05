@@ -5,6 +5,7 @@ import { compile } from "tailwindcss";
 import { describe, expect, it } from "vitest";
 import { findBroken, probeList, splitCandidate } from "../../src/check/verify.js";
 import { extractClasses } from "../../src/extract/extract.js";
+import { hasRule } from "../../src/internal/selector.js";
 
 /**
  * `tailess check` exists because everything else proves the *bridge* and nothing
@@ -118,5 +119,37 @@ describe("finding classes with no rule behind them", () => {
 
   it("does not report an unprefixed class", async () => {
     expect(findBroken(["p-4"], await build(`@import "tailwindcss";`, ["p-4"]))).toEqual([]);
+  });
+
+  it("does not mistake a longer class for the one it was asked about", async () => {
+    // `xl` is not a utility, but `.xl\:text-2xl` starts the same way, so a substring
+    // search said it resolved and the junk candidate `lg:xl` was reported against a
+    // healthy build. Both classes here are real ones from the README's own examples.
+    const classes = ["lg:xl", "xl:text-2xl"];
+    const css = await build(`@import "tailwindcss";`, probeList(classes));
+    expect(findBroken(classes, css)).toEqual([]);
+  });
+});
+
+describe("asking whether a stylesheet has a rule for a class", () => {
+  it("requires the selector to end where the match does", () => {
+    // Both directions of the same mistake. Reading a longer class as a shorter one
+    // reports a healthy build; reading a shorter one as present hides a broken class,
+    // which is the failure this whole package is about.
+    expect(hasRule(".xl\\:text-2xl { font-size: 1.5rem }", "xl")).toBe(false);
+    expect(hasRule(".md\\:p-40 { padding: 10rem }", "md:p-4")).toBe(false);
+    expect(hasRule(".p-40 { padding: 10rem }", "p-4")).toBe(false);
+  });
+
+  it("finds the class when it really is there", () => {
+    expect(hasRule(".xl\\:text-2xl { font-size: 1.5rem }", "xl:text-2xl")).toBe(true);
+    // Whatever follows the selector — a compound selector, a combinator, a comma or
+    // the brace — ends the class name.
+    expect(hasRule(".p-4.flex { }", "p-4")).toBe(true);
+    expect(hasRule(".p-4 > * { }", "p-4")).toBe(true);
+    expect(hasRule(".p-40, .p-4 { }", "p-4")).toBe(true);
+    expect(hasRule(".p-4:hover { }", "p-4")).toBe(true);
+    // A leading digit is a hex escape, trailing space and all.
+    expect(hasRule(".\\32 xl\\:flex { }", "2xl:flex")).toBe(true);
   });
 });

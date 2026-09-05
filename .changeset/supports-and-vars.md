@@ -36,8 +36,11 @@ rule behind it. And a literal `_` is indistinguishable from the one this helper 
 a space, so `--my_var` silently becomes `--my var` — underscores in a custom-property name
 inside `var(…)` are left alone, since Tailwind keeps those.
 
-The checks are deliberately narrow in the other direction too: `and` and `or` count as
-combinators only in a query that has a parenthesised group, so `anchor-name: --or` and
+The checks are deliberately narrow in the other direction too. What makes a combined query
+combined is not the keyword but what sits between the terms: with a parenthesised group
+present, anything left over between the groups; with none at all, a second top-level `:`,
+since one feature query is one declaration and two colons mean two of them ran together.
+So `display: grid and gap: 1rem` warns while `anchor-name: --or`, `content: 'and'` and
 `url(/a/black-and-white.png)` stay quiet. A warning that fires on working code teaches
 people to ignore warnings.
 
@@ -105,12 +108,18 @@ is `has(":not(:checked)", …)`.
 position and goes in bare; a string is an `An+B` expression or a keyword and goes in
 brackets, escaped like every other arbitrary value — `nth("3n + 1", …)` is
 `nth-[3n_+_1]:`. The scanner makes the same split from the source text, so a quoted `"3"`
-is the bracket form on both sides.
+is the bracket form on both sides. It sweeps numeric literals the way it has always swept
+string ones, so `nth(open ? 3 : 4, …)` enumerates both branches — reading the position only
+when the whole argument was one number enumerated neither, and the digits inside a quoted
+`"3n+1"` are still never mistaken for positions of their own.
 
 `:nth-child()` counts from 1, so `nth(0, …)` compiles, passes every other check, and
-selects nothing; that, a fraction, and a negative number warn. The empty-value and
-unusable-character checks that `has`, `inside` and `supports` each carried a copy of now
-live in one place, which paid for about half of what the four new helpers added.
+selects nothing; that, a fraction, and a negative number warn. The empty-value,
+unusable-character and literal-underscore checks that `has`, `inside` and `supports` each
+carried a copy of — or, in two cases, did not — now live in one place, which paid for about
+half of what the four new helpers added. That is what generalises the underscore warning:
+`has(".my_class", …)` compiles to `:has(:is(.my class))`, a rule that exists and matches
+something else, and only `supports` used to say so.
 
 **`variants()`** is a component recipe of the familiar shape, with one difference: every
 value is an `SsArg`, so a variant option can be an `ss` map. `lg: { base: "text-lg",
@@ -120,10 +129,15 @@ express and which is the reason this belongs here rather than in a separate libr
 ```ts
 const button = variants({
   base: { base: "rounded font-medium", hover: "brightness-110" },
-  variants: { size: { sm: "text-sm px-2", lg: { base: "text-lg px-4", md: "px-6" } } },
+  variants: {
+    tone: { primary: "bg-blue-600", danger: "bg-red-600" },
+    size: { sm: "text-sm px-2", lg: { base: "text-lg px-4", md: "px-6" } },
+  },
   compound: [{ tone: "danger", size: "lg", class: "ring-2" }],
   defaults: { tone: "primary", size: "sm" },
 });
+
+type ButtonProps = VariantProps<typeof button>;   // { tone?: …; size?: … }
 ```
 
 It is a wrapper over `ss`, not a second engine — 425 minified characters — which is what
@@ -211,7 +225,10 @@ $ npx tailess check
 ```
 
 It compiles the project with the consumer's own Tailwind — resolved from their tree, not
-this package's — and exits 1 when a class has no rule, so it can gate CI.
+this package's — and exits 1 when a class has no rule, so it can gate CI. `@plugin` and
+`@config` are loaded the way Tailwind's own Node host loads them, which is both what lets
+a project using typography or a kept v3 config be checked at all and what makes the answer
+right: a variant only a plugin defines is counted, not reported as broken.
 
 The design turns on one comparison. The scanner over-approximates on purpose, so demanding
 a rule for every candidate would report a mountain of junk: `md:state` and `md:open` from a
@@ -219,10 +236,30 @@ a rule for every candidate would report a mountain of junk: `md:state` and `md:o
 does not resolve bare either, so the check asks whether the *utility inside* each class
 works on its own first. `p-4` resolves and `md:p-4` does not, so the variant is what broke;
 `state` resolves as nothing, so it was never a class. Run against a file exercising every
-helper in the package, it reports zero.
+helper in the package — and against every example in the README — it reports zero.
+
+Getting that to zero took two fixes worth naming, because a gate that fails a healthy build
+is worse than no gate:
+
+- Asking "does this class have a rule" by substring said yes too often. `.xl\:text-2xl`
+  starts with `.xl`, so the junk candidate `lg:xl` was reported against a build with
+  nothing wrong with it — and, the other way round, `.md\:p-40` would have vouched for a
+  broken `md:p-4`. The match now has to end where the selector does.
+- The scanner read an object inside *any* call as a bucket map, so `ss(…, match(tone,
+  { danger: "bg-red-50" }), …)` — the shape the README leads with — safelisted
+  `danger:bg-red-50` and the check reported it. `dictionaryKeys` already had this rule
+  written down for the same reason; the bucket sweep now follows it. A helper this package
+  knows is found on its own, so nothing is lost, and the stylesheet carries less junk.
 
 `vars` produces no class names, so it is deliberately absent from the scanner's name list,
 from the prettier `tailwindFunctions` list, and from the plugin's concerns entirely.
+
+**The build-time checks now cover every helper that can trip them.** The unusable-value
+check was written for `supports` and stayed there, so `has('input[type="text"]', …)` — the
+same defect, the same silence — went unreported; the dead-class check skipped the named
+variants' class argument the same way. Both now run for all of them. This is the one
+failure `tailess check` cannot catch on its own either: the candidate is dropped from the
+list before it ever reaches the compiler, so nothing downstream can find it missing.
 
 **One new build-time check**, and the first that reads your CSS rather than your source.
 The breakpoint keys are compiled into the package — they have to be, since they are a
@@ -238,6 +275,9 @@ reported too.
 Each of the four was confirmed against the real Tailwind compiler before it was written
 down. The check follows relative `@import`s, so a theme split into its own file is found,
 and it says nothing about a theme that restates a default or customises anything else.
+Restating one in v3's units counts as restating it: `--breakpoint-md: 768px` is the width
+already exported as `48rem`, since a media query resolves `rem` against the initial font
+size — so pinning the v3 numbers, which is the standard migration, stays silent.
 
 A `@theme` is a *sequence of edits*, not a set of values, so the declarations are kept in
 source order and replayed over the defaults. `--breakpoint-md: 50rem` followed by
@@ -265,7 +305,8 @@ chain silences the whole check — no answer rather than a confidently wrong one
 
 The runtime grows 4,770 minified characters, about 1,766 gzipped — 2.8 kB to 4.6 kB — and
 the size budget was raised deliberately to match. Most of that is warning text. Note what
-the number is and is not: the package sets `sideEffects: false`, so it is the cost of
+the number is and is not: every module here is side-effect free — `sideEffects` now lists
+only `./dist/cli.js`, which is the binary and calls `main()` — so it is the cost of
 importing everything. A project using only `ss` and `cn` bundles 5,170 characters — 47 of
 them the two new key families, which `ss` needs for its emission order — and one that adds
 `vars` pays 488, while one importing only `variants` bundles 5,634.
