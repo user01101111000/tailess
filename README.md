@@ -1106,11 +1106,12 @@ The plugin reports what it can prove wrong from your source, while the project b
   it as a key — ss({ "sm": … }) compiles, emits "sm:", and no rule is generated for it.
 ```
 
-Eight things are checked: two conflicting utilities in **one** string, a `between` range
+Nine things are checked: two conflicting utilities in **one** string, a `between` range
 no viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value
 no class name can carry — a `supports` query, a `has`/`inside` selector, an `nth`
-position — a helper imported under another name, CSS that moves the variants out from
-under the keys, and CSS that imports Tailwind with a `prefix(…)`.
+position — a helper imported under another name, an `ss` map handed to a helper
+that takes a flat class value, CSS that moves the variants out from under the keys, and
+CSS that imports Tailwind with a `prefix(…)`.
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
@@ -1120,6 +1121,19 @@ the point of passing `className` last.
 from the candidate list — while the file compiles, type-checks and renders exactly the
 `class` attribute you wrote. Renaming `cn` or `match` is free; renaming a helper that
 builds a variant prefix is not, and that is what this reports.
+
+**An `ss` map in the wrong place.** Composition runs one way — a helper nests *inside*
+an `ss` bucket, never the reverse. Every helper's class argument is a `ClassValue`, where
+an object is a `clsx` dictionary (`until("md", { hidden: !open })` is the documented
+shape), so an `ss` map handed to one is read as a dictionary and its **keys** become the
+classes: `on("hover", { base: "underline", md: "font-bold" })` builds
+`"hover:base hover:md"`. The types refuse it, so this only fires where a cast or an
+untyped boundary let it through — and there it is completely silent.
+
+```ts
+ss({ hover: on("hover", "underline") })   // ✅ this way round
+on("hover", { base: "underline" })        // ❌ "hover:base"
+```
 
 **A Tailwind `prefix(…)`** is the one failure that is total rather than local.
 `@import "tailwindcss" prefix(tw)` makes the working class `tw:hover:underline`, and
@@ -1324,6 +1338,18 @@ happened to run the command from — so `vite build apps/web` and monorepo task 
 behave the same as a plain `vite build`. On PostCSS there is no root, so paths resolve
 against the working directory.
 
+Note which way round those two go. `ignore` **adds** to the built-in list and matches a
+bare directory *name* wherever it appears in the tree, so it cannot un-ignore
+`node_modules` and cannot be scoped to one path. `extensions` **replaces** the default
+list, so "the defaults plus one" means writing the whole list out — it is in the table
+above, and `tailess check --extensions` takes the same one:
+
+```ts
+tailess({
+  extensions: "tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro erb".split(" "),
+})
+```
+
 `content` takes directories and files — **not globs**. `"src"` scans everything under
 it, so `"src/**/*.tsx"` is both unnecessary and inert. A `content` that matches no files
 warns rather than quietly producing a stylesheet with nothing in it.
@@ -1331,8 +1357,8 @@ warns rather than quietly producing a stylesheet with nothing in it.
 | Option | Default |
 | ------ | ------- |
 | `content` | Vite's `root` / `process.cwd()` |
-| `ignore` | added on top of the built-in list |
-| `extensions` | `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro` |
+| `ignore` | **added to** the built-in list — a directory name, matched anywhere in the tree |
+| `extensions` | **replaces** `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro` |
 | `diagnostics` | `"warn"` |
 | `cacheDir` | `node_modules/.cache` (Vite uses its own `cacheDir`) — PostCSS only |
 
@@ -1452,6 +1478,26 @@ warning and the integration check sit behind `process.env.NODE_ENV !== "producti
 so none of them runs. The message *text* still ships: the guard is written to survive
 a bundler that leaves `process` undefined, and that is what keeps a minifier from
 folding it away.
+
+**Is `ss()` memoized?** No, and it would not help. `tailwind-merge` keeps its own LRU
+cache, so the expensive half is already cached across calls. What is left is the object
+walk — and in React the object is built fresh on every render, so nothing an identity or
+string key could match survives to the next one. A cache there would cost a key and never
+hit.
+
+**Can it export my theme's colours and spacing the way it exports `screens`?** No.
+`screens` is compiled in because the breakpoint *keys* are a closed union the compiler
+checks and `matchMedia` needs the widths — nothing else has that justification, and a
+second copy of your theme in JS is a copy that drifts from your CSS. Read a theme value
+the way CSS does: `var(--color-brand)`, with [`vars`](#vars--values-a-class-cannot-carry)
+when the value comes from data. Tailwind's own defaults are in
+`tailwindcss/defaultTheme` if you want them.
+
+**Could the plugin fold a static call into a literal at build time?** In principle yes —
+for a call site with no conditions the answer is already known while the project builds,
+and a large list would stop re-running `ss` per row. It is not built: it means rewriting
+your JavaScript rather than only adding CSS, which is a much larger promise than the one
+this package makes today.
 
 **Tailwind v3?** No. v4's `@source inline(...)` is what makes the bridge possible.
 

@@ -287,3 +287,30 @@ describe("where an import statement is prose rather than code", () => {
     ]);
   });
 });
+
+describe("an ss map handed to a helper that takes a flat class value", () => {
+  it("reports it, because the keys become the class names", () => {
+    // Composition runs one way: a helper nests *inside* an `ss` bucket. The other way
+    // round, the object is a clsx dictionary and `on("hover", { base: "underline" })`
+    // builds "hover:base" — silently, and only where a cast let it past the types.
+    const [first] = diagnose(`on("hover", { base: "underline", md: "font-bold" })`);
+    expect(first?.kind).toBe("bucket-as-dictionary");
+    expect(first?.message).toContain("ss({ base: on(…) })");
+    expect(kinds(`until("md", { base: "hidden" })`)).toEqual(["bucket-as-dictionary"]);
+    expect(kinds(`supports("display:grid", { base: "grid" })`)).toEqual(["bucket-as-dictionary"]);
+    expect(kinds(`group("row", "hover", { md: "underline" })`)).toEqual(["bucket-as-dictionary"]);
+    expect(kinds(`has("> img", { hover: "p-0" })`)).toEqual(["bucket-as-dictionary"]);
+  });
+
+  it("says nothing about the composition that is correct", () => {
+    expect(kinds(`ss({ md: on("hover", "underline") })`)).toEqual([]);
+    expect(kinds(`ss({ base: "p-4", md: "p-6" })`)).toEqual([]);
+    expect(kinds(`responsive("p-4", { md: "p-6" })`)).toEqual([]);
+  });
+
+  it("says nothing about a real clsx dictionary, which is the documented shape", () => {
+    expect(kinds(`until("md", { hidden: !open })`)).toEqual([]);
+    expect(kinds(`on("hover", { "sr-only": cond, underline: isActive })`)).toEqual([]);
+    expect(kinds(`on("hover", { block: a, flex: b })`)).toEqual([]);
+  });
+});

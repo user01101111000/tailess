@@ -1,6 +1,13 @@
 import { twMerge } from "tailwind-merge";
-import { screenKeys } from "../constants.js";
-import { extractStrings, helperNames, isArrayLiteral, type RawCall, scanCalls } from "./scan.js";
+import { maxScreenKeys, screenKeys, stateKeys } from "../constants.js";
+import {
+  dictionaryKeys,
+  extractStrings,
+  helperNames,
+  isArrayLiteral,
+  type RawCall,
+  scanCalls,
+} from "./scan.js";
 
 /**
  * Problems the scanner can prove from the source alone, reported while the project
@@ -28,7 +35,9 @@ export interface Diagnostic {
     /** Not from a source file either: Tailwind was imported with a `prefix(…)`. */
     | "unsupported-prefix"
     /** A helper imported under another name, which the scanner cannot follow. */
-    | "renamed-import";
+    | "renamed-import"
+    /** An `ss` map handed to a helper whose class argument is a clsx value. */
+    | "bucket-as-dictionary";
   /** One line, written for whoever has to fix it. */
   message: string;
 }
@@ -88,6 +97,42 @@ function deadClasses(text: string | undefined, report: (d: Diagnostic) => void):
           `. Drop the unused one, or move the override into its own argument.`,
       });
     }
+  }
+}
+
+/** Every key `ss` knows, for telling a bucket map from a `clsx` dictionary. */
+const everyKey = new Set<string>(["base", ...screenKeys, ...maxScreenKeys, ...stateKeys]);
+
+/**
+ * Report an `ss` map handed to a helper that takes a flat class value.
+ *
+ * Composition here runs one way: a helper nests *inside* an `ss` bucket, not the other
+ * way round. `on`, `until`, `supports` and the rest take a `ClassValue`, where an object
+ * is a `clsx` dictionary — `until("md", { hidden: !open })` is the documented shape — so
+ * an `ss` map handed to one is read as a dictionary and its *keys* become the classes:
+ * `on("hover", { base: "underline", md: "font-bold" })` builds `"hover:base hover:md"`.
+ *
+ * The type system refuses it, so this only fires where a cast or an untyped boundary let
+ * it through — and there it is silent, which is why it is worth a build check. The test
+ * is exact: `base`, `md` and `hover` are `ss` keys and none of them is a Tailwind
+ * utility, so a dictionary key that is one of them was meant as a bucket.
+ */
+function bucketMapAsDictionary(
+  name: string,
+  text: string | undefined,
+  report: (d: Diagnostic) => void,
+): void {
+  if (!text) return;
+  for (const key of dictionaryKeys(text, true)) {
+    if (!everyKey.has(key)) continue;
+    report({
+      kind: "bucket-as-dictionary",
+      message:
+        `${name}() was given an object with the key "${key}", which is an ss bucket — but ` +
+        `its class argument is a clsx value, so "${key}" becomes the class name. Nest the ` +
+        `other way round: ss({ ${key}: ${name}(…) }).`,
+    });
+    return;
   }
 }
 
@@ -182,6 +227,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
         }
       }
       deadClasses(args[2], report);
+      bucketMapAsDictionary(name, args[2], report);
       return;
     }
 
@@ -189,6 +235,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       if (args.length < 2) return;
       checkPrefix(args[0], report);
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
@@ -206,6 +253,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       if (args.length < 2) return;
       unusableValues(name, args[0] ?? "", report);
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
@@ -216,6 +264,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
     case "container": {
       if (args.length < 3) return;
       deadClasses(args[2], report);
+      bucketMapAsDictionary(name, args[2], report);
       return;
     }
 
@@ -236,6 +285,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
         }
       }
       deadClasses(args[2], report);
+      bucketMapAsDictionary(name, args[2], report);
       return;
     }
 
@@ -254,12 +304,14 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
         }
       }
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
     case "until":
     case "aria": {
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
@@ -267,6 +319,8 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
     case "responsive": {
       // Every argument of these is (or contains) class values; the literals inside
       // are what matter, and `extractStrings` reaches them wherever they sit.
+      // No `bucketMapAsDictionary` here: for these two an object argument really is a
+      // bucket map, which is the whole point of them.
       for (const arg of args) deadClasses(arg, report);
       return;
     }
