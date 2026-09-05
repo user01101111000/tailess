@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/postcss";
 import postcss from "postcss";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearCache } from "../../src/extract/collect.js";
+import { clearReported } from "../../src/integration/report.js";
 import tailess from "../../src/postcss/index.js";
 import tailessVite from "../../src/vite/index.js";
 import { missingRules } from "../helpers/css.js";
@@ -37,6 +38,17 @@ const expected = [
   "data-[disabled]:pointer-events-none",
   "aria-expanded:rotate-180",
   "supports-[display:grid]:grid",
+  // The escaped spelling is the whole point of the helper: written as CSS spells
+  // it, this only has a rule because the space became `_` on both sides.
+  "supports-[display:_grid]:gap-4",
+  "supports-[gap]:gap-2",
+  "not-supports-[display:_grid]:flex",
+  "md:supports-[container-type:_inline-size]:block",
+  // A name lands after the variant, as a modifier.
+  "group-hover/row:underline",
+  "peer-invalid/email:text-red-600",
+  "@md/sidebar:grid-cols-2",
+  "md:group-hover/card:ring-2",
   // From `composedSource` below.
   "lg:p-6",
   "sm:bg-red-500",
@@ -46,7 +58,7 @@ const expected = [
 ];
 
 const source = `
-import { aria, between, cn, data, on, responsive, ss, until, withPrefix } from "tailess";
+import { aria, between, cn, container, data, group, notSupports, on, peer, responsive, ss, supports, until, withPrefix } from "tailess";
 
 export const cls = cn(
   ss({
@@ -68,6 +80,14 @@ export const cls = cn(
   data("disabled", null, "pointer-events-none"),
   aria("expanded", "rotate-180"),
   withPrefix("supports-[display:grid]", "grid"),
+  supports("display: grid", "gap-4"),
+  supports("gap", "gap-2"),
+  notSupports("display: grid", "flex"),
+  ss({ md: supports("container-type: inline-size", "block") }),
+  group("row", "hover", "underline"),
+  peer("email", "invalid", "text-red-600"),
+  container("sidebar", "@md", "grid-cols-2"),
+  ss({ md: group("card", "hover", "ring-2") }),
   "px-2 px-4",
 );
 `;
@@ -135,6 +155,41 @@ describe("PostCSS integration (Next.js and any PostCSS setup)", () => {
     expect(missingRules(result.css, ["text-xl", "flex", "px-4"])).toEqual([]);
     // The prefixed ones are exactly what this package has to supply.
     expect(missingRules(result.css, expected).sort()).toEqual([...expected].sort());
+  });
+
+  /** Compile `css`, returning what reached `console.warn`. */
+  async function warningsFrom(css: string): Promise<string[]> {
+    clearReported();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await compileWithPostcss(css);
+      return warn.mock.calls.map((args) => String(args[0]));
+    } finally {
+      // In `finally` so a failed expectation cannot leave `console.warn` mocked for
+      // the next test — which turns one failure into several unrelated ones.
+      warn.mockRestore();
+    }
+  }
+
+  it("reports a @theme that moves the breakpoints out from under the keys", async () => {
+    // The module that decides this is unit-tested; what this pins is the wiring —
+    // that the plugin actually reaches the CSS and hands the result to the reporter.
+    const said = await warningsFrom(`@import "tailwindcss";\n@theme { --breakpoint-sm: initial; }`);
+    expect(said.some((m) => m.includes('removes the "sm" breakpoint'))).toBe(true);
+  });
+
+  it("reports a @custom-variant the keys do not cover", async () => {
+    // The other half of the CSS check, and the half that reaches the plugin through a
+    // different at-rule — so the wiring is worth pinning separately.
+    const said = await warningsFrom(
+      `@import "tailwindcss";\n@custom-variant midnight-only (&:where([data-theme=midnight] *));`,
+    );
+    expect(said.some((m) => m.includes('defines the "midnight-only" variant'))).toBe(true);
+  });
+
+  it("stays quiet about a stylesheet with no @theme", async () => {
+    const said = await warningsFrom(`@import "tailwindcss";`);
+    expect(said.filter((m) => m.includes("breakpoint"))).toEqual([]);
   });
 
   it("injects the runtime marker so a missing integration is detectable", async () => {

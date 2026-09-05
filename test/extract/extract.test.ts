@@ -163,6 +163,63 @@ describe("extractClasses", () => {
     ]);
   });
 
+  it("handles supports() and notSupports(), escaping the query as the runtime does", () => {
+    expect(extractClasses(`supports("display: grid", "grid")`)).toEqual([
+      "supports-[display:_grid]:grid",
+    ]);
+    expect(extractClasses(`notSupports("display: grid", "flex")`)).toEqual([
+      "not-supports-[display:_grid]:flex",
+    ]);
+  });
+
+  it("handles the named group(), peer() and container() variants", () => {
+    expect(extractClasses(`group("row", "hover", "underline")`)).toEqual([
+      "group-hover/row:underline",
+    ]);
+    expect(extractClasses(`peer("email", "invalid", "text-red-600")`)).toEqual([
+      "peer-invalid/email:text-red-600",
+    ]);
+    expect(extractClasses(`container("sidebar", "@md", "grid-cols-2")`)).toEqual([
+      "@md/sidebar:grid-cols-2",
+    ]);
+  });
+
+  it("drops a candidate whose brackets do not close", () => {
+    // `@source inline("…")` is parsed by matching parentheses, so one stray `(`
+    // swallows the rest of the directive — and every later class in that chunk,
+    // from files with nothing to do with it. The sweep reads *every* string
+    // literal at a call site, so a query holding `calc(100% - 2rem)` splits on
+    // whitespace into `calc(100%`, which is otherwise a perfectly safe candidate.
+    const found = extractClasses(
+      `ss({ md: supports("width: calc(100% - 2rem)", "grid") }); ss({ md: "text-2xl" })`,
+    );
+    expect(found).toContain("md:supports-[width:_calc(100%_-_2rem)]:grid");
+    expect(found).toContain("md:text-2xl");
+    for (const candidate of found) {
+      const open = (candidate.match(/[([]/g) ?? []).length;
+      const close = (candidate.match(/[)\]]/g) ?? []).length;
+      expect(open, candidate).toBe(close);
+    }
+    expect(found).not.toContain("md:calc(100%");
+  });
+
+  it("drops a candidate carrying an unclosed quote", () => {
+    // `@source inline("…")` is CSS, so an odd `'` opens a string that runs to the end
+    // of the payload and takes every later candidate in the chunk with it — measured
+    // at 60 of 60. An apostrophe in *any* string a matched call touches does it, and
+    // `console.group("user's session")` is a matched call now.
+    const found = extractClasses(
+      `console.group("[auth]", "login", "user's session expired");\nss({ hover: "underline" })`,
+    );
+    expect(found).toContain("hover:underline");
+    expect(found.filter((c) => (c.match(/'/g) ?? []).length % 2 === 1)).toEqual([]);
+  });
+
+  it("keeps a candidate whose quotes do close", () => {
+    // The test is balance, not absence: `content-['x']` is a real utility.
+    expect(extractClasses(`ss({ hover: "content-['x']" })`)).toEqual(["hover:content-['x']"]);
+  });
+
   it("finds calls nested inside other calls", () => {
     expect(extractClasses(`cn(ss({ md: "flex" }), on("hover", "underline"))`)).toEqual([
       "hover:underline",
@@ -273,6 +330,23 @@ describe("extractClasses, variadic ss()", () => {
     ]);
   });
 
+  it("reads both branches of a ternary position, the way every other helper does", () => {
+    // `on(cond ? "hover" : "focus", …)` enumerates both because the string sweep
+    // finds both literals. Reading the position only when the *whole* argument is one
+    // number enumerated neither, and the class landed with no rule behind it.
+    expect(extractClasses(`nth(cond ? 3 : 4, "p-4")`)).toEqual(["nth-3:p-4", "nth-4:p-4"]);
+    expect(extractClasses(`nthOfType(open ? 1 : 2, "underline")`)).toEqual([
+      "nth-of-type-1:underline",
+      "nth-of-type-2:underline",
+    ]);
+  });
+
+  it("never reads the digits inside a position written as a string", () => {
+    // `"3n+1"` is one expression, not the positions 3 and 1, so the numeric sweep
+    // runs only when the argument holds no string at all.
+    expect(extractClasses(`nth("3n+1", "border-t")`)).toEqual(["nth-[3n+1]:border-t"]);
+  });
+
   it("ignores plain class arguments, which Tailwind already sees itself", () => {
     expect(extractClasses(`ss("px-2 px-4", cond && "hidden", className)`)).toEqual([]);
   });
@@ -322,13 +396,24 @@ describe("extractClasses, nested ss() buckets", () => {
     ]);
   });
 
-  it("still reads a lookup called inside a bucket", () => {
+  it("reads a lookup called inside a bucket, and only its classes", () => {
+    // `match`'s keys are discriminant values, not breakpoints, so `sm` and `lg` here
+    // name sizes. Reading them as buckets safelisted `md:sm:p-1`, which nothing
+    // generates a rule for — junk in the stylesheet, and a class `tailess check` then
+    // reports against a healthy build. Both classes the lookup can return are still
+    // enumerated, which is the part that has to be right.
     expect(extractClasses(`ss({ md: match(size, { sm: "p-1", lg: "p-8" }) })`)).toEqual([
-      "md:lg:p-8",
       "md:p-1",
       "md:p-8",
-      "md:sm:p-1",
     ]);
+  });
+
+  it("does not read a lookup's keys as buckets when it stands beside a map", () => {
+    // The README's own shape: `ss({…}, match(tone, {…}), className)`. The lookup's
+    // keys are tone names, and `danger:bg-red-50` is not a class anyone ever built.
+    expect(
+      extractClasses(`ss({ md: "p-6" }, match(tone, { info: "bg-blue-50", danger: "bg-red-50" }))`),
+    ).toEqual(["md:p-6"]);
   });
 
   it("handles a nested max-* range", () => {

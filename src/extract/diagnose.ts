@@ -17,12 +17,22 @@ import { extractStrings, isArrayLiteral, type RawCall, scanCalls } from "./scan.
  */
 export interface Diagnostic {
   /** Machine-readable category, so a caller can group or filter. */
-  kind: "dead-class" | "empty-range" | "blank-prefix" | "spaced-prefix";
+  kind:
+    | "dead-class"
+    | "empty-range"
+    | "blank-prefix"
+    | "spaced-prefix"
+    | "unusable-query"
+    /** Not from a source file: the project's CSS redefines `--breakpoint-*`. */
+    | "theme-drift";
   /** One line, written for whoever has to fix it. */
   message: string;
 }
 
 const whitespace = /\s/;
+
+/** Characters a class name cannot carry, so the build can never enumerate them. */
+const unusableInClassName = /["{}\\;]/;
 
 /** Normalize a class string to a stable token list, so comparison ignores spacing. */
 function tokens(literal: string): string[] {
@@ -72,6 +82,50 @@ function deadClasses(text: string | undefined, report: (d: Diagnostic) => void):
           `"${cls}" never reaches the element` +
           (winner ? ` — "${winner}" replaces it in the same string` : "") +
           `. Drop the unused one, or move the override into its own argument.`,
+      });
+    }
+  }
+}
+
+/** What each helper that writes into `…-[…]` calls the text it puts there. */
+const arbitraryNoun: Record<string, string> = {
+  supports: "feature query",
+  notSupports: "feature query",
+  has: "selector",
+  notHas: "selector",
+  inside: "selector",
+  nth: "position",
+  nthLast: "position",
+  nthOfType: "position",
+  nthLastOfType: "position",
+};
+
+/**
+ * Report an arbitrary value that cannot survive the trip into a class name.
+ *
+ * The candidate list is written into a stylesheet, so a value carrying one of these
+ * cannot be enumerated at all — while the runtime still builds the class. That is the
+ * failure this package exists to prevent, and it is the one case `tailess check` cannot
+ * catch either: the candidate never reaches the compiler to be found missing.
+ */
+function unusableValues(name: string, arg: string, report: (d: Diagnostic) => void): void {
+  const noun = arbitraryNoun[name] as string;
+  for (const literal of extractStrings(arg)) {
+    const value = literal.trim();
+    if (value === "") {
+      report({
+        kind: "unusable-query",
+        message:
+          `${name}("", …) has an empty ${noun}, so it builds "…-[]:" — a class nothing ` +
+          "generates a rule for.",
+      });
+    } else if (unusableInClassName.test(value) || (value.match(/'/g) ?? []).length % 2 === 1) {
+      report({
+        kind: "unusable-query",
+        message:
+          `${name}("${value}", …) has a ${noun} containing one of \`" { } \\ ;\` or an ` +
+          "unclosed `'`, which cannot appear in a class name, so the class is built but " +
+          "no rule is generated for it.",
       });
     }
   }
@@ -131,6 +185,33 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       if (args.length < 2) return;
       checkPrefix(args[0], report);
       deadClasses(args[1], report);
+      return;
+    }
+
+    // Every helper whose first argument becomes the inside of a `…-[…]`, and whose
+    // second is the class value. One shape, one pair of checks.
+    case "supports":
+    case "notSupports":
+    case "has":
+    case "notHas":
+    case "inside":
+    case "nth":
+    case "nthLast":
+    case "nthOfType":
+    case "nthLastOfType": {
+      if (args.length < 2) return;
+      unusableValues(name, args[0] ?? "", report);
+      deadClasses(args[1], report);
+      return;
+    }
+
+    // The named variants: the name is checked at runtime, where the rules differ per
+    // helper; the class value is the same everywhere.
+    case "group":
+    case "peer":
+    case "container": {
+      if (args.length < 3) return;
+      deadClasses(args[2], report);
       return;
     }
 

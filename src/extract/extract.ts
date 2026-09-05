@@ -1,3 +1,4 @@
+import { escapeCondition } from "../internal/condition.js";
 import {
   dictionaryKeys,
   extractStrings,
@@ -88,12 +89,92 @@ function staticValue(literal: string): string | null {
   return String(negative ? -value : value);
 }
 
+/**
+ * Anything that could open a numeric literal, taken as far as it runs. Validating the
+ * token afterwards is what keeps `0x10` and `1e3` whole while `item2` and `a.length`
+ * are never mistaken for numbers at all.
+ */
+const numericToken = /(?<![\w$.])(?:\d[\w.]*|\.\d[\w.]*)/g;
+
+/**
+ * Every numeric literal in a fragment of source — the counterpart of `extractStrings`,
+ * and needed for the same reason.
+ *
+ * A ternary is the shape that makes it necessary. `on(cond ? "hover" : "focus", …)`
+ * enumerates both branches because the string sweep finds both literals; a helper that
+ * reads its argument only when the *whole* argument is one literal enumerates neither,
+ * and a class the runtime builds lands with no rule behind it.
+ */
+function staticValues(text: string): string[] {
+  const out: string[] = [];
+  for (const [token] of text.matchAll(numericToken)) {
+    const value = staticValue(token);
+    if (value !== null && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+/** Helper name to the variant it builds, for the four `nth-*` families. */
+const nthVariants: Record<string, string> = {
+  nth: "nth",
+  nthLast: "nth-last",
+  nthOfType: "nth-of-type",
+  nthLastOfType: "nth-last-of-type",
+};
+
 /** Records the classes one bucket produces. `prefix` is `""` for unprefixed ones. */
 type Add = (prefix: string, tokens: string[]) => void;
 
+/**
+ * True if every bracket and quote in `candidate` closes.
+ *
+ * `@source inline("…")` is CSS, parsed by matching parentheses and by tracking string
+ * delimiters, so one malformed candidate swallows the rest of the directive — and with
+ * it every later class in the same chunk, *including ones from files that have nothing
+ * to do with it*. Measured: one bad candidate at the head of a chunk cost all 60 that
+ * followed it.
+ *
+ * Both shapes are reachable because the sweep reads every string literal at a call
+ * site, not only the ones that are classes. An ordinary `calc(100% - 2rem)` in a helper
+ * argument splits on whitespace into the token `calc(100%`; an apostrophe anywhere in
+ * any string a matched call touches — `console.group("user's session")` will do it —
+ * opens a CSS string that runs to the end of the payload.
+ *
+ * The test is *balance*, not absence, because `content-['x']` is a real utility and
+ * banning the character outright would drop it. A real utility always closes what it
+ * opens, so requiring that costs nothing and confines the damage to the junk token.
+ */
+function isBalanced(candidate: string): boolean {
+  let round = 0;
+  let square = 0;
+  let quotes = 0;
+  for (let i = 0; i < candidate.length; i += 1) {
+    const ch = candidate.charCodeAt(i);
+    if (ch === 40) {
+      round += 1;
+    } else if (ch === 41) {
+      round -= 1;
+      if (round < 0) return false;
+    } else if (ch === 91) {
+      square += 1;
+    } else if (ch === 93) {
+      square -= 1;
+      if (square < 0) return false;
+    } else if (ch === 39) {
+      quotes += 1;
+    }
+  }
+  return round === 0 && square === 0 && quotes % 2 === 0;
+}
+
 /** Guards against feeding junk (or a whole expression) to Tailwind as a candidate. */
 function isSafeCandidate(candidate: string): boolean {
-  return candidate.length > 0 && candidate.length <= 255 && !unsafe.test(candidate);
+  return (
+    candidate.length > 0 &&
+    candidate.length <= 255 &&
+    !unsafe.test(candidate) &&
+    isBalanced(candidate)
+  );
 }
 
 /**
@@ -238,6 +319,17 @@ function enumerateValue(
   if (nested.length === 0 || !isObjectLiteral(text)) add(scope, bucketTokens(text));
 }
 
+/**
+ * Enumerate every `ss` map inside one value.
+ *
+ * A plain string needs nothing: it is unprefixed, so Tailwind reads it out of the
+ * source itself and `add` drops it anyway. Only a map carries a prefix that has to
+ * be predicted here.
+ */
+function emitMaps(text: string, depth: number, add: Add, follow: number): void {
+  for (const map of objectLiterals(text)) enumerateMap(map, "", depth, add, follow);
+}
+
 function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void {
   const { name, args } = call;
 
@@ -335,6 +427,127 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     case "withPrefix": {
       if (args.length < 2) return;
       emitValue(args[1] ?? "", extractStrings(args[0] ?? ""), add, follow);
+      return;
+    }
+
+    // supports("display: grid", "...") / notSupports(…) — the condition is escaped
+    // through the very function the runtime uses, because a candidate that spells
+    // the spaces differently is worse than no candidate at all: the class still
+    // reaches the element, and `isSafeCandidate` drops the unescaped form outright.
+    // group("row", "hover", "…") / peer("email", "invalid", "…") — the name is a
+    // modifier on the variant, so the prefix is `group-<state>/<name>`.
+    case "group":
+    case "peer": {
+      if (args.length < 3) return;
+      const prefixes: string[] = [];
+      for (const label of extractStrings(args[0] ?? "")) {
+        for (const state of extractStrings(args[1] ?? "")) {
+          prefixes.push(`${name}-${state}/${label}`);
+        }
+      }
+      emitValue(args[2] ?? "", prefixes, add, follow);
+      return;
+    }
+
+    // container("sidebar", "@md", "…") — the key already carries its own `@`.
+    case "container": {
+      if (args.length < 3) return;
+      const prefixes: string[] = [];
+      for (const label of extractStrings(args[0] ?? "")) {
+        for (const key of extractStrings(args[1] ?? "")) prefixes.push(`${key}/${label}`);
+      }
+      emitValue(args[2] ?? "", prefixes, add, follow);
+      return;
+    }
+
+    // has(":checked", "…") / notHas(…) / inside(".dark", "…") — an arbitrary selector,
+    // escaped through the same function the runtime uses. The plain state spellings
+    // (`has-checked`, `in-focus`) are keys and need no case here.
+    case "has":
+    case "notHas":
+    case "inside": {
+      if (args.length < 2) return;
+      const variant = name === "has" ? "has" : name === "notHas" ? "not-has" : "in";
+      const selectors = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        selectors.map((selector) => `${variant}-[${escapeCondition(selector)}]`),
+        add,
+        follow,
+      );
+      return;
+    }
+
+    // variants({ base, variants: { name: { option: … } }, compound: [{ …, class }] })
+    //
+    // The one call site here whose object keys are *not* prefixes. `tone` and `size`
+    // name variants, `primary` and `lg` name options, and neither reaches a class —
+    // only the leaves do. Reading the config as an `ss` map would enumerate
+    // `tone:size:primary:bg-blue-600` and, worse, miss the map inside an option that
+    // does need enumerating. So each of the three places a class can hide is walked
+    // to explicitly, and everything else in the config is left alone.
+    case "variants": {
+      const [config] = objectLiterals(args[0] ?? "");
+      if (config === undefined) return;
+      for (const { key, value } of parseObject(config)) {
+        if (key === "base") {
+          emitMaps(value, depth, add, follow);
+        } else if (key === "variants") {
+          for (const group of objectLiterals(value)) {
+            for (const option of parseObject(group)) {
+              for (const choices of objectLiterals(option.value)) {
+                for (const leaf of parseObject(choices)) emitMaps(leaf.value, depth, add, follow);
+              }
+            }
+          }
+        } else if (key === "compound") {
+          // A real array of rule objects, which is not what an array means anywhere
+          // else here: inside an `ss` value an object is a `clsx` dictionary, so
+          // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
+          // the one level so the rules themselves are visible to it.
+          const list = value.trim();
+          const rules = list.startsWith("[") && list.endsWith("]") ? list.slice(1, -1) : list;
+          for (const rule of objectLiterals(rules)) {
+            for (const field of parseObject(rule)) {
+              if (field.key === "class") emitMaps(field.value, depth, add, follow);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // nth(3, "…") / nth("3n+1", "…") and the three siblings. A number is a position
+    // and goes in bare; a string is an expression and goes in brackets — the same
+    // split the runtime makes, so the two agree on which spelling was built.
+    case "nth":
+    case "nthLast":
+    case "nthOfType":
+    case "nthLastOfType": {
+      if (args.length < 2) return;
+      const variant = nthVariants[name];
+      const arg = args[0] ?? "";
+      const prefixes = extractStrings(arg).map((value) => `${variant}-[${escapeCondition(value)}]`);
+      // Only when the argument holds no string at all, so the digits inside `"3n+1"`
+      // are never read as a position of their own.
+      if (prefixes.length === 0) {
+        for (const value of staticValues(arg)) prefixes.push(`${variant}-${value}`);
+      }
+      emitValue(args[1] ?? "", prefixes, add, follow);
+      return;
+    }
+
+    case "supports":
+    case "notSupports": {
+      if (args.length < 2) return;
+      const kind = name === "supports" ? "supports" : "not-supports";
+      const conditions = extractStrings(args[0] ?? "");
+      emitValue(
+        args[1] ?? "",
+        conditions.map((condition) => `${kind}-[${escapeCondition(condition)}]`),
+        add,
+        follow,
+      );
       return;
     }
   }

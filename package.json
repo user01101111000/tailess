@@ -28,7 +28,9 @@
     "url": "https://github.com/user01101111000/tailess/issues"
   },
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/cli.js"
+  ],
   "exports": {
     ".": {
       "import": {
@@ -61,6 +63,9 @@
       }
     },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "tailess": "./dist/cli.js"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -102,7 +107,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.4",
-    "@biomejs/biome": "^2.5.2",
+    "@biomejs/biome": "2.5.11",
     "@changesets/cli": "^2.31.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.1.0",

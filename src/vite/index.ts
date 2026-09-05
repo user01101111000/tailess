@@ -5,6 +5,7 @@ import { isTailwindEntry } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
+import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
 /**
  * Options for the tailess Vite plugin.
@@ -261,6 +262,15 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
         if (!(await isTailwindEntry(code, entry))) return null;
 
         entries.add(entry);
+
+        // The keys are compiled in, so a `@theme` that moves the breakpoints under
+        // them is invisible from the source scan — and three of the four ways it can
+        // are silent. This is the one place the CSS itself is in hand.
+        const theme = await collectTheme(code, entry);
+        reportDiagnostics(
+          themeDiagnostics(theme.breakpoints, theme.variants).map((d) => ({ ...d, file: entry })),
+          root,
+        );
 
         const { files, css, wrote } = await refresh();
         // Watch the sources so `build --watch` retriggers, and so Vite's watcher is

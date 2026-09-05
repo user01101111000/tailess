@@ -5,6 +5,7 @@ import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceChunks } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
+import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
 /**
  * Options for the tailess PostCSS plugin.
@@ -45,6 +46,15 @@ interface Rule {
 interface AtRule {
   name: string;
   params: string;
+  /**
+   * The rule as CSS, used only to read a `@theme` block's declarations back out.
+   *
+   * Every object has `toString`, so naming it here costs nothing and — unlike a
+   * `nodes` array typed to the shape we want — cannot make the plugin unassignable
+   * to PostCSS's `AcceptedPlugin`, which would stop a typed `postcss.config.ts`
+   * compiling for every consumer. `test/postcss/assignable.test.ts` catches that.
+   */
+  toString(): string;
 }
 interface Root {
   /** Only ever read to spot Tailwind's banner — see {@link ranAfterTailwind}. */
@@ -144,6 +154,34 @@ function ranAfterTailwind(root: Root): boolean {
   return first?.type === "comment" && (first.text ?? "").startsWith("! tailwindcss");
 }
 
+/**
+ * Rebuild the at-rules the theme check reads — `@theme` blocks, `@custom-variant`
+ * definitions, `@config` (which silences the check), and the `@import`s that might
+ * hold more of any of them — as CSS text.
+ *
+ * The same trick {@link isTailwindStylesheet} uses for imports, and for the same
+ * reason: it keeps one parser serving both integrations, when only this one has an
+ * AST at the point the question is asked.
+ */
+function themeSource(root: Root): string {
+  const parts: string[] = [];
+  root.walkAtRules((rule) => {
+    const name = rule.name.toLowerCase();
+    if (name === "theme") {
+      // Stringify just this block, never the whole AST — the reason `first` is read
+      // as a property above rather than the root being serialised.
+      parts.push(rule.toString());
+    } else if (name === "custom-variant" || name === "config") {
+      parts.push(`@${name} ${rule.params};`);
+    } else if (name === "import") {
+      const specifier = /["']([^"']+)["']/.exec(rule.params)?.[1];
+      if (specifier) parts.push(`@import "${specifier}";`);
+    }
+    return undefined;
+  });
+  return parts.join("\n");
+}
+
 let warnedAboutOrder = false;
 
 const tailessPostcss = Object.assign(
@@ -178,6 +216,18 @@ const tailessPostcss = Object.assign(
         });
 
         reportDiagnostics(diagnostics, process.cwd());
+
+        // The breakpoint keys are compiled in, so a `@theme` that moves them is
+        // invisible to the source scan — and three of the four ways it can are
+        // silent. This is the one place the CSS itself is in hand.
+        const theme = await collectTheme(themeSource(root), from);
+        reportDiagnostics(
+          themeDiagnostics(theme.breakpoints, theme.variants).map((d) => ({
+            ...d,
+            file: from ?? "your stylesheet",
+          })),
+          process.cwd(),
+        );
 
         // Prefer the sidecar: it is a build dependency Tailwind tracks, so a
         // rewritten list always takes effect. Falling back to inlining keeps things

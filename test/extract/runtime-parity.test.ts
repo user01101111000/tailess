@@ -4,12 +4,25 @@ import {
   aria,
   between,
   cn,
+  container,
   data,
+  group,
+  has,
+  inside,
   match,
+  notHas,
+  notSupports,
+  nth,
+  nthLast,
+  nthLastOfType,
+  nthOfType,
   on,
+  peer,
   responsive,
   ss,
+  supports,
   until,
+  variants,
   withPrefix,
 } from "../../src/index.js";
 
@@ -25,7 +38,31 @@ import {
  * scanner over-approximates by design, so the assertion is one-directional:
  * runtime output must be a subset of the candidates, never the reverse.
  */
-const helpers = { ss, cn, match, on, until, between, responsive, data, aria, withPrefix } as const;
+const helpers = {
+  ss,
+  cn,
+  match,
+  on,
+  until,
+  between,
+  responsive,
+  data,
+  aria,
+  withPrefix,
+  supports,
+  notSupports,
+  group,
+  peer,
+  container,
+  has,
+  notHas,
+  inside,
+  nth,
+  nthLast,
+  nthOfType,
+  nthLastOfType,
+  variants,
+} as const;
 
 /** Run `src` with `env` bound, using the same text the scanner was given. */
 function evaluate(src: string, env: Record<string, unknown>): string {
@@ -100,8 +137,8 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `data("open", false, "hidden")` },
 
   // A helper called inside a bucket has already built its own prefix, so the
-  // bucket's key stacks on top of it. `has-*` takes a value and so is not one of
-  // the keys, which leaves `withPrefix` with no other spelling.
+  // bucket's key stacks on top of it. `has-[…]` takes a selector, so it is the one
+  // spelling with no key of its own — the plain `has-checked` form is a key.
   { src: `ss({ md: withPrefix("has-[:checked]", "underline") })` },
   { src: `ss({ md: on("hover", "underline") })` },
   { src: `ss({ md: aria("expanded", "rotate-180") })` },
@@ -123,6 +160,95 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   // Three prefixes deep, which is what these helpers composing produces.
   { src: `on("hover", until("md", withPrefix("has-[:checked]", "p-6")))` },
   { src: `until("md", on("hover", aria("busy", "p-7")))` },
+
+  // A feature query is rewritten before it can be a class name — spaces become `_` —
+  // so the scanner has to perform the identical rewrite or it predicts a string the
+  // runtime never builds. What these cases pin is that the two halves *agree*: give
+  // the scanner a rewrite of its own and the multi-space case fails, drop its escape
+  // entirely and twelve fail. They cannot pin the rewrite itself, since both halves
+  // import one `escapeCondition` and so move together — that is what the unit tests
+  // in `test/utils/supports.test.ts` are for.
+  { src: `supports("display:grid", "grid")` },
+  { src: `supports("display: grid", "grid")` },
+  { src: `supports("display:  grid", "grid")` },
+  { src: `supports("  display: grid  ", "grid")` },
+  { src: `supports("gap", "gap-4")` },
+  { src: `supports("(display:grid) and (gap:1rem)", "grid gap-4")` },
+  { src: `supports("selector(&>*)", "p-5")` },
+  { src: `notSupports("display: grid", "flex")` },
+  { src: `notSupports("backdrop-filter: blur(1px)", "bg-white")` },
+  { src: `supports("display: grid", { grid: yes })`, env: { yes: true } },
+  { src: `supports("display: grid", ["grid", cond && "gap-4"])`, env: { cond: true } },
+
+  // …and the same stacking every other helper gets, in both directions.
+  { src: `ss({ md: supports("display: grid", "grid") })` },
+  { src: `on("hover", supports("display: grid", "underline"))` },
+  { src: `supports("display: grid", on("hover", "underline"))` },
+  { src: `until("md", notSupports("display: grid", "flex"))` },
+  { src: `ss({ dark: { md: supports("gap", "gap-2") } })` },
+
+  // A name is a modifier on the variant rather than part of it, so it lands after a
+  // `/` — a shape no other helper produces, and one the scanner has to rebuild
+  // exactly. The unnamed spellings are already keys, so these are the only way to say
+  // *which* group, peer or container is meant.
+  { src: `group("row", "hover", "underline")` },
+  { src: `group("card", "focus-within", "ring-2")` },
+  { src: `peer("email", "invalid", "text-red-600")` },
+  { src: `peer("terms", "checked", "font-bold")` },
+  { src: `container("sidebar", "@md", "grid-cols-2")` },
+  { src: `container("main", "@max-lg", "hidden")` },
+  { src: `group("row", "hover", { underline: yes })`, env: { yes: true } },
+  { src: `group("row", "hover", ["underline", cond && "font-bold"])`, env: { cond: true } },
+
+  // …and the same stacking every other helper gets, in both directions.
+  { src: `ss({ md: group("row", "hover", "underline") })` },
+  { src: `on("dark", group("row", "hover", "underline"))` },
+  { src: `until("lg", container("sidebar", "@md", "grid"))` },
+  { src: `group("row", "hover", on("focus", "underline"))` },
+  { src: `ss({ dark: { md: peer("email", "invalid", "text-red-600") } })` },
+
+  // An arbitrary selector carries the same space trap a feature query does, and the
+  // plain-state spellings (`has-checked`, `in-focus`) are keys rather than calls.
+  { src: `has(":checked", "bg-blue-50")` },
+  { src: `has("> img", "p-0")` },
+  { src: `has(">  img", "p-1")` },
+  { src: `has("input[type=text]", "ring-2")` },
+  { src: `notHas(":checked", "opacity-50")` },
+  { src: `inside(".dark", "text-white")` },
+  { src: `inside("[data-theme=dark]", "bg-black")` },
+  { src: `has(":checked", { underline: yes })`, env: { yes: true } },
+  { src: `ss({ md: has(":checked", "underline") })` },
+  { src: `on("dark", has("> img", "p-2"))` },
+  { src: `has(":checked", on("hover", "underline"))` },
+  { src: `ss({ "has-checked": "underline", "in-focus": "ring-2" })` },
+
+  // A position goes in bare and an expression in brackets, and the scanner has to make
+  // the same call from the source text alone — a quoted 3 is the bracket form.
+  { src: `nth(3, "bg-neutral-50")` },
+  { src: `nth("3", "p-1")` },
+  { src: `nth("3n+1", "border-t")` },
+  { src: `nth("3n + 1", "border-t")` },
+  { src: `nth("-n+3", "font-bold")` },
+  { src: `nthLast(1, "border-b-0")` },
+  { src: `nthOfType(2, "mt-4")` },
+  { src: `nthOfType("odd", "bg-white")` },
+  { src: `nthLastOfType(1, "mb-0")` },
+  { src: `ss({ md: nth(3, "p-4") })` },
+  { src: `on("hover", nth("2n", "underline"))` },
+
+  // The one call site whose object keys are not prefixes: `tone` and `size` name
+  // variants, `primary` and `lg` name options, and only the leaves hold classes. The
+  // config is evaluated and called here, so what the component actually emits is what
+  // the scanner has to have found.
+  {
+    src: `variants({ base: { base: "rounded", hover: "brightness-110" }, variants: { tone: { primary: "bg-blue-600", danger: { base: "bg-red-600", dark: "bg-red-400" } }, size: { sm: "text-sm", lg: { base: "text-lg", md: "px-6", "2xl": "px-8" } } }, compound: [{ tone: "danger", size: "lg", class: { base: "ring-2", focus: "ring-4" } }], defaults: { tone: "primary", size: "sm" } })({ tone: "danger", size: "lg" })`,
+  },
+  {
+    src: `variants({ variants: { pad: { lots: { base: "p-8", md: "p-12" } } } })({ pad: "lots" })`,
+  },
+  {
+    src: `variants({ base: { md: "gap-2" }, variants: { s: { a: { hover: "underline" } } }, defaults: { s: "a" } })()`,
+  },
 
   // Every spelling of a numeric literal, since the runtime interpolates the *number*.
   { src: `data("count", 1e3, "opacity-100")` },
