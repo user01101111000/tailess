@@ -38,6 +38,12 @@ export { responsive } from "./utils/responsive.js";
 export { ss } from "./utils/ss.js";
 export { notSupports, supports } from "./utils/supports.js";
 export type {
+  CompoundRule,
+  SlotDefaults,
+  SlottedComponent,
+  SlottedConfig,
+  SlottedGroups,
+  SlotValue,
   VariantComponent,
   VariantGroups,
   VariantOptions,

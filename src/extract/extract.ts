@@ -489,18 +489,48 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     case "variants": {
       const [config] = objectLiterals(args[0] ?? "");
       if (config === undefined) return;
-      for (const { key, value } of parseObject(config)) {
+      const fields = parseObject(config);
+
+      // Read the slot names first. With them, an option's value is one level deeper —
+      // `{ root: …, title: … }` rather than a class value — and reading it as an `ss`
+      // map would emit `root:md:p-8` while missing the `md:p-8` the runtime builds.
+      const slots = new Set<string>();
+      for (const { key, value } of fields) {
+        if (key !== "slots") continue;
+        for (const group of objectLiterals(value)) {
+          for (const slot of parseObject(group)) slots.add(slot.key);
+        }
+      }
+
+      /** Emit one per-slot value, or a plain class value when there are no slots. */
+      const emitPart = (text: string): void => {
+        if (slots.size === 0) {
+          emitMaps(text, depth, add, follow);
+          return;
+        }
+        for (const group of objectLiterals(text)) {
+          for (const part of parseObject(group)) {
+            if (slots.has(part.key)) emitMaps(part.value, depth, add, follow);
+          }
+        }
+      };
+
+      for (const { key, value } of fields) {
         if (key === "base") {
           emitMaps(value, depth, add, follow);
+        } else if (key === "slots") {
+          for (const group of objectLiterals(value)) {
+            for (const slot of parseObject(group)) emitMaps(slot.value, depth, add, follow);
+          }
         } else if (key === "variants") {
           for (const group of objectLiterals(value)) {
             for (const option of parseObject(group)) {
               for (const choices of objectLiterals(option.value)) {
-                for (const leaf of parseObject(choices)) emitMaps(leaf.value, depth, add, follow);
+                for (const leaf of parseObject(choices)) emitPart(leaf.value);
               }
             }
           }
-        } else if (key === "compound") {
+        } else if (key === "compound" || key === "compoundVariants") {
           // A real array of rule objects, which is not what an array means anywhere
           // else here: inside an `ss` value an object is a `clsx` dictionary, so
           // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
@@ -509,7 +539,9 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
           const rules = list.startsWith("[") && list.endsWith("]") ? list.slice(1, -1) : list;
           for (const rule of objectLiterals(rules)) {
             for (const field of parseObject(rule)) {
-              if (field.key === "class") emitMaps(field.value, depth, add, follow);
+              // `className` is the `cva`/`tv` spelling, accepted so a ported recipe
+              // does not lose its compound classes without a word.
+              if (field.key === "class" || field.key === "className") emitPart(field.value);
             }
           }
         }

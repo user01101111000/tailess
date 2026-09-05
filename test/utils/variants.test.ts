@@ -108,3 +108,279 @@ describe("variants", () => {
     expect(button({ size: "lg", tone: "danger" })).toBe(button({ tone: "danger", size: "lg" }));
   });
 });
+
+describe("a boolean variant", () => {
+  const box = variants({
+    base: "rounded",
+    variants: {
+      disabled: { true: "opacity-50", false: "opacity-100" },
+      loading: { true: "animate-pulse" },
+    },
+    defaults: { disabled: false },
+  });
+
+  it("takes the boolean a component already has", () => {
+    // The most common variant kind there is, and the one both cva and tv type as
+    // `boolean` — so a component can forward `disabled` rather than stringify it.
+    expect(box({ disabled: true })).toBe("rounded opacity-50");
+    expect(box({ disabled: false })).toBe("rounded opacity-100");
+    expect(box({ loading: true })).toBe("rounded opacity-100 animate-pulse");
+  });
+
+  it("still takes the string spellings, which are the real option keys", () => {
+    expect(box({ disabled: "true" })).toBe(box({ disabled: true }));
+    expect(box({ disabled: "false" })).toBe(box({ disabled: false }));
+  });
+
+  it("reads a boolean default too", () => {
+    expect(box()).toBe("rounded opacity-100");
+  });
+
+  it("types the prop as boolean", () => {
+    expectTypeOf<VariantProps<typeof box>>().toEqualTypeOf<{
+      disabled?: boolean | "true" | "false" | undefined;
+      loading?: boolean | "true" | undefined;
+    }>();
+  });
+
+  it("leaves a non-boolean group alone", () => {
+    const t = variants({ variants: { size: { sm: "p-1", lg: "p-4" } } });
+    // @ts-expect-error a size is not a boolean.
+    expect(t({ size: true })).toBeDefined();
+  });
+});
+
+describe("a compound rule matching a list", () => {
+  const button = variants({
+    base: "rounded",
+    variants: {
+      tone: { primary: "bg-blue-600", danger: "bg-red-600", warning: "bg-amber-500" },
+      size: { sm: "text-sm", md: "text-base", lg: "text-lg" },
+    },
+    compound: [{ tone: ["danger", "warning"], size: ["md", "lg"], class: "ring-2" }],
+    defaults: { tone: "primary", size: "sm" },
+  });
+
+  it("matches any option in the list", () => {
+    // Without this, four alternatives are four literal rules kept in step by hand,
+    // and the count is multiplicative.
+    expect(button({ tone: "danger", size: "md" })).toContain("ring-2");
+    expect(button({ tone: "warning", size: "lg" })).toContain("ring-2");
+  });
+
+  it("does not match outside it", () => {
+    expect(button({ tone: "primary", size: "lg" })).not.toContain("ring-2");
+    expect(button({ tone: "danger", size: "sm" })).not.toContain("ring-2");
+  });
+
+  it("still matches a single option, and a boolean one", () => {
+    const t = variants({
+      variants: { on: { true: "underline", false: "" }, tone: { a: "p-1", b: "p-2" } },
+      compound: [{ on: true, tone: ["a", "b"], class: "ring-1" }],
+    });
+    expect(t({ on: true, tone: "a" })).toContain("ring-1");
+    expect(t({ on: false, tone: "a" })).not.toContain("ring-1");
+  });
+});
+
+describe("the cva and tailwind-variants spellings", () => {
+  it("accepts compoundVariants, defaultVariants and className", () => {
+    // A ported recipe should need nothing changed but the function name.
+    const button = variants({
+      base: "rounded",
+      variants: { tone: { primary: "bg-blue-600", danger: "bg-red-600" } },
+      compoundVariants: [{ tone: "danger", className: "ring-2" }],
+      defaultVariants: { tone: "danger" },
+    });
+    expect(button()).toBe("rounded bg-red-600 ring-2");
+    expect(button({ tone: "primary" })).toBe("rounded bg-blue-600");
+  });
+
+  it("prefers the tailess name when both are given", () => {
+    const t = variants({
+      variants: { s: { a: "p-1", b: "p-2" } },
+      defaults: { s: "a" },
+      defaultVariants: { s: "b" },
+    });
+    expect(t()).toBe("p-1");
+  });
+});
+
+describe("slots — a component with named parts", () => {
+  const card = variants({
+    slots: {
+      root: { base: "rounded-lg border", dark: "border-neutral-800" },
+      title: "font-semibold",
+      body: "text-sm",
+    },
+    variants: {
+      size: {
+        sm: { root: "p-3", title: "text-base" },
+        lg: { root: { base: "p-5", md: "p-8" }, title: "text-xl" },
+      },
+      tone: { danger: { root: "border-red-500", title: "text-red-700" } },
+    },
+    compound: [{ size: "lg", tone: "danger", class: { root: "ring-2" } }],
+    defaults: { size: "sm" },
+  });
+
+  it("returns one class string per part", () => {
+    const parts = card();
+    expect(parts).toEqual({
+      root: "rounded-lg border dark:border-neutral-800 p-3",
+      title: "font-semibold text-base",
+      body: "text-sm",
+    });
+  });
+
+  it("lets a slot's value be an ss map, same as anywhere else", () => {
+    expect(card({ size: "lg" }).root).toContain("md:p-8");
+  });
+
+  it("adds only the slots an option names", () => {
+    const parts = card({ tone: "danger" });
+    expect(parts.root).toContain("border-red-500");
+    expect(parts.title).toContain("text-red-700");
+    // `body` is named by no option, so it is exactly its slot default.
+    expect(parts.body).toBe("text-sm");
+  });
+
+  it("applies a compound rule per slot", () => {
+    expect(card({ size: "lg", tone: "danger" }).root).toContain("ring-2");
+    expect(card({ size: "sm", tone: "danger" }).root).not.toContain("ring-2");
+  });
+
+  it("takes extra classes per slot, and the last one still wins", () => {
+    const parts = card({}, { root: "p-10", title: "text-3xl" });
+    expect(parts.root).toContain("p-10");
+    expect(parts.root).not.toContain("p-3");
+    expect(parts.title).toContain("text-3xl");
+  });
+
+  it("merges each slot on its own, once", () => {
+    // `p-3` from the size option and `p-10` from the caller conflict; `body` is
+    // untouched by either, which is the point of merging per part.
+    expect(card({}, { root: "p-10" }).body).toBe("text-sm");
+  });
+
+  it("types the parts and the props", () => {
+    expectTypeOf(card()).toEqualTypeOf<{ root: string; title: string; body: string }>();
+    expectTypeOf<VariantProps<typeof card>>().toEqualTypeOf<{
+      size?: "sm" | "lg" | undefined;
+      tone?: "danger" | undefined;
+    }>();
+    // @ts-expect-error "footer" is not a slot.
+    card({}, { footer: "p-2" });
+  });
+
+  it("ignores a slot name off the prototype", () => {
+    const t = variants({ slots: { root: "p-1" }, variants: { s: { a: { root: "p-2" } } } });
+    expect(t({ s: "toString" } as never).root).toBe("p-1");
+  });
+});
+
+describe("extend — building on another recipe", () => {
+  const base = variants({
+    base: "rounded",
+    variants: {
+      tone: { primary: "bg-blue-600", danger: "bg-red-600" },
+      size: { sm: "text-sm", lg: { base: "text-lg", md: "px-6" } },
+    },
+    compound: [{ tone: "danger", size: "lg", class: "ring-2" }],
+    defaults: { tone: "primary", size: "sm" },
+  });
+
+  const brand = variants({
+    extend: base,
+    base: "font-medium",
+    variants: { tone: { brand: "bg-violet-600" } },
+    defaults: { tone: "brand" },
+  });
+
+  it("keeps the parent's base and adds its own, in order", () => {
+    expect(brand()).toBe("rounded font-medium bg-violet-600 text-sm");
+  });
+
+  it("merges per option, so an inherited one is not dropped", () => {
+    // The whole reason to extend rather than copy: adding one `tone` must not lose
+    // `primary` and `danger`.
+    expect(brand({ tone: "danger" })).toContain("bg-red-600");
+    expect(brand({ tone: "primary" })).toContain("bg-blue-600");
+    expect(Object.keys(brand.variants.tone)).toEqual(["primary", "danger", "brand"]);
+  });
+
+  it("inherits the parent's compounds", () => {
+    expect(brand({ tone: "danger", size: "lg" })).toContain("ring-2");
+  });
+
+  it("lets the child's defaults win", () => {
+    expect(brand()).toContain("bg-violet-600");
+    expect(base()).toContain("bg-blue-600");
+  });
+
+  it("types the merged variants", () => {
+    expectTypeOf<VariantProps<typeof brand>>().toEqualTypeOf<{
+      tone?: "primary" | "danger" | "brand" | undefined;
+      size?: "sm" | "lg" | undefined;
+    }>();
+  });
+
+  it("leaves the parent alone", () => {
+    expect(Object.keys(base.variants.tone)).toEqual(["primary", "danger"]);
+    expect(base()).toBe("rounded bg-blue-600 text-sm");
+  });
+
+  it("extends a slotted recipe too", () => {
+    const card = variants({
+      slots: { root: "rounded", title: "font-semibold" },
+      variants: { size: { sm: { root: "p-2" } } },
+    });
+    const wide = variants({
+      extend: card,
+      slots: { root: "border", footer: "text-xs" },
+      variants: { size: { lg: { root: "p-6", footer: "pt-2" } } },
+    });
+    expect(wide({ size: "lg" })).toEqual({
+      root: "rounded border p-6",
+      title: "font-semibold",
+      footer: "text-xs pt-2",
+    });
+    // The inherited option still works, and the inherited slot keeps its classes.
+    expect(wide({ size: "sm" }).root).toBe("rounded border p-2");
+  });
+});
+
+describe("what the scanner has to agree with", () => {
+  it("enumerates a slotted recipe's classes, and no slot-name junk", async () => {
+    // The invariant, on the one shape where the scanner has to look a level deeper:
+    // an option's value is a slot map, not a class value. Reading it as an `ss` map
+    // emitted `root:md:p-8` — junk — while missing the `md:p-8` the runtime builds,
+    // which is the silent failure this package exists to prevent.
+    const { extractClasses } = await import("../../src/extract/extract.js");
+    const src = `variants({
+      slots: { root: { base: "rounded", dark: "border-neutral-800" }, title: "font-semibold" },
+      variants: { size: { lg: { root: { base: "p-5", md: "p-8" }, title: { hover: "underline" } } } },
+      compound: [{ size: "lg", class: { root: { focus: "ring-2" } } }],
+    })`;
+    expect(extractClasses(src)).toEqual([
+      "dark:border-neutral-800",
+      "focus:ring-2",
+      "hover:underline",
+      "md:p-8",
+    ]);
+  });
+
+  it("reads the cva spellings the same as the tailess ones", async () => {
+    const { extractClasses } = await import("../../src/extract/extract.js");
+    const aliases = `variants({
+      variants: { tone: { danger: { md: "bg-red-700" } } },
+      compoundVariants: [{ tone: "danger", className: { hover: "ring-2" } }],
+    })`;
+    const own = `variants({
+      variants: { tone: { danger: { md: "bg-red-700" } } },
+      compound: [{ tone: "danger", class: { hover: "ring-2" } }],
+    })`;
+    expect(extractClasses(aliases)).toEqual(["hover:ring-2", "md:bg-red-700"]);
+    expect(extractClasses(aliases)).toEqual(extractClasses(own));
+  });
+});

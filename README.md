@@ -91,6 +91,9 @@ className={ss(
   - [`nth` — position variants](#nth--position-variants)
   - [`match` — exhaustive variant selection](#match--exhaustive-variant-selection)
   - [`variants` — component recipes](#variants--component-recipes)
+    - [`slots` — a component with named parts](#slots--a-component-with-named-parts)
+    - [`extend` — building on another recipe](#extend--building-on-another-recipe)
+    - [Coming from cva or tailwind-variants](#coming-from-cva-or-tailwind-variants)
   - [`withPrefix` — the escape hatch](#withprefix--the-escape-hatch)
   - [`vars` — values a class cannot carry](#vars--values-a-class-cannot-carry)
   - [Also exported](#also-exported)
@@ -690,6 +693,58 @@ const Button = ({ tone, size, children }: ButtonProps) => (
 );
 ```
 
+#### `slots` — a component with named parts
+
+A Dialog is root, overlay, panel, title and close. Declare the parts instead of `base`,
+and every option says what it adds to each one. The call returns a class string per part:
+
+```tsx
+const card = variants({
+  slots: {
+    root:  { base: "rounded-lg border", dark: "border-neutral-800" },
+    title: "font-semibold",
+    body:  "text-sm",
+  },
+  variants: {
+    size: {
+      sm: { root: "p-3", title: "text-base" },
+      lg: { root: { base: "p-5", md: "p-8" }, title: "text-xl" },
+    },
+    tone: { danger: { root: "border-red-500", title: "text-red-700" } },
+  },
+  compound: [{ size: "lg", tone: "danger", class: { root: "ring-2" } }],
+  defaults: { size: "sm" },
+});
+
+const { root, title, body } = card({ size: "lg" });
+```
+
+A slot's value is an `SsArg` like anywhere else, so a part can carry its own breakpoints.
+Each part merges **on its own**, so an override on `root` cannot disturb `title`. Extra
+classes come in as a second argument, keyed by part:
+
+```tsx
+card({ size: "lg" }, { root: className })
+```
+
+#### `extend` — building on another recipe
+
+```ts
+const brand = variants({
+  extend: button,
+  base: "font-medium",
+  variants: { tone: { brand: "bg-violet-600" } },
+  defaults: { tone: "brand" },
+});
+
+brand({ tone: "danger" });   // still there — merging is per *option*, not per group
+```
+
+The parent's base, variants, compounds and defaults come first; anything declared here
+wins. Merging per option is what lets a product package add one `tone` to a design
+system's button without forking it. Types merge too, so `VariantProps<typeof brand>`
+includes the inherited options. Slotted recipes extend the same way, gaining parts.
+
 #### Coming from `cva` or `tailwind-variants`
 
 Same shape, three renamed keys. Every line below is verified against the current build.
@@ -703,6 +758,10 @@ Same shape, three renamed keys. Every line below is verified against the current
 | `cva("base", { … })` | `variants({ base: "…", … })` | `base` is a config key, not the first argument |
 | `button({ tone: "danger", class: "mt-2" })` | `button({ tone: "danger" }, "mt-2")` | extra classes are a second argument, like `cn` |
 | `VariantProps<typeof button>` | `VariantProps<typeof button>` | unchanged |
+| `slots` | `slots` | returns a record of strings, not slot functions |
+| `extend` | `extend` | merges per option, so an inherited one is not dropped |
+| `{ intent: ["a", "b"] }` in a compound | same | |
+| `disabled?: boolean` | same | |
 
 ```ts
 // cva                                     // tailess
@@ -719,22 +778,20 @@ and states — `lg: { base: "text-lg px-4", md: "px-6" }`, which a flat string c
 Everything ends in one `ss` call, so `tailwind-merge` runs once across base, variants,
 compounds and the caller's `className` together.
 
-**What is deliberately absent, today.** No `slots` (a multi-part component is one
-`variants()` call per part), no `extend` (recipe inheritance), no `twMergeConfig`, and no
-responsive variant selection at the call site — put the breakpoints inside the option
-instead, which is the shape this is built around.
+**What is deliberately absent.** Responsive variant selection at the call site —
+`size={{ base: "sm", md: "lg" }}` — is not supported and will not be: the scanner reads
+your *recipe*, never the call sites of the component it builds, so it would have to
+enumerate every option under all thirteen breakpoints or let the class land with no CSS.
+Put the breakpoints inside the option instead (`lg: { base: "text-lg", md: "px-6" }`),
+which is statically knowable and is the shape this is built around.
 
-**One difference worth knowing.** A boolean variant is keyed by the strings `"true"` and
-`"false"`, and typed that way:
+**Boolean variants take a boolean**, the same as in `cva` and `tv` — the option keys are
+the strings `"true"`/`"false"`, and both spellings are accepted:
 
-```ts
+```tsx
 const box = variants({ variants: { disabled: { true: "opacity-50", false: "opacity-100" } } });
-box({ disabled: "true" });   // → "opacity-50"     ✅
-box({ disabled: isDisabled }) // ✗ pass String(isDisabled)
+box({ disabled: isDisabled });   // forward the prop you already have
 ```
-
-`cva` and `tv` give you `disabled?: boolean` there. Until that is fixed, forward the prop
-as `String(isDisabled)`.
 
 ### `withPrefix` — the escape hatch
 

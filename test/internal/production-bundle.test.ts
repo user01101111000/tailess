@@ -99,12 +99,19 @@ describe("the browser bundle", () => {
     // wrapper over `ss`, not a second engine, which is the reason it costs so little
     // and the reason a variant option can be an `ss` map at all.
     //
-    // Note what this number is and isn't: the package sets `sideEffects: false`, so
-    // it is the cost of importing *everything*. A consumer using only `ss` and `cn`
-    // bundles 5,170 chars — of which 47 are the two new key families — one adding
-    // `vars` pays 488, and one importing only `variants` bundles 5,634. Measured,
-    // not assumed.
-    expect(code.length).toBeLessThan(11_200);
+    // Raised again to 12,200 for slots, `extend`, boolean variants and compound rules
+    // that match a list: 10,935 -> 11,933 chars. All of it lands in `variants`, which
+    // goes 497 -> 1,733 chars on top of `ss` + `cn`. Those four are the whole of what
+    // sends a team to `tailwind-variants` instead, and a multi-part component is the
+    // shape every non-trivial one has — but it is a real doubling of that helper, and
+    // the reason it is acceptable is the line below.
+    //
+    // Note what this number is and isn't: every module here is side-effect free, so it
+    // is the cost of importing *everything*. A consumer using only `ss` and `cn`
+    // bundles 5,170 chars — unchanged by any of the above, and the number worth
+    // watching, since it is what most projects actually pay. One adding `vars` pays
+    // 488, and one importing `variants` too bundles 6,903. Measured, not assumed.
+    expect(code.length).toBeLessThan(12_200);
   });
 
   it("pulls in no Node builtins", async () => {
