@@ -111,3 +111,53 @@ jobs:
             assert.equal(typeof require('./dist/postcss/index.cjs'), 'function');
             console.log('ok on ' + process.version);
           "
+
+  example:
+    # The only place a real Vite build runs. Everything else calls the plugin's hooks
+    # directly, which cannot catch a plugin that is shaped wrong for the host — and the
+    # gate itself is never dogfooded anywhere else either.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # `file:../..` links the package itself, so this is the built artifact a consumer
+      # would install rather than a copy of `src/`.
+      - name: Install the example
+        run: npm install --no-audit --no-fund
+        working-directory: examples/vite-react
+
+      - name: Typecheck the example
+        run: npx tsc -p tsconfig.json
+        working-directory: examples/vite-react
+
+      - name: Build the example
+        run: npm run build
+        working-directory: examples/vite-react
+
+      - name: Gate the example
+        run: npx tailess check --content src --strict
+        working-directory: examples/vite-react
+
+      # The negative: with the plugin removed the build still succeeds and the page
+      # renders the right class attributes with no styles behind them, so the gate has
+      # to be what goes red. A green run here would mean the gate proves nothing.
+      - name: The gate must fail when the plugin is not wired up
+        working-directory: examples/vite-react
+        run: |
+          sed -i 's/, tailess({ diagnostics: "error" })//' vite.config.ts
+          if npx tailess check --content src --strict; then
+            echo "::error::the gate passed a project with the plugin removed"
+            exit 1
+          fi
+          echo "the gate failed, as it must"

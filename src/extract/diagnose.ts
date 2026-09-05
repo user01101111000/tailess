@@ -283,6 +283,16 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
  */
 const maxPerFile = 20;
 
+/**
+ * Files where an `import` line is prose rather than code.
+ *
+ * The scanner reads Markdown and HTML because a class can appear in either, but the
+ * import statements there are examples — a README documenting `import { ss as tw }` as
+ * the thing *not* to do would otherwise be reported for doing it. `.mdx` is excluded
+ * from this list on purpose: its imports really do run.
+ */
+const proseFile = /\.(?:md|markdown|html?)$/i;
+
 /** A named import from tailess, with the whole specifier list in hand. */
 const tailessImport = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
 /** One `original as local` specifier inside it. */
@@ -319,8 +329,13 @@ function renamedImports(code: string, report: (d: Diagnostic) => void): void {
   }
 }
 
-/** Every problem the scanner can prove from `code`. */
-export function diagnose(code: string): Diagnostic[] {
+/**
+ * Every problem the scanner can prove from `code`.
+ *
+ * `file` is only ever read to decide whether an import statement in it is code, so a
+ * caller with no path in hand loses nothing else by omitting it.
+ */
+export function diagnose(code: string, file?: string): Diagnostic[] {
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;
@@ -337,7 +352,7 @@ export function diagnose(code: string): Diagnostic[] {
     found.push(d);
   };
 
-  renamedImports(code, report);
+  if (file === undefined || !proseFile.test(file)) renamedImports(code, report);
   for (const call of scanCalls(code)) check(call, report);
 
   if (suppressed > 0) {

@@ -1,10 +1,11 @@
 /// <reference types="node" />
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
 import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
+import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
 import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
@@ -18,56 +19,134 @@ import { type BrokenClass, findBroken, probeList } from "./verify.js";
  */
 
 export interface Options {
+  /** Which command to run. `check` compiles and verifies; `emit` writes the prelude. */
+  command: "check" | "emit";
   content: string[];
   css: string | undefined;
   cwd: string;
   /** Make the build-time diagnostics fail the gate too, not just print. */
   strict: boolean;
+  /** File extensions to scan, replacing the default list. */
+  extensions: string[];
+  /** Extra directory names to skip, on top of the built-in list. */
+  ignore: string[];
+  /** Print one JSON object instead of prose, for a CI job that has to read it. */
+  json: boolean;
+  /** How many broken classes to name before summarising. `0` means all of them. */
+  max: number;
+  /** Where `emit` writes its stylesheet. */
+  out: string | undefined;
 }
 
-export function parse(argv: readonly string[]): Options | "help" {
-  const content: string[] = [];
-  let css: string | undefined;
-  let strict = false;
+/** Options that take a comma-separated list as well as being repeatable. */
+const listOptions = new Set(["--content", "--extensions", "--ignore"]);
+const pathOptions = new Set(["--css", "--out"]);
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+export function parse(argv: readonly string[]): Options | "help" | "version" {
+  const content: string[] = [];
+  const extensions: string[] = [];
+  const ignore: string[] = [];
+  let css: string | undefined;
+  let out: string | undefined;
+  let strict = false;
+  let json = false;
+  let max = 20;
+  // `tailess check …` and a bare `tailess …` are the same thing; `emit` is the one
+  // other command, so the subcommand is read here rather than in the binary.
+  let command: "check" | "emit" = "check";
+  let rest = argv;
+  if (rest[0] === "check" || rest[0] === "emit") {
+    command = rest[0];
+    rest = rest.slice(1);
+  }
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i] as string;
     if (arg === "--help" || arg === "-h") return "help";
+    if (arg === "--version" || arg === "-v") return "version";
     if (arg === "--strict") {
       strict = true;
       continue;
     }
-    if (arg === "--content" || arg === "--css") {
-      const value = argv[i + 1];
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error(`${arg} needs a path`);
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    if (arg === "--max") {
+      const value = rest[i + 1];
+      if (value === undefined || !/^\d+$/.test(value)) {
+        throw new Error("--max needs a whole number (0 for no limit)");
       }
-      if (arg === "--content") content.push(value);
-      else css = value;
+      max = Number(value);
+      i += 1;
+      continue;
+    }
+    if (listOptions.has(arg) || pathOptions.has(arg)) {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error(`${arg} needs a ${arg === "--extensions" ? "value" : "path"}`);
+      }
+      if (arg === "--css") css = value;
+      else if (arg === "--out") out = value;
+      else {
+        const target = arg === "--content" ? content : arg === "--extensions" ? extensions : ignore;
+        for (const part of value.split(",")) {
+          const trimmed = part.trim();
+          if (trimmed !== "") target.push(trimmed);
+        }
+      }
       i += 1;
       continue;
     }
     throw new Error(`unknown option ${arg}`);
   }
 
-  return { content, css, cwd: process.cwd(), strict };
+  return { command, content, css, cwd: process.cwd(), strict, extensions, ignore, json, max, out };
 }
 
-export const help = `tailess check — prove every class tailess builds has CSS behind it.
+export const help = `tailess — prove every class tailess builds has CSS behind it.
 
-  npx tailess check [--content <dir>]... [--css <file>] [--strict]
+  npx tailess check [options]     compile the project and verify every class
+  npx tailess emit --out <file>   write the @source inline(...) stylesheet
 
-  --content <dir>   where your source lives. Repeatable. Defaults to the working
-                    directory.
-  --css <file>      your Tailwind entry stylesheet. Found automatically when it is
-                    inside a --content root.
-  --strict          also fail on the build-time diagnostics, which are otherwise
-                    printed and do not affect the exit code.
+  --content <dir>       where your source lives. Repeatable, or comma-separated.
+                        Defaults to the working directory.
+  --css <file>          your Tailwind entry stylesheet. Found automatically when it
+                        is inside a --content root. (check only)
+  --extensions <list>   file extensions to scan, replacing the default list.
+  --ignore <list>       extra directory names to skip.
+  --strict              also fail on the build-time diagnostics, which are otherwise
+                        printed and do not affect the exit code. (check only)
+  --max <n>             how many broken classes to name before summarising.
+                        Default 20; 0 for all of them. (check only)
+  --json                print one JSON object instead of prose.
+  --out <file>          where to write. (emit only)
+  --version, -h --help
+
+Give --extensions and --ignore the same values as the plugin, or the gate checks a
+different set of files than your build does.
 
 Exit codes:
   0  every runtime-built class has a rule (or the scan found no tailess calls)
   1  a class reaches the element with no rule behind it
   2  nothing could be checked — no stylesheet, no files scanned, or a bad option`;
+
+/**
+ * The package's own version, for `--version`.
+ *
+ * Walked up from this module rather than imported, because the same file runs from
+ * `src/` under the test runner and from `dist/` as the binary, and the manifest sits
+ * one level further up in the second case.
+ */
+export async function version(): Promise<string> {
+  for (const up of ["../package.json", "../../package.json", "../../../package.json"]) {
+    const text = await readFile(new URL(up, import.meta.url), "utf8").catch(() => undefined);
+    if (text === undefined) continue;
+    const pkg = JSON.parse(text) as { name?: string; version?: string };
+    if (pkg.name === "tailess" && pkg.version) return pkg.version;
+  }
+  return "unknown";
+}
 
 /**
  * Resolve an `@import` the way a bundler would.
@@ -167,6 +246,22 @@ async function loadCompiler(cwd: string): Promise<Compile> {
 const configFile = /^(?:\..*rc(?:\..*)?|.*\.config\.[cm]?[jt]sx?|.*\.config\.json|package\.json)$/;
 
 /**
+ * True when `text` wires the plugin in, rather than merely naming it.
+ *
+ * The Vite plugin has to be *called*: deleting `tailess()` from the `plugins` array and
+ * leaving the import behind is exactly the shape this check exists to catch, and reading
+ * for the word alone would have called that wired. The import is still read, but only to
+ * learn what the plugin was bound to, so an aliased one is not a false alarm.
+ */
+function wiresPlugin(text: string): boolean {
+  if (/["']tailess\/postcss["']/.test(text)) return true;
+  const imported =
+    /(?:import|require\(?)\s*\{?\s*(\w+)\s*\}?\s*(?:from)?\s*\(?["']tailess\/vite["']/.exec(text);
+  const name = imported?.[1] ?? "tailess";
+  return new RegExp(`\\b${name}\\s*\\(`).test(text);
+}
+
+/**
  * True when nothing in the project's root config mentions tailess.
  *
  * The plugin not being wired up is the first failure the troubleshooting section
@@ -200,12 +295,12 @@ async function pluginLooksUnwired(cwd: string): Promise<boolean> {
       }
       if (postcss === undefined) continue;
       sawConfig = true;
-      if (JSON.stringify(postcss).includes("tailess")) return false;
+      if (wiresPlugin(JSON.stringify(postcss))) return false;
       continue;
     }
 
     sawConfig = true;
-    if (text.includes("tailess")) return false;
+    if (wiresPlugin(text)) return false;
   }
   // No config at all means this is not a project root worth guessing about.
   return sawConfig;
@@ -222,24 +317,104 @@ async function findEntries(roots: string[]): Promise<string[]> {
   return entries;
 }
 
-export async function run(options: Options): Promise<number> {
-  const roots = options.content.length
+/** Absolute paths, relative to the project, sorted — what a report should print. */
+function shown(paths: readonly string[] | undefined, cwd: string): string[] {
+  return (paths ?? []).map((path) => relative(cwd, path) || path);
+}
+
+/** Resolve `--content` against the working directory, defaulting to it. */
+function rootsFor(options: Options): string[] {
+  return options.content.length
     ? options.content.map((path) => (isAbsolute(path) ? path : resolve(options.cwd, path)))
     : [options.cwd];
+}
+
+/**
+ * The scan both commands run, with the options the plugin would have been given.
+ *
+ * `--extensions` and `--ignore` exist so this can be made to agree with the build. A
+ * project narrowing either one had a plugin enumerating one set of files and a gate
+ * reading another, which fails in both directions and silently.
+ */
+function scanOptions(options: Options, roots: string[]) {
+  return {
+    roots,
+    ...(options.extensions.length ? { extensions: options.extensions } : {}),
+    ...(options.ignore.length ? { ignore: options.ignore } : {}),
+  };
+}
+
+/** `tailess emit` — write the stylesheet the plugins would have injected. */
+async function runEmit(options: Options): Promise<number> {
+  const roots = rootsFor(options);
+  const { classes, files } = await collect(scanOptions(options, roots));
+
+  if (files.length === 0) {
+    console.error(
+      `[tailess] scanned no files, so there is nothing to emit. Looked in: ${roots.join(", ")}.`,
+    );
+    return 2;
+  }
+
+  const css = buildPrelude(classes);
+  const note =
+    `[tailess] ${classes.length} runtime-built class${classes.length === 1 ? "" : "es"} ` +
+    `from ${files.length} file${files.length === 1 ? "" : "s"}`;
+
+  if (options.out === undefined) {
+    // The stylesheet on stdout so it can be piped; the note on stderr so it is not
+    // mixed into the thing being piped.
+    console.error(`${note} to stdout.`);
+    process.stdout.write(css);
+    return 0;
+  }
+
+  const path = isAbsolute(options.out) ? options.out : resolve(options.cwd, options.out);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, css, "utf8");
+  console.log(`${note} written to ${relative(options.cwd, path) || path}.`);
+  return 0;
+}
+
+/** `tailess check` — compile the project for real and look. */
+async function runCheck(options: Options): Promise<number> {
+  const roots = rootsFor(options);
+  const quiet = options.json;
+  const say = (message: string): void => {
+    if (!quiet) console.log(message);
+  };
+  const complain = (message: string): void => {
+    if (!quiet) console.error(message);
+  };
+  /** Print the JSON form, if that is what was asked for, and hand back the exit code. */
+  const finish = (code: number, body: Record<string, unknown>): number => {
+    if (quiet) {
+      console.log(JSON.stringify({ tailess: 1, command: "check", ok: code === 0, code, ...body }));
+    }
+    return code;
+  };
 
   const entries = options.css
     ? [isAbsolute(options.css) ? options.css : resolve(options.cwd, options.css)]
     : await findEntries(roots);
 
   if (entries.length === 0) {
-    console.error(
+    complain(
       "[tailess] no Tailwind entry stylesheet found. Pass one with --css, or point " +
         "--content at the directory that holds it.",
     );
-    return 2;
+    return finish(2, { error: "no-stylesheet", roots: shown(roots, options.cwd) });
   }
 
-  const { classes, files, diagnostics } = await collect({ roots });
+  const { classes, files, diagnostics, sources } = await collect({
+    ...scanOptions(options, roots),
+    provenance: true,
+  });
+  const asJson = diagnostics.map((d) => ({
+    kind: d.kind,
+    file: relative(options.cwd, d.file) || d.file,
+    message: d.message,
+  }));
 
   // A gate that cannot say "I checked nothing" is worse than no gate: a mistyped
   // --content, or a monorepo task runner in the wrong directory, would otherwise
@@ -248,36 +423,40 @@ export async function run(options: Options): Promise<number> {
     const glob = roots.some((path) => path.includes("*"))
       ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
       : "";
-    console.error(
+    complain(
       `[tailess] scanned no files, so there is nothing to check. Looked in: ` +
         `${roots.join(", ")}.${glob}`,
     );
-    return 2;
+    return finish(2, { error: "no-files", roots: shown(roots, options.cwd) });
   }
 
-  // The six checks the scanner can prove from the source alone. `tailess check`
-  // computed them on the way past and used to drop them — and they are precisely the
-  // failures compiling cannot find, since a class carrying an unusable value never
-  // reaches the compiler to be found missing.
-  reportDiagnostics(diagnostics, options.cwd);
+  // The checks the scanner can prove from the source alone. `tailess check` computed
+  // them on the way past and used to drop them — and they are precisely the failures
+  // compiling cannot find, since a class carrying an unusable value never reaches the
+  // compiler to be found missing.
+  reportDiagnostics(diagnostics, options.cwd, quiet ? "off" : "warn");
 
   if (classes.length === 0) {
-    console.log(
+    say(
       `[tailess] scanned ${files.length} file${files.length === 1 ? "" : "s"} and found ` +
         "no runtime-built classes — nothing to check.",
     );
-    return options.strict && diagnostics.length > 0 ? 1 : 0;
+    const failed = options.strict && diagnostics.length > 0;
+    return finish(failed ? 1 : 0, { checked: 0, files: files.length, diagnostics: asJson });
   }
 
-  if (await pluginLooksUnwired(options.cwd)) {
-    console.warn(
-      "[tailess] no build config here mentions tailess, so the plugin may not be " +
-        "running at all — in which case every variant class on the page is unstyled and " +
+  const unwired = await pluginLooksUnwired(options.cwd);
+  if (unwired) {
+    complain(
+      "[tailess] no build config here calls the plugin, so it may not be running at " +
+        "all — in which case every variant class on the page is unstyled and " +
         "this check cannot see it: it scans your source itself rather than reading what " +
         'your build produced. Add tailess() to vite.config, or "tailess/postcss" to ' +
         'postcss.config before "@tailwindcss/postcss".',
     );
-    if (options.strict) return 1;
+    if (options.strict) {
+      return finish(1, { error: "plugin-unwired", checked: classes.length, diagnostics: asJson });
+    }
   }
 
   // Ask before compiling. With a Tailwind prefix every candidate fails, so the report
@@ -286,13 +465,17 @@ export async function run(options: Options): Promise<number> {
   for (const entry of entries) {
     const prefix = tailwindPrefixIn(await readFile(entry, "utf8"));
     if (prefix === undefined) continue;
-    console.error(
+    complain(
       `[tailess] ${relative(options.cwd, entry) || entry} imports Tailwind with ` +
         `prefix("${prefix}"), which tailess does not support: it builds "hover:underline" ` +
         `where the working class is "${prefix}:hover:underline", so every runtime-built ` +
         "class is unstyled. There is nothing to check until the prefix is gone.",
     );
-    return 2;
+    return finish(2, {
+      error: "unsupported-prefix",
+      prefix,
+      stylesheet: relative(options.cwd, entry) || entry,
+    });
   }
 
   const compile = await loadCompiler(options.cwd);
@@ -312,34 +495,60 @@ export async function run(options: Options): Promise<number> {
     perEntry.every((entry) => entry.has(b.candidate)),
   );
 
+  const brokenJson = broken.map((b) => ({
+    class: b.candidate,
+    utility: b.utility,
+    files: shown(sources?.get(b.candidate), options.cwd),
+  }));
+  const summary = {
+    checked: classes.length,
+    files: files.length,
+    stylesheets: shown(entries, options.cwd),
+    broken: brokenJson,
+    diagnostics: asJson,
+    ...(unwired ? { warning: "plugin-unwired" } : {}),
+  };
+
   if (broken.length === 0) {
-    console.log(
+    say(
       `[tailess] ${classes.length} runtime-built classes checked against ` +
         `${entries.length} stylesheet${entries.length === 1 ? "" : "s"} — every one has CSS.`,
     );
     if (options.strict && diagnostics.length > 0) {
-      console.error(
+      complain(
         `\n[tailess] --strict: ${diagnostics.length} build-time ` +
           `diagnostic${diagnostics.length === 1 ? "" : "s"} above.`,
       );
-      return 1;
+      return finish(1, summary);
     }
-    return 0;
+    return finish(0, summary);
   }
 
-  console.error(
+  complain(
     `[tailess] ${broken.length} of ${classes.length} runtime-built classes reach the ` +
       "element with no rule behind them:\n",
   );
-  for (const { candidate, utility } of broken.slice(0, 20)) {
-    console.error(
-      `  ${candidate}\n    "${utility}" resolves on its own, so the variant is what fails.`,
+  // `--max 0` means all of them: on a `@theme` that moved a breakpoint the list is the
+  // whole project, and truncating it is what sends the reader to grep instead.
+  const listed = options.max > 0 ? broken.slice(0, options.max) : broken;
+  for (const { candidate, utility } of listed) {
+    const where = shown(sources?.get(candidate), options.cwd);
+    complain(
+      `  ${candidate}\n` +
+        (where.length ? `    ${where.join(", ")}\n` : "") +
+        `    "${utility}" resolves on its own, so the variant is what fails.`,
     );
   }
-  if (broken.length > 20) console.error(`  …and ${broken.length - 20} more.`);
-  console.error(
+  if (listed.length < broken.length) {
+    complain(`  …and ${broken.length - listed.length} more. Pass --max 0 to list them all.`);
+  }
+  complain(
     "\nUsually a @theme that moved a breakpoint, a variant your CSS redefines, or an " +
       "arbitrary value Tailwind rejects.",
   );
-  return 1;
+  return finish(1, summary);
+}
+
+export async function run(options: Options): Promise<number> {
+  return options.command === "emit" ? runEmit(options) : runCheck(options);
 }

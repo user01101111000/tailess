@@ -17,13 +17,15 @@ You may contribute:
 
 ### Important Requirements
 
-- Keep the runtime footprint tiny. tailess ships only `clsx` + `tailwind-merge` — **avoid
-  adding new runtime dependencies** unless there is a strong, discussed reason.
+- Keep the runtime footprint tiny. tailess has exactly one runtime dependency,
+  `tailwind-merge` — **avoid adding another** unless there is a strong, discussed reason.
+  (`clsx` is vendored as `src/internal/join.ts` rather than depended on.)
 - Helpers must be **general-purpose and framework-agnostic** (no React/Vue/etc. coupling).
 - Every export must ship **proper TypeScript types**, and custom config keys must stay
   type-safe at the call site.
 - Add or update **tests** for every change — the code and its test live in mirrored trees.
-- The package must remain **tree-shakeable** (`sideEffects: false`); no top-level side effects.
+- Every module must stay **side-effect free** so it tree-shakes. `sideEffects` lists only
+  `./dist/cli.js`, which is the binary and calls `main()`; nothing else may.
 
 ## 🗂 Project Structure
 
@@ -31,19 +33,66 @@ Source lives in `src/`, tests mirror it in `test/`:
 
 ```text
 src/
-  config/     # config types, defaults, resolve, defineConfig
-  core/       # createTailess factory
-  utils/      # cn, ss, responsive, range, on, attrs, match, prefix
-  internal/   # env / internal helpers (not exported)
-  index.ts    # public entry — re-exports the public API
-
-test/
-  core/       # mirrors src/core
-  utils/      # mirrors src/utils
+  utils/        # the runtime helpers — ss, cn, on, has, nth, variants, vars…
+  extract/      # the scanner: scan.ts tokenises, extract.ts enumerates candidates,
+                # diagnose.ts proves what cannot work, collect.ts walks the files
+  integration/  # inject.ts writes the @source inline(…) prelude, theme.ts reads
+                # @theme / @custom-variant, entry.ts finds the Tailwind entry,
+                # sidecar.ts and report.ts serve the plugins
+  check/        # the `tailess` binary: run.ts drives it, verify.ts is the comparison
+  internal/     # shared, not exported — escaping, lookup, env, selector
+  vite/         # the Vite plugin
+  postcss/      # the PostCSS plugin
+  constants.ts  # the 305 keys and the breakpoint table
+  types.ts      # the public types
+  index.ts      # public entry — re-exports the public API
+  cli.ts        # argv in, exit code out; everything else lives in check/run.ts
 ```
 
-When you add a new util at `src/utils/foo.ts`, add its test at `test/utils/foo.test.ts`
-and export it from `src/index.ts` if it is part of the public API.
+`test/` mirrors it directory for directory. The one thing worth knowing about the shape:
+`utils/` is what runs in the browser, and everything else runs in the build. They meet at
+one invariant, which the next section is about.
+
+## ⛓ The one invariant
+
+**Every class the runtime can build must be a candidate the scanner enumerates.**
+
+The runtime writes `md:p-4` at render time; Tailwind never sees that in your source, so
+the scanner has to predict it and hand it over via `@source inline(…)`. When the two
+disagree the class still lands on the element — with no rule behind it. No console error,
+no build error, nothing: the styles just do not apply. That is the failure this whole
+package exists to prevent, and it is why the checklists below are not optional.
+
+`test/extract/runtime-parity.test.ts` is the file that holds the two halves together.
+Every helper has a case there that calls the runtime and the scanner on the same source
+and asserts they agree.
+
+### Adding a helper
+
+A helper touches seven places. Miss the second one and everything is green while every
+class it builds is unstyled.
+
+1. `src/utils/<name>.ts` — the helper, with `@example` JSDoc.
+2. `src/extract/scan.ts` — add its name to `helperNames`. **The scanner finds calls by
+   identifier; without this it does not exist.**
+3. `src/extract/extract.ts` — a `case` in `enumerate()` that builds the same class the
+   runtime does, from the source text.
+4. `src/extract/diagnose.ts` — a `case` in `check()` if any argument can be proven wrong
+   (a dead class, an unusable arbitrary value).
+5. `test/extract/runtime-parity.test.ts` — a case pinning that 2 and 3 agree with 1.
+6. `src/index.ts` — the export, plus its types.
+7. `README.md` — the API section, and the two editor lists in *Sorting classes* and
+   *Editor setup*. Add it to the prettier `tailwindFunctions` list **only** if every one
+   of its string arguments is a class list; the plugin sorts all of them, and sorting a
+   selector rewrites it.
+
+### Adding a key
+
+1. `src/constants.ts` — the key, in the family it belongs to.
+2. `test/constants.test.ts` — it is verified against the real Tailwind compiler there, so
+   a key that does not compile fails rather than shipping.
+3. `README.md` — the Keys table, its per-family count, the total in three places, and the
+   badge at the top. All hand-maintained today.
 
 ## 🛠 How to Contribute
 
@@ -65,12 +114,18 @@ Run these locally — CI runs the exact same steps and must pass:
 ```sh
 npm run lint        # Biome: lint + format check
 npm run typecheck   # tsc --noEmit (checks src and test)
+npm run build       # tsup: ESM + CJS + d.ts — before the tests, see below
 npm test            # Vitest
-npm run build       # tsup: ESM + CJS + d.ts
 ```
 
+**Build before you test.** `test/integration/plugin-shape.test.ts` asserts on `dist/` and
+skips itself when there is none, so running the suite first leaves the check guarding the
+string-named PostCSS entry green by never executing. CI builds first for the same reason,
+and that suite now fails loudly rather than skipping when it finds no build there.
+
 Handy extras: `npm run lint:fix` (auto-fix formatting), `npm run test:coverage`,
-`npm run test:watch`.
+`npm run test:watch`, and `node dist/cli.js check --content src` to run the gate against
+this repo itself.
 
 ## 📦 Versioning & Releases
 

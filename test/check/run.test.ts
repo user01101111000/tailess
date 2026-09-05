@@ -1,7 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parse, run } from "../../src/check/run.js";
+import { parse, run, version } from "../../src/check/run.js";
 import { clearCache } from "../../src/extract/collect.js";
 import { clearReported } from "../../src/integration/report.js";
 
@@ -36,7 +36,19 @@ async function check(extra: Partial<Parameters<typeof run>[0]> = {}) {
   vi.spyOn(console, "error").mockImplementation((m) => void out.push(String(m)));
   // The diagnostics reporter warns; without this the gate's own findings are invisible.
   vi.spyOn(console, "warn").mockImplementation((m) => void out.push(String(m)));
-  const code = await run({ content: [dir], css: undefined, cwd: dir, strict: false, ...extra });
+  const code = await run({
+    command: "check",
+    content: [dir],
+    css: undefined,
+    cwd: dir,
+    strict: false,
+    extensions: [],
+    ignore: [],
+    json: false,
+    max: 20,
+    out: undefined,
+    ...extra,
+  });
   return { code, output: out.join("\n") };
 }
 
@@ -64,6 +76,36 @@ describe("parsing the command line", () => {
 
   it("refuses an option it does not know", () => {
     expect(() => parse(["--bogus"])).toThrow(/unknown option/);
+  });
+
+  it("reads the subcommand, and treats a bare invocation as check", () => {
+    expect(parse([])).toMatchObject({ command: "check" });
+    expect(parse(["check"])).toMatchObject({ command: "check" });
+    expect(parse(["emit", "--out", "a.css"])).toMatchObject({ command: "emit", out: "a.css" });
+  });
+
+  it("takes --extensions and --ignore, so the gate can be made to match the build", () => {
+    expect(parse(["--extensions", "tsx,vue", "--ignore", "fixtures"])).toMatchObject({
+      extensions: ["tsx", "vue"],
+      ignore: ["fixtures"],
+    });
+    // Repeatable as well as comma-separated, and blank entries are dropped.
+    expect(parse(["--extensions", "tsx", "--extensions", " vue , "])).toMatchObject({
+      extensions: ["tsx", "vue"],
+    });
+  });
+
+  it("takes --json, --max and --version", () => {
+    expect(parse(["--json"])).toMatchObject({ json: true });
+    expect(parse(["--max", "0"])).toMatchObject({ max: 0 });
+    expect(parse([])).toMatchObject({ json: false, max: 20 });
+    expect(parse(["--version"])).toBe("version");
+    expect(parse(["-v"])).toBe("version");
+    expect(() => parse(["--max", "lots"])).toThrow(/whole number/);
+  });
+
+  it("knows its own version", async () => {
+    expect(await version()).toMatch(/^\d+\.\d+\.\d+/);
   });
 });
 
@@ -175,7 +217,7 @@ describe("the check itself", () => {
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
     await writeFile(join(dir, "vite.config.ts"), `export default { plugins: [tailwindcss()] };`);
     const { code, output } = await check();
-    expect(output).toContain("may not be running at all");
+    expect(output).toContain("may not be running at");
     // A guess, so it warns; the classes themselves are fine.
     expect(code).toBe(0);
     expect((await check({ strict: true })).code).toBe(1);
@@ -206,7 +248,7 @@ describe("the check itself", () => {
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
     await writeFile(join(dir, "package.json"), `{ "dependencies": { "tailess": "^0.11.0" } }`);
     await writeFile(join(dir, "vite.config.ts"), `export default { plugins: [] };`);
-    expect((await check()).output).toContain("may not be running at all");
+    expect((await check()).output).toContain("may not be running at");
   });
 
   it("does read a postcss config written inside package.json", async () => {
@@ -240,6 +282,67 @@ describe("the check itself", () => {
     expect(code).toBe(2);
     expect(output).toContain('prefix("tw")');
     expect(output).not.toContain("md:p-4\n");
+  });
+
+  it("names the file a broken class came from", async () => {
+    // Without it the report is a list of class names and the documented way to find
+    // them is grepping escaped selectors in the built CSS by hand.
+    await writeFile(join(dir, "Card.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    const { code, output } = await check();
+    expect(code).toBe(1);
+    expect(output).toContain("Card.tsx");
+  });
+
+  it("lists every broken class under --max 0", async () => {
+    const many = Array.from({ length: 25 }, (_, i) => `ss({ md: "p-${i + 1}" })`).join(";\n");
+    await writeFile(join(dir, "a.tsx"), many);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    const capped = await check();
+    expect(capped.output).toContain("more. Pass --max 0");
+    const all = await check({ max: 0 });
+    expect(all.output).not.toContain("more. Pass --max 0");
+    expect(all.output).toContain("md:p-25");
+  });
+
+  it("prints one JSON object under --json, and nothing else", async () => {
+    await writeFile(join(dir, "Card.tsx"), `ss({ md: "p-4" });\nss({ base: "p-4 p-2" });`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    const { code, output } = await check({ json: true });
+    expect(code).toBe(1);
+    const parsed = JSON.parse(output);
+    expect(parsed).toMatchObject({ tailess: 1, command: "check", ok: false, code: 1, checked: 1 });
+    expect(parsed.broken).toEqual([{ class: "md:p-4", utility: "p-4", files: ["Card.tsx"] }]);
+    expect(parsed.diagnostics[0]).toMatchObject({ kind: "dead-class", file: "Card.tsx" });
+    expect(parsed.stylesheets).toEqual(["a.css"]);
+  });
+
+  it("says why it could not run, in JSON too", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    const { code, output } = await check({ json: true });
+    expect(code).toBe(2);
+    expect(JSON.parse(output)).toMatchObject({ ok: false, code: 2, error: "no-stylesheet" });
+  });
+
+  it("scans the extensions and ignores it was given, not the defaults", async () => {
+    // The gate reading a different file set than the build is wrong in both
+    // directions, and silently: `extensions` replaces the default list.
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "b.vue"), `ss({ lg: "p-6" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    const only = await check({ extensions: ["vue"], json: true, css: join(dir, "a.css") });
+    expect(JSON.parse(only.output).checked).toBe(1);
+    const both = await check({ json: true, css: join(dir, "a.css") });
+    expect(JSON.parse(both.output).checked).toBe(2);
   });
 
   it("takes an explicit --css rather than looking for one", async () => {
@@ -291,5 +394,126 @@ describe("the check itself", () => {
     await writeFile(join(dir, "b.css"), `@import "tailwindcss";`);
     const { code } = await check();
     expect(code).toBe(0);
+  });
+});
+
+describe("tailess emit", () => {
+  /** Run the emit command quietly, returning its exit code and what it printed. */
+  async function emit(extra: Partial<Parameters<typeof run>[0]> = {}) {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void out.push(String(m)));
+    const code = await run({
+      command: "emit",
+      content: [dir],
+      css: undefined,
+      cwd: dir,
+      strict: false,
+      extensions: [],
+      ignore: [],
+      json: false,
+      max: 20,
+      out: join(dir, "tailess.css"),
+      ...extra,
+    });
+    return { code, output: out.join("\n") };
+  }
+
+  it("writes the stylesheet the plugins would have injected", async () => {
+    // The escape hatch for every host that compiles Tailwind without a PostCSS chain
+    // — the standalone CLI, Rspack, Bun — and the way a component library ships the
+    // classes its consumers cannot scan out of a published `dist`.
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4", hover: "underline" })`);
+    const { code, output } = await emit();
+    expect(code).toBe(0);
+    expect(output).toContain("tailess.css");
+
+    const css = await readFile(join(dir, "tailess.css"), "utf8");
+    expect(css).toContain("--tailess");
+    expect(css).toContain("@source inline(");
+    expect(css).toContain("md:p-4");
+    expect(css).toContain("hover:underline");
+  });
+
+  it("creates the directory it was pointed at", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    const { code } = await emit({ out: join(dir, "deep", "nested", "t.css") });
+    expect(code).toBe(0);
+    expect(await readFile(join(dir, "deep", "nested", "t.css"), "utf8")).toContain("md:p-4");
+  });
+
+  it("writes to stdout when given no --out, keeping the note off it", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    const written: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const { code, output } = await emit({ out: undefined });
+      expect(code).toBe(0);
+      // The note goes to stderr so it is not mixed into the piped stylesheet.
+      expect(output).toContain("to stdout");
+      expect(written.join("")).toContain("@source inline(");
+    } finally {
+      process.stdout.write = original;
+    }
+  });
+
+  it("refuses to write nothing when it scanned no files", async () => {
+    const { code, output } = await emit();
+    expect(code).toBe(2);
+    expect(output).toContain("nothing to emit");
+  });
+});
+
+describe("whether the plugin is wired up", () => {
+  async function checkWith(config: string) {
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "warn").mockImplementation((m) => void out.push(String(m)));
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    await writeFile(join(dir, "vite.config.ts"), config);
+    await run({
+      command: "check",
+      content: [dir],
+      css: undefined,
+      cwd: dir,
+      strict: false,
+      extensions: [],
+      ignore: [],
+      json: false,
+      max: 20,
+      out: undefined,
+    });
+    return out.join("\n");
+  }
+
+  it("is not fooled by an import left behind when the call was deleted", async () => {
+    // Exactly the shape this check exists to catch: someone removes `tailess()` from
+    // the plugins array during a refactor and the import stays. Reading for the word
+    // alone called that wired, which made the check unable to fire for the one case
+    // it was written for.
+    const output = await checkWith(
+      `import tailess from "tailess/vite";\nexport default { plugins: [tailwindcss()] };`,
+    );
+    expect(output).toContain("may not be running");
+  });
+
+  it("accepts the plugin under whatever name it was imported as", async () => {
+    const output = await checkWith(
+      `import tw from "tailess/vite";\nexport default { plugins: [tw()] };`,
+    );
+    expect(output).not.toContain("may not be running");
+  });
+
+  it("accepts a CommonJS config", async () => {
+    const output = await checkWith(
+      `const tailess = require("tailess/vite");\nmodule.exports = { plugins: [tailess()] };`,
+    );
+    expect(output).not.toContain("may not be running");
   });
 });

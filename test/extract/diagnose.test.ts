@@ -259,3 +259,31 @@ describe("a helper imported under another name", () => {
     expect(kinds(`import { ss as tw } from "tailess/vite";`)).toEqual([]);
   });
 });
+
+describe("where an import statement is prose rather than code", () => {
+  it("says nothing about a renamed import inside Markdown or HTML", () => {
+    // The scanner reads Markdown because a class can appear in one, but the imports
+    // there are examples — a README documenting the anti-pattern would otherwise be
+    // reported for committing it, which is a warning fired at working docs.
+    const code = `Do not do this:\n\n\`\`\`ts\nimport { ss as tw } from "tailess";\n\`\`\``;
+    expect(diagnose(code, "docs/guide.md")).toEqual([]);
+    expect(diagnose(code, "README.markdown")).toEqual([]);
+    expect(diagnose(code, "page.html")).toEqual([]);
+  });
+
+  it("still reports it in a file whose imports run", () => {
+    const code = `import { ss as tw } from "tailess";`;
+    expect(diagnose(code, "src/App.tsx").map((d) => d.kind)).toEqual(["renamed-import"]);
+    // `.mdx` imports really do run, so it is deliberately not treated as prose.
+    expect(diagnose(code, "docs/page.mdx").map((d) => d.kind)).toEqual(["renamed-import"]);
+    // No path in hand means no reason to assume prose.
+    expect(diagnose(code).map((d) => d.kind)).toEqual(["renamed-import"]);
+  });
+
+  it("still reports everything else in a Markdown file", () => {
+    // Only the import check is gated; a class written in a fenced block is still a class.
+    expect(diagnose(`ss({ base: "p-4 p-2" })`, "docs/guide.md").map((d) => d.kind)).toEqual([
+      "dead-class",
+    ]);
+  });
+});

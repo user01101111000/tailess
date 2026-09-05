@@ -77,6 +77,7 @@ className={ss(
   - [Next.js](#nextjs)
   - [Other PostCSS setups](#other-postcss-setups)
 - [Sorting classes](#sorting-classes)
+- [Editor setup](#editor-setup)
 - [API](#api)
   - [`ss` — group by breakpoint and state](#ss--group-by-breakpoint-and-state)
   - [`cn` — compose and merge](#cn--compose-and-merge)
@@ -98,6 +99,7 @@ className={ss(
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
 - [Build-time checks](#build-time-checks)
 - [Checking your build](#checking-your-build)
+- [`tailess emit` — the stylesheet, as a file](#tailess-emit--the-stylesheet-as-a-file)
 - [Plugin options](#plugin-options)
 - [Performance](#performance)
 - [Troubleshooting](#troubleshooting)
@@ -169,7 +171,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 | --- | --- |
 | **Tailwind CSS** | v4 — v3 is not supported |
 | **Node** | 18+ (build plugin only; the runtime has no Node dependency) |
-| **Bundler** | anything using `@tailwindcss/vite` or `@tailwindcss/postcss` |
+| **Bundler** | anything using `@tailwindcss/vite` or `@tailwindcss/postcss` — anything else via [`tailess emit`](#tailess-emit--the-stylesheet-as-a-file) |
 | **Dependencies** | one — `tailwind-merge` |
 
 ## Install
@@ -177,6 +179,10 @@ Add a class and it appears without restarting; delete it and it stops being emit
 ```bash
 npm install tailess
 ```
+
+A runnable app is in [`examples/vite-react`](./examples/vite-react) — Vite + React, every
+class built at runtime, with `npm run verify` wired to the gate. CI builds it on every
+push, and asserts the gate goes red when the plugin is removed.
 
 > [!TIP]
 > Already have a `cn()` helper? `ss` is a strict superset of it — the same call with plain
@@ -295,6 +301,35 @@ Each string is sorted on its own. Separate arguments are never reordered, so a t
 > Two conflicting utilities in **one** string can be reordered — `"p-4 p-2"` becomes
 > `"p-2 p-4"`, and `tailwind-merge` then keeps `p-4` where it kept `p-2`. Write the
 > override as its own argument instead, which nothing reorders: `ss({ base: "p-4" }, "p-2")`.
+
+## Editor setup
+
+Tailwind's VS Code extension recognises `class` and `className` out of the box — not the
+strings inside `ss({ … })`. Without this, moving a `className` into a bucket costs you
+class-name completion, colour swatches, hover previews and the unknown-class warning,
+which is the only thing catching a typo *inside* a class string. tailess types the keys;
+this is what types the values.
+
+`.vscode/settings.json`:
+
+```json
+{
+  "tailwindCSS.classFunctions": [
+    "ss", "cn", "variants", "responsive", "match",
+    "on", "until", "between", "data", "aria",
+    "group", "peer", "container", "withPrefix",
+    "supports", "notSupports", "has", "notHas", "inside",
+    "nth", "nthLast", "nthOfType", "nthLastOfType"
+  ]
+}
+```
+
+Unlike the prettier list above, this one is safe to give *every* helper: the extension
+reads, it never rewrites. Commit the file so the whole team gets it.
+
+If completions do not appear in some shape, `tailwindCSS.experimental.classRegex` is the
+escape hatch — it matches on surrounding text where `classFunctions` matches only on the
+function name.
 
 ---
 
@@ -655,6 +690,52 @@ const Button = ({ tone, size, children }: ButtonProps) => (
 );
 ```
 
+#### Coming from `cva` or `tailwind-variants`
+
+Same shape, three renamed keys. Every line below is verified against the current build.
+
+| `cva` / `tv` | tailess | |
+| --- | --- | --- |
+| `variants` | `variants` | unchanged |
+| `defaultVariants` | `defaults` | |
+| `compoundVariants` | `compound` | |
+| `class` / `className` in a compound rule | `class` | no `className` alias |
+| `cva("base", { … })` | `variants({ base: "…", … })` | `base` is a config key, not the first argument |
+| `button({ tone: "danger", class: "mt-2" })` | `button({ tone: "danger" }, "mt-2")` | extra classes are a second argument, like `cn` |
+| `VariantProps<typeof button>` | `VariantProps<typeof button>` | unchanged |
+
+```ts
+// cva                                     // tailess
+const button = cva("rounded", {            const button = variants({
+  variants: { tone: { … }, size: { … } },    base: "rounded",
+  compoundVariants: [{ … }],                 variants: { tone: { … }, size: { … } },
+  defaultVariants: { tone: "primary" },      compound: [{ … }],
+});                                          defaults: { tone: "primary" },
+                                           });
+```
+
+**What you gain.** A variant option can be an `ss` map, so it carries its own breakpoints
+and states — `lg: { base: "text-lg px-4", md: "px-6" }`, which a flat string cannot say.
+Everything ends in one `ss` call, so `tailwind-merge` runs once across base, variants,
+compounds and the caller's `className` together.
+
+**What is deliberately absent, today.** No `slots` (a multi-part component is one
+`variants()` call per part), no `extend` (recipe inheritance), no `twMergeConfig`, and no
+responsive variant selection at the call site — put the breakpoints inside the option
+instead, which is the shape this is built around.
+
+**One difference worth knowing.** A boolean variant is keyed by the strings `"true"` and
+`"false"`, and typed that way:
+
+```ts
+const box = variants({ variants: { disabled: { true: "opacity-50", false: "opacity-100" } } });
+box({ disabled: "true" });   // → "opacity-50"     ✅
+box({ disabled: isDisabled }) // ✗ pass String(isDisabled)
+```
+
+`cva` and `tv` give you `disabled?: boolean` there. Until that is fixed, forward the prop
+as `String(isDisabled)`.
+
 ### `withPrefix` — the escape hatch
 
 For variants tailess doesn't model as keys: an arbitrary variant, an arbitrary
@@ -985,9 +1066,31 @@ It exits `1` when something is wrong, so it can gate a build:
 
 | | |
 | --- | --- |
-| `--content <dir>` | where your source lives. Repeatable. Defaults to the working directory. |
+| `--content <dir>` | where your source lives. Repeatable, or comma-separated. Defaults to the working directory. |
 | `--css <file>` | your Tailwind entry stylesheet. Found automatically when it sits inside a `--content` root. |
+| `--extensions <list>` | file extensions to scan, **replacing** the default list. |
+| `--ignore <list>` | extra directory names to skip. |
 | `--strict` | also fail on the [build-time checks](#build-time-checks), which are otherwise printed without affecting the exit code. |
+| `--max <n>` | how many broken classes to name before summarising. Default `20`; `0` lists them all. |
+| `--json` | print one JSON object instead of prose. |
+| `--version` | |
+
+> [!IMPORTANT]
+> Give `--extensions` and `--ignore` the same values as the [plugin](#plugin-options), or
+> the gate reads a different set of files than your build does — a project scanning
+> `["tsx", "vue"]` has a build enumerating two extensions and a gate reading thirteen.
+> Wrong in both directions, and silently.
+
+Every finding names the file it came from, and `--json` gives a CI job something to read:
+
+```json
+{
+  "tailess": 1, "command": "check", "ok": false, "code": 1,
+  "checked": 312, "files": 84, "stylesheets": ["src/app.css"],
+  "broken": [{ "class": "md:p-4", "utility": "p-4", "files": ["src/Card.tsx"] }],
+  "diagnostics": [{ "kind": "dead-class", "file": "src/Row.tsx", "message": "…" }]
+}
+```
 
 | Exit | Meaning |
 | ---: | --- |
@@ -1014,6 +1117,58 @@ half, so it was never a class and is not reported.
 It uses your Tailwind, resolved from your tree, and loads your `@plugin`s and `@config`
 the way Tailwind itself does — so a variant or utility that only exists because of a
 plugin counts as generated rather than missing.
+
+## `tailess emit` — the stylesheet, as a file
+
+The plugins hand Tailwind the class list in memory. `tailess emit` writes exactly the
+same thing to a file you `@import` yourself:
+
+```bash
+npx tailess emit --content src --out src/tailess.css
+```
+
+```css
+/* src/app.css */
+@import "tailwindcss";
+@import "./tailess.css";     /* the classes tailess builds at runtime */
+```
+
+It takes the same `--content`, `--extensions` and `--ignore` as the check, and writes to
+stdout when given no `--out`. Two things need it.
+
+**A host with no PostCSS chain.** The plugins cover Vite and anything with a
+`postcss.config`. Tailwind's own CLI, Rspack's native CSS pipeline, Bun's bundler and the
+standalone binary compile Tailwind without ever running one — so run `emit` in the same
+script that builds your CSS:
+
+```json
+{
+  "scripts": {
+    "css": "tailess emit --content src --out src/tailess.css && tailwindcss -i src/app.css -o dist/app.css"
+  }
+}
+```
+
+**Publishing a component library.** A consumer's scan skips `node_modules`, and even
+pointed at your package it would be reading a bundled `dist` where the helper names are
+gone. So enumerate the classes at *your* build time and ship the result:
+
+```json
+{
+  "scripts": { "build": "tsup && tailess emit --content src --out dist/tailess.css" },
+  "files": ["dist"],
+  "exports": { ".": "./dist/index.js", "./styles.css": "./dist/tailess.css" }
+}
+```
+
+Your consumer adds one line, and needs neither the plugin nor a scan of your source:
+
+```css
+@import "tailwindcss";
+@import "@acme/ui/styles.css";
+```
+
+The file is deterministic — same source, same bytes — so it diffs cleanly and caches.
 
 ## Plugin options
 

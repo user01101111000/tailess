@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 /// <reference types="node" />
-import { help, parse, run } from "./check/run.js";
+import { help, parse, run, version } from "./check/run.js";
 
 /**
  * The `tailess` binary. Everything it does lives in `check/run.ts`, so the parts
- * worth testing can be called directly — importing this file would run it.
+ * worth testing can be called directly — importing this file would run it. The
+ * subcommand is read there too, which keeps this file to argv in, exit code out.
  */
 async function main(): Promise<number> {
-  const argv = process.argv.slice(2);
-  // `tailess check` and a bare `tailess` are the same thing; there is only one command.
-  const command = argv[0] === "check" ? argv.slice(1) : argv;
   try {
-    const parsed = parse(command);
+    const parsed = parse(process.argv.slice(2));
     if (parsed === "help") {
       console.log(help);
+      return 0;
+    }
+    if (parsed === "version") {
+      console.log(await version());
       return 0;
     }
     return await run(parsed);
