@@ -578,6 +578,55 @@ describe("tailess emit --json", () => {
     ]);
   });
 
+  it("answers in JSON on stdout even when the list went to a file", async () => {
+    // The one `--json` path in the binary that printed prose, so
+    // `emit --out … --json | jq -e .ok` failed to parse on a run that exited 0.
+    const out: string[] = [];
+    const errors: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void errors.push(String(m)));
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    const target = join(dir, "candidates.json");
+
+    const code = await run({ ...base(dir), command: "emit", json: true, out: target });
+    expect(code).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({
+      tailess: 1,
+      command: "emit",
+      ok: true,
+      code: 0,
+      classes: 1,
+    });
+    // The file still holds the candidate list itself, which is what --json asks for.
+    expect(JSON.parse(await readFile(target, "utf8")).classes).toEqual([
+      { class: "md:p-4", files: ["a.tsx"] },
+    ]);
+    expect(errors).toEqual([]);
+  });
+
+  it("says so when --json writes the candidate list to a file named .css", async () => {
+    // `--json` changes what emit *produces*, not just how it prints. A file named `.css`
+    // holding the candidate list, imported into a stylesheet, enumerates nothing and
+    // costs every runtime-built class its rule — silently, which is the whole failure
+    // this package exists to prevent. The note goes to stderr so stdout stays parseable.
+    const out: string[] = [];
+    const errors: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void errors.push(String(m)));
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+
+    const code = await run({
+      ...base(dir),
+      command: "emit",
+      json: true,
+      out: join(dir, "tailess.css"),
+    });
+    expect(code).toBe(0);
+    expect(() => JSON.parse(out.join("\n"))).not.toThrow();
+    expect(errors.join("\n")).toContain("holds the candidate list");
+    expect(errors.join("\n")).toContain("Drop --json");
+  });
+
   it("answers in JSON when there is nothing to emit, as check does", async () => {
     // `--json` is documented as "one JSON object instead of prose", and the exit-code
     // table calls 2 the one worth an alert. This path printed prose, so a job doing

@@ -173,8 +173,9 @@ export const help = `tailess — prove every class tailess builds has CSS behind
                         printed and do not affect the exit code. (check only)
   --max <n>             how many broken classes to name before summarising.
                         Default 20; 0 for all of them. (check only)
-  --json                print one JSON object instead of prose. On emit, that is the
-                        candidate list itself rather than the stylesheet.
+  --json                print one JSON object instead of prose. On emit it also changes
+                        what is produced: the candidate list, not the stylesheet — so
+                        with --out the file holds that list and stdout holds an ack.
   --out <file>          where to write. (emit only)
   --write               let init change the config. Without it, it only shows the
                         edit it would make.
@@ -427,11 +428,30 @@ async function runEmit(options: Options): Promise<number> {
     });
     if (options.out === undefined) {
       console.log(body);
-    } else {
-      const path = isAbsolute(options.out) ? options.out : resolve(options.cwd, options.out);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, body, "utf8");
-      console.log(`[tailess] ${classes.length} classes written to ${relative(options.cwd, path)}.`);
+      return 0;
+    }
+
+    const path = isAbsolute(options.out) ? options.out : resolve(options.cwd, options.out);
+    const where = relative(options.cwd, path) || path;
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, body, "utf8");
+    // An acknowledgement, in JSON. This was the one `--json` path in the whole binary
+    // that answered in prose, so `emit --out … --json | jq -e .ok` failed to parse on a
+    // run that exited 0 — which reads as a broken pipeline rather than a pass.
+    console.log(
+      jsonResult("emit", 0, { files: files.length, classes: classes.length, out: where }),
+    );
+    // `--json` changes *what emit produces*, not just how it prints: the file holds the
+    // candidate list, not a stylesheet. Naming it `.css` and importing it is the shape
+    // where that difference costs every runtime-built class its rule, silently — which is
+    // the failure this package exists to prevent, so it is worth a line on stderr where
+    // it cannot break the JSON on stdout.
+    if (/\.css$/i.test(where)) {
+      console.error(
+        `[tailess] ${where} holds the candidate list because of --json, not a stylesheet — ` +
+          "importing it into your CSS enumerates nothing. Drop --json to write the " +
+          "stylesheet, or name the file .json.",
+      );
     }
     return 0;
   }
