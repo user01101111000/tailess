@@ -251,6 +251,14 @@ jobs:
           npm pack --silent
           echo "TARBALL=$(ls tailess-*.tgz)" >> "$GITHUB_ENV"
 
+      # The app is TypeScript, so the TypeScript toolchain is declared rather than left
+      # to Next. Off CI, `next build` quietly installs `typescript` and `@types/react`
+      # itself and writes a tsconfig — which is why this scaffold built for anyone who
+      # tried it locally. On a runner, `CI=true`, and Next refuses to install anything:
+      # it prints "It looks like you're trying to use TypeScript but do not have the
+      # required package(s) installed" and the worker exits 1. Declaring them keeps the
+      # type-check, which is worth having: this is the only place the published types are
+      # compiled inside a real Next app.
       - name: Scaffold a Next.js app
         run: |
           mkdir -p /tmp/next-smoke/app
@@ -261,7 +269,13 @@ jobs:
             "private": true,
             "scripts": { "build": "next build" },
             "dependencies": { "next": "^15.5.0", "react": "^19.2.0", "react-dom": "^19.2.0" },
-            "devDependencies": { "@tailwindcss/postcss": "^4.3.3", "tailwindcss": "^4.3.3" }
+            "devDependencies": {
+              "@tailwindcss/postcss": "^4.3.3",
+              "tailwindcss": "^4.3.3",
+              "@types/node": "^20.19.0",
+              "@types/react": "^19.2.0",
+              "typescript": "^5.8.2"
+            }
           }
           JSON
           cat > postcss.config.mjs <<'MJS'
@@ -339,6 +353,10 @@ jobs:
           cd /tmp/next-smoke
           npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$TARBALL"
           npx next build
+          # Next only type-checks when there is a tsconfig, and it writes one itself. If
+          # that ever stops, the build would still pass having checked nothing — and this
+          # is the only place the published types are compiled inside a real Next app.
+          test -f tsconfig.json || { echo "::error::no tsconfig — the app was not type-checked"; exit 1; }
 
       # The point of the job: the classes the runtime builds have to be in the
       # stylesheet Next emitted, which only happens if the string-named plugin loaded.
