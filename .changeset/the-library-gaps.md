@@ -65,9 +65,11 @@ server or an SSR process in development sees a fresh one on every request — `h
 is enough. They clear rather than stop accepting, so the worst case is a warning printing
 twice, not a real one never printing.
 
-Runtime cost: `ss` + `cn` is **unchanged at 5,170 characters** — a project not importing
-`variants` pays nothing for any of the above. `variants` itself goes 497 → 1,733. The size
-budget moved deliberately, with both numbers written into the test that pins it.
+Runtime cost: routing `cn` and `ss` through `internal/settings.ts` puts them at **5,683
+characters**, from 5,177 on the last release — the figure of 5,170 that stood in this
+paragraph was `main`'s, and nothing had re-measured it. `variants` on top of that is 2,908.
+The size budget moved deliberately, and every number is now measured in the test that pins
+it rather than carried forward by hand.
 
 Four things were considered and deliberately not built, each for a reason now in the
 README: responsive variant selection at the call site (the scanner reads your recipe,

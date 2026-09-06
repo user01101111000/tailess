@@ -771,7 +771,7 @@ Same shape, and the renamed keys are accepted as aliases — so a port is `cva(`
 | `variants` | `variants` | unchanged |
 | `defaultVariants` | `defaults` | |
 | `compoundVariants` | `compound` | |
-| `class` / `className` in a compound rule | `class` | no `className` alias |
+| `class` / `className` in a compound rule | either | `className` is an alias; `class` wins if both are given |
 | `cva("base", { … })` | `variants("base", { … })` | the same call shape; `base` also works as a config key |
 | `button({ tone: "danger", class: "mt-2" })` | `button({ tone: "danger" }, "mt-2")` | extra classes are a second argument, like `cn` |
 | `VariantProps<typeof button>` | `VariantProps<typeof button>` | unchanged |
@@ -1142,7 +1142,7 @@ The plugin reports what it can prove wrong from your source, while the project b
   it as a key — ss({ "sm": … }) compiles, emits "sm:", and no rule is generated for it.
 ```
 
-Eleven things are checked: two conflicting utilities in **one** string, a `between` range
+Ten things are checked: two conflicting utilities in **one** string, a `between` range
 no viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value
 no class name can carry — a `supports` query, a `has`/`inside` selector, an `nth`
 position — a helper imported under another name, an `ss` map handed to a helper
@@ -1191,8 +1191,8 @@ tailess builds `hover:underline` — so nothing on the page has styles. tailess 
 support a Tailwind prefix; the check exists so you find that out from your build rather
 than from a blank screen.
 
-The last one is the only check that reads your **CSS** rather than your source, and the
-only one with cases that are *informational* rather than broken. The breakpoint keys are
+The theme check is the other one that reads your **CSS** rather than your source, and the
+only one anywhere in the list with cases that are *informational* rather than broken. The breakpoint keys are
 compiled into the package, so `--breakpoint-sm: initial` leaves `ss({ sm: … })` compiling
 and emitting a class nothing generates a rule for, `--breakpoint-md: 50rem` leaves
 `screens.md` returning the old width to your JS, and the resets `--breakpoint-*: initial`

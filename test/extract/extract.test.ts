@@ -342,9 +342,21 @@ describe("extractClasses, variadic ss()", () => {
   });
 
   it("never reads the digits inside a position written as a string", () => {
-    // `"3n+1"` is one expression, not the positions 3 and 1, so the numeric sweep
-    // runs only when the argument holds no string at all.
+    // `"3n+1"` is one expression, not the positions 3 and 1, so the sweep runs over the
+    // argument with its strings blanked out.
     expect(extractClasses(`nth("3n+1", "border-t")`)).toEqual(["nth-[3n+1]:border-t"]);
+    expect(extractClasses(`nth("2n", "border-t")`)).toEqual(["nth-[2n]:border-t"]);
+  });
+
+  it("reads both branches when a ternary mixes a number with an expression", () => {
+    // The guard used to be "if any string was found, ignore all numbers", so a mixed
+    // ternary lost its numeric branch entirely and silently — the same failure the two
+    // cases above exist to prevent, reached from the other side.
+    expect(extractClasses(`nth(cond ? 2 : "odd", "p-4")`)).toEqual(["nth-2:p-4", "nth-[odd]:p-4"]);
+    expect(extractClasses(`nthLast(first ? "even" : 3, "mb-0")`)).toEqual([
+      "nth-last-3:mb-0",
+      "nth-last-[even]:mb-0",
+    ]);
   });
 
   it("ignores plain class arguments, which Tailwind already sees itself", () => {

@@ -190,11 +190,13 @@ function skipTrivia(text: string, i: number): number {
  * renamed — and a plain regex over raw source gets both wrong in the same way: a
  * commented-out line is the most likely leftover of the very edit they exist to catch.
  *
- * Plain strings keep their contents. A PostCSS config wires the plugin by naming it in
- * one, and an import's module specifier is one, so blanking those would blind the
- * callers to the thing they are looking for.
+ * Plain strings keep their contents by default. A PostCSS config wires the plugin by
+ * naming it in one, and an import's module specifier is one, so blanking those would
+ * blind the callers to the thing they are looking for. `alsoStrings` blanks them too, for
+ * the one caller that wants the *expression* around them: the `nth` sweep reads bare
+ * numbers as positions and must not read the digits inside `"3n+1"` as one.
  */
-export function maskLiterals(code: string): string {
+export function maskLiterals(code: string, alsoStrings = false): string {
   const out = code.split("");
   const blank = (from: number, to: number) => {
     for (let k = Math.max(from, 0); k < to && k < code.length; k += 1) {
@@ -207,7 +209,12 @@ export function maskLiterals(code: string): string {
     const c = code[i];
     if (c === "'" || c === '"') {
       const end = skipString(code, i, c);
-      i = end === -1 ? i + 1 : end;
+      if (end === -1) {
+        i += 1;
+        continue;
+      }
+      if (alsoStrings) blank(i + 1, end - 1);
+      i = end;
       continue;
     }
     if (c === "`") {
@@ -680,12 +687,15 @@ function collectKeys(group: string, out: string[], shorthand = true): void {
 
 /** Leading whitespace and comments before a property's key. */
 const leadingTrivia = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
-/** `slots`, `slots:` or `"slots":` at the start of a property. */
-const slotsKey = /^(?:slots|["']slots["'])\s*(?::|$)/;
+/** The keys read for their presence: bare, or quoted, at the start of a property. */
+const declaredKey = {
+  slots: /^(?:slots|["']slots["'])\s*(?::|$)/,
+  extend: /^(?:extend|["']extend["'])\s*(?::|$)/,
+} as const;
 
 /**
- * True when the object literal `config` declares a `slots` property at all — including
- * the shorthand `{ slots }`, which {@link parseObject} skips.
+ * True when the object literal `config` declares `name` at all — including the shorthand
+ * `{ slots }`, which {@link parseObject} skips.
  *
  * `parseObject` answers what a key's *value* is, and rightly ignores a property whose
  * value carries no readable class. One reading turns on whether the key is there at all:
@@ -695,12 +705,13 @@ const slotsKey = /^(?:slots|["']slots["'])\s*(?::|$)/;
  * `root:md:p-8`, a candidate matching no utility, in place of the `md:p-8` the runtime
  * really builds.
  */
-export function declaresSlots(config: string): boolean {
+export function declaresKey(config: string, name: keyof typeof declaredKey): boolean {
   const t = config.trim();
   if (!t.startsWith("{")) return false;
   const close = t.lastIndexOf("}");
   const inner = close > 0 ? t.slice(1, close) : t.slice(1);
-  return splitArgs(inner).some((raw) => slotsKey.test(raw.replace(leadingTrivia, "")));
+  const pattern = declaredKey[name];
+  return splitArgs(inner).some((raw) => pattern.test(raw.replace(leadingTrivia, "")));
 }
 
 /**

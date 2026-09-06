@@ -1,10 +1,11 @@
 import { escapeCondition } from "../internal/condition.js";
 import {
-  declaresSlots,
+  declaresKey,
   dictionaryKeys,
   extractStrings,
   isArrayLiteral,
   isObjectLiteral,
+  maskLiterals,
   objectLiterals,
   outerCalls,
   parseObject,
@@ -506,9 +507,19 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       // and `slots: { ...shared, title: … }`, both leave the names invisible while the
       // recipe is still slotted; reading those as flat emitted `root:md:p-8` — junk
       // matching no utility — and lost the `md:p-8` the runtime does build.
-      const slotted = declaresSlots(config);
+      const slotted = declaresKey(config, "slots");
 
-      /** Emit one per-slot value, or a plain class value when there are no slots. */
+      /**
+       * Emit one per-slot value, or a plain class value when there are no slots.
+       *
+       * A recipe that inherits its parts rather than declaring them — `extend` pointing
+       * at a slotted recipe, with no `slots` of its own — used to break the parity here:
+       * the scanner read it as flat while the runtime followed the parent's slots. It is
+       * the runtime that changed. That shape is refused by the types and, when a cast
+       * gets it through, `resolve` stops at the boundary and stays flat rather than
+       * switching what the component returns — so the flat reading is now the right one
+       * on both sides, and this needs no second guess about which it is looking at.
+       */
       const emitPart = (text: string): void => {
         if (!slotted) {
           emitMaps(text, depth, add, follow);
@@ -567,10 +578,13 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       const variant = nthVariants[name];
       const arg = args[0] ?? "";
       const prefixes = extractStrings(arg).map((value) => `${variant}-[${escapeCondition(value)}]`);
-      // Only when the argument holds no string at all, so the digits inside `"3n+1"`
-      // are never read as a position of their own.
-      if (prefixes.length === 0) {
-        for (const value of staticValues(arg)) prefixes.push(`${variant}-${value}`);
+      // The sweep runs over the argument with its strings blanked, rather than being
+      // skipped whenever a string is present. `nth(cond ? 2 : "odd", …)` has both, and
+      // the old gate dropped the numeric branch entirely and silently; blanking keeps the
+      // digits inside `"3n+1"` from being read as a position while a bare `2` beside it
+      // is still found.
+      for (const value of staticValues(maskLiterals(arg, true))) {
+        prefixes.push(`${variant}-${value}`);
       }
       emitValue(args[1] ?? "", prefixes, add, follow);
       return;

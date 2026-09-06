@@ -109,6 +109,19 @@ function deadClasses(text: string | undefined, report: (d: Diagnostic) => void):
 const everyKey = new Set<string>(["base", ...screenKeys, ...maxScreenKeys, ...stateKeys]);
 
 /**
+ * The keys that are also plausible class names of someone's own.
+ *
+ * A dash rules it out: nobody writes a class called `group-hover` or `max-md`, and a
+ * breakpoint is not a class name either. What is left — `first`, `last`, `open`,
+ * `checked`, `disabled`, `active` — is exactly the vocabulary of a `clsx` dictionary
+ * (`.active` in Bootstrap, `.open` in a CSS module), so for those the report has to name
+ * both readings instead of asserting the one that happens to be more common.
+ */
+const ambiguousAsClass = new Set<string>(
+  stateKeys.filter((key) => !key.includes("-") && !(screenKeys as readonly string[]).includes(key)),
+);
+
+/**
  * Report an `ss` map handed to a helper that takes a flat class value.
  *
  * Composition here runs one way: a helper nests *inside* an `ss` bucket, not the other
@@ -137,7 +150,17 @@ function bucketMapAsDictionary(
       message:
         `${name}() was given an object with the key "${key}", which is an ss bucket — but ` +
         `its class argument is a clsx value, so "${key}" becomes the class name. Nest the ` +
-        `other way round: ss({ ${key}: ${name}(…) }).`,
+        `other way round: ss({ ${key}: ${name}(…) }).` +
+        // `first`, `last`, `open`, `checked`, `disabled` are ordinary conditional class
+        // names — Bootstrap's `.active`, a CSS module's `.open` — so the nesting mistake
+        // is not the only way to land here. The class is dead either way, but only one of
+        // the two readings has the rewrite above as its fix, and asserting the wrong one
+        // sends the reader to change code that was doing what they meant.
+        (ambiguousAsClass.has(key)
+          ? ` If "${key}" really is your own class name, it is not the nesting that is ` +
+            `wrong — it still takes the ${name}() prefix, and nothing generates a rule ` +
+            `for "${key}".`
+          : ""),
     });
     return;
   }

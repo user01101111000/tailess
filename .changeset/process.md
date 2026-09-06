@@ -14,9 +14,10 @@ requires, so it is what a Tailwind v4 toolchain already needs. Nothing that coul
 before is stranded — but this is a support-floor change, so it is called out here rather
 than buried.
 
-**CI runs on the branch the work happens on.** It triggered only on `main`, so every
-failure was found at merge time. It now runs on `dev`, on any pull request, and on
-demand. Windows runs on both ends of the Node range rather than one, since it is the
+**CI runs before merge, not after.** It triggered only on `main`, so every failure was
+found at merge time. It now runs on `dev`, on any pull request, and on demand — a feature
+branch is covered from the moment its pull request is open, which is the thing to do
+early. Windows runs on both ends of the Node range rather than one, since it is the
 platform the path handling actually differs on.
 
 **Next.js is built.** It is the first setup the README documents and the reason

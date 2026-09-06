@@ -35,7 +35,7 @@ import { collect, buildPrelude, diagnose } from "tailess/build";
 Node-only, so it is a subpath rather than part of `tailess` itself — the runtime pulls in
 no Node types at all, and that stays true.
 
-**A tenth and eleventh build-time check, in place of an ESLint plugin.** The rules worth
+**Two more build-time checks, in place of an ESLint plugin.** The rules worth
 having were the ones the type system cannot express, and both are now diagnostics that
 need no install, no config, and run in CI for everyone:
 

@@ -395,6 +395,32 @@ describe("an ss map handed to a helper that takes a flat class value", () => {
   });
 });
 
+describe("when a bucket key is also a plausible class name", () => {
+  it("names both readings, since only one of them has the suggested rewrite as its fix", () => {
+    // `.active` in Bootstrap, `.open` in a CSS module: `{ first: i === 0 }` is an
+    // ordinary clsx dictionary, and there the class is dead for a different reason than
+    // the message asserted — and the rewrite it suggested builds something else entirely.
+    const [first] = diag(`until("md", cn(styles.row, { first: i === 0, last: i === n - 1 }))`);
+    expect(first?.kind).toBe("bucket-as-dictionary");
+    expect(first?.message).toContain("ss({ first: until(…) })");
+    expect(first?.message).toContain('If "first" really is your own class name');
+  });
+
+  it("says nothing extra for a key nobody would name a class", () => {
+    // Nobody writes a class called `base`, `2xl` or `group-hover`, so there is only one
+    // reading and a second sentence would be noise on every report.
+    for (const code of [
+      `on("hover", { base: "underline", md: "font-bold" })`,
+      `until("md", { "2xl": "hidden" })`,
+      `on("hover", { "group-hover": "underline" })`,
+    ]) {
+      const [found] = diag(code);
+      expect(found?.kind).toBe("bucket-as-dictionary");
+      expect(found?.message).not.toContain("really is your own class name");
+    }
+  });
+});
+
 describe("a bucket the scanner cannot read", () => {
   it("reports the shapes the README lists as invisible", () => {
     // The package's most common support case, and the type system cannot express any

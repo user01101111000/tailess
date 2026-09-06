@@ -90,6 +90,38 @@ describe("every count written into the prose", () => {
       .filter((count) => count !== total);
     expect(others).toEqual([]);
   });
+
+  it("says how many build-time checks there are, and is right", async () => {
+    // The headline number for the package's central feature, and it was hand-maintained
+    // in three published places — README, llms.txt and a changeset — while the source of
+    // truth is a union in `diagnose.ts`. It had drifted to eleven. Counting one kind as
+    // one check is the convention `main` set.
+    const source = await readFile(new URL("../src/extract/diagnose.ts", import.meta.url), "utf8");
+    const union = source.match(/\n {2}kind:([\s\S]*?);\n/);
+    expect(union).not.toBeNull();
+    const kinds = new Set([...(union?.[1] ?? "").matchAll(/\|\s*"([a-z-]+)"/g)].map((m) => m[1]));
+    expect(kinds.size).toBeGreaterThan(5);
+
+    const spelled = [
+      "Zero",
+      "One",
+      "Two",
+      "Three",
+      "Four",
+      "Five",
+      "Six",
+      "Seven",
+      "Eight",
+      "Nine",
+      "Ten",
+      "Eleven",
+      "Twelve",
+    ];
+    expect(readme).toContain(`${spelled[kinds.size]} things are checked:`);
+
+    const llms = await readFile(new URL("../llms.txt", import.meta.url), "utf8");
+    expect(llms).toContain(`reports ${(spelled[kinds.size] ?? "").toLowerCase()} things`);
+  });
 });
 
 describe("the anchors the table of contents points at", () => {

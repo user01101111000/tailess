@@ -57,7 +57,8 @@ safe to give every helper: the extension reads, it never rewrites.
 
 **A migration table for cva and tailwind-variants**, which `variants()` is meant to
 replace and which the docs did not name once. Three renamed keys, what you gain, what is
-deliberately absent (`slots`, `extend`, `twMergeConfig`), and the one difference that will
+deliberately absent (`twMergeConfig`, and responsive variant selection at the call site),
+and the one difference that will
 bite: a boolean variant is keyed by the strings `"true"`/`"false"`, where cva and tv give
 you a `boolean`.
 
