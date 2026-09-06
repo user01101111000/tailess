@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
-import { reportDiagnostics } from "../integration/report.js";
+import { type DiagnosticMode, reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
@@ -24,6 +24,11 @@ export interface TailessViteOptions {
   ignore?: string[] | undefined;
   /** File extensions to scan, without the dot. Defaults to the usual source types. */
   extensions?: string[] | undefined;
+  /**
+   * What a build does about the checks the scanner can prove from your source.
+   * "warn" prints them, "error" also fails the build, "off" says nothing.
+   */
+  diagnostics?: DiagnosticMode | undefined;
 }
 
 /** The slice of Vite's transform context we use. */
@@ -159,7 +164,7 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
 
     // What the scanner could prove wrong, said once, while the project builds — the
     // runtime equivalents only fire once the offending line renders in a browser.
-    reportDiagnostics(diagnostics, root);
+    reportDiagnostics(diagnostics, root, options.diagnostics);
 
     // An explicit `content` that matches nothing is always a mistake — a wrong path,
     // or an extension list that excludes the project's own files. Left quiet it looks
@@ -268,8 +273,12 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
         // are silent. This is the one place the CSS itself is in hand.
         const theme = await collectTheme(code, entry);
         reportDiagnostics(
-          themeDiagnostics(theme.breakpoints, theme.variants).map((d) => ({ ...d, file: entry })),
+          themeDiagnostics(theme.breakpoints, theme.variants, theme.prefix).map((d) => ({
+            ...d,
+            file: entry,
+          })),
           root,
+          options.diagnostics,
         );
 
         const { files, css, wrote } = await refresh();

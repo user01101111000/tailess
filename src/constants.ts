@@ -248,8 +248,40 @@ export const stateKeys: readonly StateKey[] = [
   ...negatableStates.map((state): NotStateKey => `not-${state}`),
 ];
 
+/**
+ * Keys your own CSS adds, declared by you.
+ *
+ * The built-in keys are a closed union on purpose — that is what makes a typo a compile
+ * error rather than an unstyled element. But a `@theme` that adds `--breakpoint-3xl`, or
+ * a `@custom-variant sidebar-open`, creates a variant that genuinely works and that
+ * tailess cannot know about, and `ss({ "3xl": … })` was a compile error with no way out
+ * short of `withPrefix`.
+ *
+ * Augment this interface and the key joins the union, autocomplete and all. The keys are
+ * what matters; the value is ignored, so `true` is the convention.
+ *
+ * @example
+ * // tailess.d.ts, anywhere your tsconfig includes
+ * declare module "tailess" {
+ *   interface CustomKeys {
+ *     "3xl": true;
+ *     "sidebar-open": true;
+ *   }
+ * }
+ *
+ * ss({ "3xl": "p-12", "sidebar-open": "translate-x-0" });
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: the point is for a consumer to fill it
+export interface CustomKeys {}
+
 /** Every key {@link ss} accepts besides `base`. */
-export type SsKey = ScreenKey | MaxScreenKey | ContainerKey | MaxContainerKey | StateKey;
+export type SsKey =
+  | ScreenKey
+  | MaxScreenKey
+  | ContainerKey
+  | MaxContainerKey
+  | StateKey
+  | (keyof CustomKeys & string);
 
 /**
  * Emission order for {@link ss}: `base`, then breakpoints mobile-first, then

@@ -1,4 +1,5 @@
 import { isDev } from "../internal/env.js";
+import { firstTime, warn } from "../internal/settings.js";
 
 /** A CSS custom property name, which is any identifier starting with `--`. */
 export type CssVarName = `--${string}`;
@@ -20,9 +21,8 @@ export type CssVars = Partial<Record<CssVarName, string>>;
 const warnedKeys = new Set<string>();
 
 function warnNotACustomProperty(key: string): void {
-  if (warnedKeys.has(key)) return;
-  warnedKeys.add(key);
-  console.warn(
+  if (!firstTime(warnedKeys, key)) return;
+  warn(
     `[tailess] vars() was given "${key}", which is not a CSS custom property. It is ` +
       'passed through, but vars() is for "--" names — put an ordinary style in `style`.',
   );

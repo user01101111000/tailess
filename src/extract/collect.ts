@@ -71,6 +71,15 @@ export interface CollectOptions {
   extensions?: Iterable<string> | undefined;
   /** Extra directory names to skip on top of {@link defaultIgnore}. */
   ignore?: Iterable<string> | undefined;
+  /**
+   * Also record which files each class came from.
+   *
+   * Off by default because the plugins never ask: they hand Tailwind a flat list, and
+   * a dev server rescans on every keystroke. `tailess check` does ask, because a
+   * report that names a broken class without naming a file leaves the reader grepping
+   * escaped selectors by hand.
+   */
+  provenance?: boolean | undefined;
 }
 
 export interface CollectResult {
@@ -91,6 +100,11 @@ export interface CollectResult {
    * are found on every build, for every call site, and reach CI.
    */
   diagnostics: FileDiagnostic[];
+  /**
+   * Class name to the absolute paths of the files that build it, present only when
+   * `provenance` was asked for. Sorted, so a report reads the same on every run.
+   */
+  sources?: Map<string, string[]> | undefined;
 }
 
 /** A {@link Diagnostic} together with the file it was found in. */
@@ -217,7 +231,7 @@ async function scanFile(file: string): Promise<CacheEntry> {
     mtimeMs,
     size,
     classes: extractClasses(code),
-    diagnostics: diagnose(code),
+    diagnostics: diagnose(code, file),
   };
   cache.set(file, entry);
   return entry;
@@ -255,10 +269,17 @@ async function run(options: CollectOptions): Promise<CollectResult> {
 
   const classes = new Set<string>();
   const diagnostics: FileDiagnostic[] = [];
+  const sources = options.provenance ? new Map<string, string[]>() : undefined;
   const perFile = await Promise.all(files.map(scanFile));
   perFile.forEach((entry, index) => {
-    for (const cls of entry.classes) classes.add(cls);
     const file = files[index] as string;
+    for (const cls of entry.classes) {
+      classes.add(cls);
+      if (!sources) continue;
+      const seen = sources.get(cls);
+      if (seen) seen.push(file);
+      else sources.set(cls, [file]);
+    }
     for (const d of entry.diagnostics) diagnostics.push({ ...d, file });
   });
 
@@ -268,5 +289,6 @@ async function run(options: CollectOptions): Promise<CollectResult> {
     roots,
     extensions: [...extensions],
     diagnostics,
+    ...(sources ? { sources } : {}),
   };
 }

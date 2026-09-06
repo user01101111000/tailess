@@ -1,0 +1,9 @@
+{
+  "tailwindCSS.classFunctions": [
+    "ss", "cn", "variants", "responsive", "match",
+    "on", "until", "between", "data", "aria",
+    "group", "peer", "container", "withPrefix",
+    "supports", "notSupports", "has", "notHas", "inside",
+    "nth", "nthLast", "nthOfType", "nthLastOfType"
+  ]
+}

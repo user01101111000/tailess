@@ -99,12 +99,55 @@ describe("the browser bundle", () => {
     // wrapper over `ss`, not a second engine, which is the reason it costs so little
     // and the reason a variant option can be an `ss` map at all.
     //
-    // Note what this number is and isn't: the package sets `sideEffects: false`, so
-    // it is the cost of importing *everything*. A consumer using only `ss` and `cn`
-    // bundles 5,170 chars — of which 47 are the two new key families — one adding
-    // `vars` pays 488, and one importing only `variants` bundles 5,634. Measured,
-    // not assumed.
-    expect(code.length).toBeLessThan(11_200);
+    // Raised again to 12,200 for slots, `extend`, boolean variants and compound rules
+    // that match a list: 10,935 -> 11,933 chars. All of it lands in `variants`, which
+    // goes 497 -> 1,733 chars on top of `ss` + `cn`. Those four are the whole of what
+    // sends a team to `tailwind-variants` instead, and a multi-part component is the
+    // shape every non-trivial one has — but it is a real doubling of that helper, and
+    // the reason it is acceptable is the line below.
+    //
+    // Raised again to 13,000 for the two `variants` defects an adversarial review found:
+    // 11,933 -> 12,640 chars. A numbered variant group — `{ cols: { 1: …, 2: … } }` —
+    // was typed as a *boolean* one, because numeric keys leave `keyof O & string` empty
+    // and `never` extends `"true" | "false"`, so every value the types accepted did
+    // nothing and `2`, the one that worked, was a compile error. And a flat recipe could
+    // extend a slotted one: it compiled as returning `string`, returned an object of
+    // parts, and dropped every class the child declared. The types refuse both now; most
+    // of the 707 characters is the warning text for the second, which is only reachable
+    // through a cast — and is exactly where it used to be silent.
+    //
+    // Raised again to 13,500 for the `variants` hardening the same review asked for:
+    // 12,640 -> 13,226, all of it inside that helper (7,666 -> 8,250 on top of `ss` + `cn`)
+    // and none of it paid by a consumer who does not import it. A slot or group named
+    // `__proto__` was silently dropped and reassigned the accumulator's prototype — a
+    // declared class emitted nowhere, with no error. `config` and `variants` were the
+    // caller's own live objects behind a `readonly` declaration, so writing to them made a
+    // parent and a child disagree about the parent, and adding an option to
+    // `component.variants` produced a class the runtime builds and the scanner can never
+    // enumerate. Both are snapshots now. `variants("flex")` — cva's one-argument call —
+    // threw an unattributed TypeError, and an `extend` cycle a bare `RangeError`.
+    //
+    // Raised again to 14,000 for four `configure` defects from the same review:
+    // 13,226 -> 13,645, and this is the raise that moves `ss` + `cn` — 5,344 -> 5,683 —
+    // so it is the one to weigh hardest. `configure({ keys })` promised declared keys "a
+    // stable position, in the order given" and gave every one of them the same rank, so
+    // the emitted order was whatever order the object literal happened to use and which
+    // key won a `tailwind-merge` conflict depended on how someone typed it. The unknown-key
+    // warning — the highest-frequency site in the package, one bucket map per component
+    // per render — was the one with no memo, so a project mid-migration got a console line
+    // per render and, under the documented fatal `onWarn`, a throw per render. `onWarn`
+    // could not see a warning that had already fired, which made "collect it in a test"
+    // pass vacuously. And a custom `merge` returning a non-string put that value straight
+    // into the class attribute.
+    //
+    // Note what this number is and isn't: every module here is side-effect free, so it
+    // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
+    // 5,683 chars, which is the number worth watching, since it is what most projects
+    // actually pay. That figure was recorded as 5,170 and described as unchanged through
+    // several of the raises above; it was neither — nothing re-measured it. It is
+    // measured here now, along with the rest: `vars` on top costs 411 (6,094), and
+    // `variants` on top costs 2,908 (8,591).
+    expect(code.length).toBeLessThan(14_000);
   });
 
   it("pulls in no Node builtins", async () => {

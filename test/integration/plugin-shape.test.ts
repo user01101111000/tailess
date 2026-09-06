@@ -22,6 +22,17 @@ const distUrl = new URL("../../dist/", import.meta.url);
 const dist = (path: string) => fileURLToPath(new URL(path, distUrl));
 const built = existsSync(dist("postcss/index.cjs"));
 
+// Skipping is right on a developer's machine before a first build. In CI it is how this
+// suite went unrun for its whole life — the workflow tested before it built, so `built`
+// was false on every run and the one check guarding the string-named PostCSS entry was
+// green by never executing. Fail loudly there instead.
+if (!built && process.env.CI) {
+  throw new Error(
+    "dist/ is missing, so the built-plugin assertions would silently skip. " +
+      "Run the build before the tests.",
+  );
+}
+
 describe.runIf(built)("built plugin entry points", () => {
   it("exposes the PostCSS plugin as module.exports itself", () => {
     const plugin = require(dist("postcss/index.cjs"));

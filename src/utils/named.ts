@@ -1,5 +1,6 @@
 import type { ContainerKey, ElementStateKey, MaxContainerKey } from "../constants.js";
 import { isDev } from "../internal/env.js";
+import { firstTime, warn } from "../internal/settings.js";
 import type { ClassValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
@@ -53,9 +54,8 @@ const warnedNames = new Set<string>();
 
 function warnBadName(helper: string, name: string): void {
   const seen = `${helper} ${name}`;
-  if (warnedNames.has(seen)) return;
-  warnedNames.add(seen);
-  console.warn(
+  if (!firstTime(warnedNames, seen)) return;
+  warn(
     `[tailess] ${helper}("${name}", …) — Tailwind generates no working rule for this ` +
       'name. Use letters, digits, "-" and "_"' +
       (helper === "container"

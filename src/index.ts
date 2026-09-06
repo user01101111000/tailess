@@ -1,5 +1,6 @@
 export type {
   ContainerKey,
+  CustomKeys,
   ElementStateKey,
   GroupStateKey,
   HasStateKey,
@@ -22,6 +23,8 @@ export {
   screens,
   stateKeys,
 } from "./constants.js";
+export type { ConfigureOptions, TailessSettings } from "./internal/settings.js";
+export { configure } from "./internal/settings.js";
 export type { ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";
@@ -38,6 +41,12 @@ export { responsive } from "./utils/responsive.js";
 export { ss } from "./utils/ss.js";
 export { notSupports, supports } from "./utils/supports.js";
 export type {
+  CompoundRule,
+  SlotDefaults,
+  SlottedComponent,
+  SlottedConfig,
+  SlottedGroups,
+  SlotValue,
   VariantComponent,
   VariantGroups,
   VariantOptions,

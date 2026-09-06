@@ -10,13 +10,19 @@ import {
 describe("scanCalls", () => {
   it("finds a bare helper call and its args", () => {
     expect(scanCalls(`on("hover", "bg-blue-600")`)).toEqual([
-      { name: "on", args: ['"hover"', '"bg-blue-600"'] },
+      { name: "on", args: ['"hover"', '"bg-blue-600"'], receiver: "" },
     ]);
   });
 
-  it("finds method calls on any receiver", () => {
+  it("finds method calls on any receiver, and says which one", () => {
+    // Enumeration takes the call either way — a namespace import is a method call, and
+    // an extra candidate is free. The receiver is recorded because the diagnostics
+    // cannot be that generous: `socket.on(...)` is not a tailess call.
     expect(scanCalls(`st.ss({ md: "text-2xl" })`)).toEqual([
-      { name: "ss", args: ['{ md: "text-2xl" }'] },
+      { name: "ss", args: ['{ md: "text-2xl" }'], receiver: "st" },
+    ]);
+    expect(scanCalls(`socket.on("presence", handler)`)).toEqual([
+      { name: "on", args: ['"presence"', "handler"], receiver: "socket" },
     ]);
   });
 
@@ -27,24 +33,28 @@ describe("scanCalls", () => {
   // Matching a call inside a string or comment is the deliberate cost of never
   // desyncing on markup — see the note on `scanCalls`.
   it("matches calls inside strings and comments too", () => {
-    expect(scanCalls(`// on("hover", "a")`)).toEqual([{ name: "on", args: ['"hover"', '"a"'] }]);
-    expect(scanCalls(`/* ss({ md: "b" }) */`)).toEqual([{ name: "ss", args: ['{ md: "b" }'] }]);
+    expect(scanCalls(`// on("hover", "a")`)).toEqual([
+      { name: "on", args: ['"hover"', '"a"'], receiver: "" },
+    ]);
+    expect(scanCalls(`/* ss({ md: "b" }) */`)).toEqual([
+      { name: "ss", args: ['{ md: "b" }'], receiver: "" },
+    ]);
   });
 
   it("finds a call inside a quoted markup attribute", () => {
     expect(scanCalls(`<div :class="ss({ md: 'grid' })">`)).toEqual([
-      { name: "ss", args: ["{ md: 'grid' }"] },
+      { name: "ss", args: ["{ md: 'grid' }"], receiver: "" },
     ]);
   });
 
   it("does not let an apostrophe in prose swallow the next call", () => {
     expect(scanCalls(`<p>Let's go</p>\n<b class={on("hover", "a")} />`)).toEqual([
-      { name: "on", args: ['"hover"', '"a"'] },
+      { name: "on", args: ['"hover"', '"a"'], receiver: "" },
     ]);
   });
 
   it("stops an unclosed argument list at the end of input", () => {
-    expect(scanCalls(`ss({ md: "b"`)).toEqual([{ name: "ss", args: ['{ md: "b"'] }]);
+    expect(scanCalls(`ss({ md: "b"`)).toEqual([{ name: "ss", args: ['{ md: "b"'], receiver: "" }]);
   });
 
   it("finds multiple and nested calls", () => {
