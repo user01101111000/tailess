@@ -128,7 +128,7 @@
     "@types/node": "^26.1.0",
     "@vitest/coverage-v8": "^4.1.9",
     "clsx": "^2.1.1",
-    "esbuild": "^0.27.7",
+    "esbuild": "^0.28.2",
     "postcss": "^8.5.26",
     "publint": "^0.3.21",
     "tailwindcss": "^4.3.3",
