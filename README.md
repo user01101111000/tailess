@@ -1173,7 +1173,7 @@ classes: `on("hover", { base: "underline", md: "font-bold" })` builds
 untyped boundary let it through — and there it is completely silent.
 
 ```ts
-ss({ hover: on("hover", "underline") })   // ✅ this way round
+ss({ md: on("hover", "underline") })      // ✅ this way round — "md:hover:underline"
 on("hover", { base: "underline" })        // ❌ "hover:base"
 ```
 

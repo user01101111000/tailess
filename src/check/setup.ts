@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { maskLiterals } from "../extract/scan.js";
 
 /**
  * `tailess init` and `tailess doctor` — the two commands that exist because setup is
@@ -37,11 +38,18 @@ const cjsImport = /(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*["']tailess\/vite
  * the word alone would have called that wired. The import is read only to learn what the
  * plugin was bound to, so an aliased one is not a false alarm. The PostCSS form is a
  * string in a config rather than a call, so naming it *is* wiring it.
+ *
+ * Read against {@link maskLiterals} rather than the raw text, because the same deletion
+ * that leaves an import behind leaves a comment behind — `// we removed tailess()` — and
+ * matching that reports a genuinely unwired project as wired. This is the one failure
+ * that unstyles a whole application with no build error, so the check that catches it
+ * must not be readable by prose.
  */
 export function wired(text: string): boolean {
-  if (/["']tailess\/postcss["']/.test(text)) return true;
-  const name = esmImport.exec(text)?.[1] ?? cjsImport.exec(text)?.[1] ?? "tailess";
-  return new RegExp(`\\b${name}\\s*\\(`).test(text);
+  const code = maskLiterals(text);
+  if (/["']tailess\/postcss["']/.test(code)) return true;
+  const name = esmImport.exec(code)?.[1] ?? cjsImport.exec(code)?.[1] ?? "tailess";
+  return new RegExp(`\\b${name}\\s*\\(`).test(code);
 }
 
 /**
@@ -75,8 +83,62 @@ export interface Edit {
   after: string;
 }
 
-/** The `plugins: [...]` array in a Vite config, with tailess added to the front. */
-const vitePlugins = /(\bplugins\s*:\s*\[)/;
+/** The `plugins: [...]` array a plugin is added to the front of. */
+const pluginsArray = /\bplugins\s*:\s*\[/;
+/** The `plugins: { ... }` object a PostCSS plugin is added to the front of. */
+const pluginsObject = /\bplugins\s*:\s*\{/;
+
+/**
+ * A whole top-level `import` statement, through its module specifier.
+ *
+ * Anchored to the start of a line and run through the specifier rather than to the first
+ * newline, because a multi-line import is what a formatter produces past its print width
+ * and stopping at the newline puts the next import *inside* the braces. `import(` and
+ * `import.meta` are excluded: those are expressions, and can be anywhere.
+ */
+const topLevelImport = /^[ \t]*import\b(?!\s*[.(])[^;]*?["'][^"'\n]*["'][ \t]*;?/gm;
+
+/**
+ * The one place `pattern` matches, or `null` when it matches anywhere but exactly once.
+ *
+ * Two candidates is an ambiguity, and this command gives up on those. `css.postcss.plugins`
+ * is a documented Vite option that can legitimately precede the top-level `plugins` array,
+ * and a non-global `String.replace` takes the first match — which writes the Vite plugin
+ * into the PostCSS list and leaves the array that matters untouched, after saying it
+ * succeeded.
+ */
+function soleMatch(masked: string, pattern: RegExp): RegExpMatchArray | null {
+  const all = [...masked.matchAll(new RegExp(pattern.source, "g"))];
+  return all.length === 1 ? (all[0] as RegExpMatchArray) : null;
+}
+
+/** How many times `pattern` occurs in `masked`. */
+function countOf(masked: string, pattern: RegExp): number {
+  return [...masked.matchAll(new RegExp(pattern.source, "g"))].length;
+}
+
+/** Splice `text` into `source` at `at`. */
+function insertAt(source: string, at: number, text: string): string {
+  return source.slice(0, at) + text + source.slice(at);
+}
+
+/** True when the list opened just before `at` is empty, so the entry needs no separator. */
+function listIsEmpty(masked: string, at: number, close: string): boolean {
+  return masked.slice(at).trimStart().startsWith(close);
+}
+
+/**
+ * Where a new top-level import can go: after the last existing one, or — when there is
+ * none — in front of the first real token, which leaves a leading comment or a
+ * `/// <reference>` where it has to stay.
+ */
+function importInsertPoint(masked: string): number {
+  let end = -1;
+  for (const match of masked.matchAll(topLevelImport)) end = (match.index ?? 0) + match[0].length;
+  if (end !== -1) return end;
+  const firstToken = masked.search(/\S/);
+  return firstToken === -1 ? masked.length : firstToken;
+}
 
 /**
  * The edit that wires the plugin in, or `null` when it cannot be written safely.
@@ -85,41 +147,65 @@ const vitePlugins = /(\bplugins\s*:\s*\[)/;
  * and gives up on anything else rather than guessing at a config it does not recognise.
  * A wrong edit to a build config is worse than no edit, and `doctor` still says what to
  * do by hand.
+ *
+ * Every position is found in {@link maskLiterals} of the source and spliced into the raw
+ * text at that index, so a `plugins: [` inside a comment is neither edited nor counted.
+ * The result is then read back with {@link wired}: an edit that does not actually wire
+ * the plugin in is not returned at all, however plausible its diff looks.
  */
 export function planEdit(host: Host): Edit | null {
   if (host.kind === "unknown" || wired(host.source)) return null;
 
+  const masked = maskLiterals(host.source);
+  // Match the file rather than forcing `\n` into it: a CRLF config edited with a bare
+  // newline is left with mixed line endings, which every diff downstream then shows.
+  const eol = host.source.includes("\r\n") ? "\r\n" : "\n";
+  let after: string;
+
   if (host.kind === "vite") {
-    if (!vitePlugins.test(host.source)) return null;
-    const withImport = /^import\s/m.test(host.source)
-      ? host.source.replace(/^(import\s[^\n]*\n)/, '$1import tailess from "tailess/vite";\n')
-      : `import tailess from "tailess/vite";\n${host.source}`;
-    return {
-      file: host.file,
-      before: host.source,
-      after: withImport.replace(vitePlugins, "$1tailess(), "),
-    };
+    const list = soleMatch(masked, pluginsArray);
+    if (!list) return null;
+
+    const importAt = importInsertPoint(masked);
+    const statement = 'import tailess from "tailess/vite";';
+    // Leading, when nothing but trivia precedes the insertion point; trailing otherwise,
+    // so the new line follows the import it is placed after rather than splitting it.
+    const importText =
+      masked.slice(0, importAt).trim() === "" ? `${statement}${eol}` : `${eol}${statement}`;
+
+    // Later position first, so the earlier index is still valid when it is used.
+    const listAt = (list.index ?? 0) + list[0].length;
+    after = insertAt(
+      host.source,
+      listAt,
+      listIsEmpty(masked, listAt, "]") ? "tailess()" : "tailess(), ",
+    );
+    after = insertAt(after, importAt, importText);
+  } else {
+    // PostCSS: order matters, so tailess goes first — it has to write the candidate list
+    // before Tailwind reads it.
+    const objects = countOf(masked, pluginsObject);
+    if (objects > 1) return null;
+    const object = objects === 1 ? soleMatch(masked, pluginsObject) : null;
+    const at = object ?? soleMatch(masked, pluginsArray);
+    if (!at) return null;
+    const listAt = (at.index ?? 0) + at[0].length;
+    const empty = listIsEmpty(masked, listAt, object ? "}" : "]");
+    after = insertAt(
+      host.source,
+      listAt,
+      object
+        ? `${eol}    "tailess/postcss": {}${empty ? "" : ","}`
+        : `"tailess/postcss"${empty ? "" : ", "}`,
+    );
   }
 
-  // PostCSS: order matters, so tailess goes first — it has to write the candidate list
-  // before Tailwind reads it.
-  const pluginsObject = /(\bplugins\s*:\s*\{)/;
-  if (pluginsObject.test(host.source)) {
-    return {
-      file: host.file,
-      before: host.source,
-      after: host.source.replace(pluginsObject, '$1\n    "tailess/postcss": {},'),
-    };
-  }
-  const pluginsArray = /(\bplugins\s*:\s*\[)/;
-  if (pluginsArray.test(host.source)) {
-    return {
-      file: host.file,
-      before: host.source,
-      after: host.source.replace(pluginsArray, '$1"tailess/postcss", '),
-    };
-  }
-  return null;
+  // The point of the command is a config that works afterwards. Anything less is a hand
+  // edit `doctor` describes, not a file this writes.
+  if (!wired(after)) return null;
+  if (host.kind === "vite" && !esmImport.test(maskLiterals(after))) return null;
+
+  return { file: host.file, before: host.source, after };
 }
 
 /**

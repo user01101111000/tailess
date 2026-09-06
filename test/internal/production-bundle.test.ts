@@ -106,12 +106,24 @@ describe("the browser bundle", () => {
     // shape every non-trivial one has — but it is a real doubling of that helper, and
     // the reason it is acceptable is the line below.
     //
+    // Raised again to 13,000 for the two `variants` defects an adversarial review found:
+    // 11,933 -> 12,640 chars. A numbered variant group — `{ cols: { 1: …, 2: … } }` —
+    // was typed as a *boolean* one, because numeric keys leave `keyof O & string` empty
+    // and `never` extends `"true" | "false"`, so every value the types accepted did
+    // nothing and `2`, the one that worked, was a compile error. And a flat recipe could
+    // extend a slotted one: it compiled as returning `string`, returned an object of
+    // parts, and dropped every class the child declared. The types refuse both now; most
+    // of the 707 characters is the warning text for the second, which is only reachable
+    // through a cast — and is exactly where it used to be silent.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
-    // is the cost of importing *everything*. A consumer using only `ss` and `cn`
-    // bundles 5,170 chars — unchanged by any of the above, and the number worth
-    // watching, since it is what most projects actually pay. One adding `vars` pays
-    // 488, and one importing `variants` too bundles 6,903. Measured, not assumed.
-    expect(code.length).toBeLessThan(12_200);
+    // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
+    // 5,344 chars, which is the number worth watching, since it is what most projects
+    // actually pay. That figure was recorded as 5,170 and described as unchanged through
+    // several of the raises above; it was neither — nothing re-measured it. It is
+    // measured here now, along with the rest: `vars` on top costs 411 (5,755), and
+    // `variants` on top costs 2,322 (7,666).
+    expect(code.length).toBeLessThan(13_000);
   });
 
   it("pulls in no Node builtins", async () => {

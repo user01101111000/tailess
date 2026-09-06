@@ -1,5 +1,6 @@
 import { escapeCondition } from "../internal/condition.js";
 import {
+  declaresSlots,
   dictionaryKeys,
   extractStrings,
   isArrayLiteral,
@@ -499,27 +500,25 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       if (config === undefined) return;
       const fields = parseObject(config);
 
-      // Read the slot names first. With them, an option's value is one level deeper —
-      // `{ root: …, title: … }` rather than a class value — and reading it as an `ss`
-      // map would emit `root:md:p-8` while missing the `md:p-8` the runtime builds.
-      const slots = new Set<string>();
-      for (const { key, value } of fields) {
-        if (key !== "slots") continue;
-        for (const group of objectLiterals(value)) {
-          for (const slot of parseObject(group)) slots.add(slot.key);
-        }
-      }
+      // Whether an option's value is one level deeper — `{ root: …, title: … }` rather
+      // than a class value — turns on the *presence* of a `slots` field, never on whether
+      // its names could be read. `variants({ slots, … })` with the map hoisted to a const,
+      // and `slots: { ...shared, title: … }`, both leave the names invisible while the
+      // recipe is still slotted; reading those as flat emitted `root:md:p-8` — junk
+      // matching no utility — and lost the `md:p-8` the runtime does build.
+      const slotted = declaresSlots(config);
 
       /** Emit one per-slot value, or a plain class value when there are no slots. */
       const emitPart = (text: string): void => {
-        if (slots.size === 0) {
+        if (!slotted) {
           emitMaps(text, depth, add, follow);
           return;
         }
+        // Every key, not only those a readable `slots:` named. A key that is not a slot
+        // yields a candidate the runtime never builds, which `@source inline(…)` ignores;
+        // a slot whose name could not be read would otherwise lose its classes outright.
         for (const group of objectLiterals(text)) {
-          for (const part of parseObject(group)) {
-            if (slots.has(part.key)) emitMaps(part.value, depth, add, follow);
-          }
+          for (const part of parseObject(group)) emitMaps(part.value, depth, add, follow);
         }
       };
 

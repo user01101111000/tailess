@@ -5,6 +5,7 @@ import {
   extractStrings,
   helperNames,
   isArrayLiteral,
+  maskLiterals,
   objectLiterals,
   parseObject,
   type RawCall,
@@ -127,7 +128,9 @@ function bucketMapAsDictionary(
   report: (d: Diagnostic) => void,
 ): void {
   if (!text) return;
-  for (const key of dictionaryKeys(text, true)) {
+  // Spelled-out entries only. `({ open, dark }) => …` is a destructuring parameter, not a
+  // dictionary, and it is the commonest object literal in a component file.
+  for (const key of dictionaryKeys(text, true, false)) {
     if (!everyKey.has(key)) continue;
     report({
       kind: "bucket-as-dictionary",
@@ -395,7 +398,7 @@ const maxPerFile = 20;
 const proseFile = /\.(?:md|markdown|html?)$/i;
 
 /** A named import from tailess, with the whole specifier list in hand. */
-const tailessImport = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
+const tailessImport = /^[ \t]*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/gm;
 /** One `original as local` specifier inside it. */
 const renamedSpecifier = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g;
 const scannedHelpers = new Set<string>(helperNames);
@@ -408,6 +411,12 @@ const scannedHelpers = new Set<string>(helperNames);
  * notices: the file compiles, type-checks, renders the right `class` attribute, and
  * every variant on it is unstyled. It is the largest silent failure the package has and
  * the only one provable from the import statement alone.
+ *
+ * `code` here is the masked source and the match is anchored to the start of a line, so a
+ * commented-out import and one quoted inside a docs sample are both what they are: text
+ * about code. This check asserts the strongest failure the package reports, and asserting
+ * it about a line that does not run — in the same output that says every class has CSS —
+ * is how a build gate teaches people to stop reading it.
  */
 function renamedImports(code: string, report: (d: Diagnostic) => void): void {
   tailessImport.lastIndex = 0;
@@ -428,6 +437,38 @@ function renamedImports(code: string, report: (d: Diagnostic) => void): void {
       });
     }
   }
+}
+
+/** Any import of the package itself, in either module system. */
+const anyTailessImport = /^[ \t]*import\b[^;]*?["']tailess["']|\brequire\(\s*["']tailess["']\s*\)/m;
+/** `import * as tl from "tailess"`, whose members are helper calls. */
+const namespaceImport = /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm;
+
+/**
+ * The names a call has to be reached through in this file to be one of ours, or `null`
+ * when the file does not import tailess at all.
+ *
+ * Enumeration is deliberately loose — a helper name in a string or on any receiver yields
+ * candidates, because an extra candidate costs a moment of compile time and a missing one
+ * costs a broken layout. Reporting cannot borrow that looseness. `on`, `data`, `group`,
+ * `has`, `inside`, `between` and `responsive` are ordinary identifiers in any codebase,
+ * and `socket.on("presence", ({ open, dark }) => …)` in a file that has never heard of
+ * this package was being told one of its classes is unstyled — failing the build under
+ * `check --strict` or `diagnostics: "error"`.
+ *
+ * The trade is a false negative for a project that reaches the helpers through its own
+ * re-export: it still gets full class enumeration and `tailess check` still proves the far
+ * end, it just loses the source-level warnings. A warning that fires on working code is
+ * worse, because it teaches people to stop reading them.
+ */
+function callableHere(masked: string): Set<string> | null {
+  if (!anyTailessImport.test(masked)) return null;
+  const receivers = new Set<string>([""]);
+  namespaceImport.lastIndex = 0;
+  for (let m = namespaceImport.exec(masked); m !== null; m = namespaceImport.exec(masked)) {
+    receivers.add(m[1] as string);
+  }
+  return receivers;
 }
 
 /**
@@ -453,8 +494,15 @@ export function diagnose(code: string, file?: string): Diagnostic[] {
     found.push(d);
   };
 
-  if (file === undefined || !proseFile.test(file)) renamedImports(code, report);
-  for (const call of scanCalls(code)) check(call, report);
+  const masked = maskLiterals(code);
+  if (file === undefined || !proseFile.test(file)) renamedImports(masked, report);
+
+  const receivers = callableHere(masked);
+  if (receivers) {
+    for (const call of scanCalls(code)) {
+      if (receivers.has(call.receiver)) check(call, report);
+    }
+  }
 
   if (suppressed > 0) {
     found.push({

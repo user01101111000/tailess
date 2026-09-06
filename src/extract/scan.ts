@@ -8,6 +8,15 @@ export interface RawCall {
   name: string;
   /** Raw source text of each top-level argument, trimmed. */
   args: string[];
+  /**
+   * What the call was reached through — `st` in `st.ss(...)` — or `""` for a bare call.
+   *
+   * Enumeration ignores it: a method call on anything might be a namespace import, and an
+   * extra candidate is free. The diagnostics cannot afford that reading, because `on`,
+   * `data`, `group`, `has` and `inside` are ordinary names in any codebase and
+   * `socket.on(...)` is not a tailess call.
+   */
+  receiver: string;
 }
 
 /**
@@ -169,6 +178,55 @@ function skipTrivia(text: string, i: number): number {
     i = j;
   }
   return i;
+}
+
+/**
+ * `code` with comment bodies and template contents blanked out, same length, every
+ * newline kept — so an index into the result is an index into the original.
+ *
+ * Everything that walks a file goes through the skip helpers above and so never reads a
+ * line *about* code as code. Two checks read for a shape rather than a call and cannot
+ * afford a full walk — whether a config wires the plugin in, and whether an import was
+ * renamed — and a plain regex over raw source gets both wrong in the same way: a
+ * commented-out line is the most likely leftover of the very edit they exist to catch.
+ *
+ * Plain strings keep their contents. A PostCSS config wires the plugin by naming it in
+ * one, and an import's module specifier is one, so blanking those would blind the
+ * callers to the thing they are looking for.
+ */
+export function maskLiterals(code: string): string {
+  const out = code.split("");
+  const blank = (from: number, to: number) => {
+    for (let k = Math.max(from, 0); k < to && k < code.length; k += 1) {
+      if (code[k] !== "\n" && code[k] !== "\r") out[k] = " ";
+    }
+  };
+
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    if (c === "'" || c === '"') {
+      const end = skipString(code, i, c);
+      i = end === -1 ? i + 1 : end;
+      continue;
+    }
+    if (c === "`") {
+      const end = skipTemplate(code, i);
+      blank(i + 1, end - 1);
+      i = end;
+      continue;
+    }
+    if (c === "/") {
+      const end = skipComment(code, i);
+      if (end !== i) {
+        blank(i, end);
+        i = end;
+        continue;
+      }
+    }
+    i += 1;
+  }
+  return out.join("");
 }
 
 /**
@@ -539,7 +597,7 @@ function calleeBefore(text: string, i: number): string {
  *   in an `ss` bucket the same object is a nested bucket map, and
  *   {@link parseObject} reads those keys as variants instead.
  */
-export function dictionaryKeys(text: string, bare: boolean): string[] {
+export function dictionaryKeys(text: string, bare: boolean, shorthand = true): string[] {
   const out: string[] = [];
   // `regions` counts enclosing class-value scopes, `foreign` enclosing calls that
   // are neither; a plain grouping paren is transparent to both.
@@ -568,7 +626,7 @@ export function dictionaryKeys(text: string, bare: boolean): string[] {
 
     if (c === "{") {
       const end = matchBrace(text, i);
-      if (foreign === 0 && (regions > 0 || bare)) collectKeys(text.slice(i, end), out);
+      if (foreign === 0 && (regions > 0 || bare)) collectKeys(text.slice(i, end), out, shorthand);
       i = end;
       continue;
     }
@@ -597,8 +655,16 @@ export function dictionaryKeys(text: string, bare: boolean): string[] {
   return out;
 }
 
-/** Push the statically-known keys of one `{ … }` group onto `out`. */
-function collectKeys(group: string, out: string[]): void {
+/**
+ * Push the statically-known keys of one `{ … }` group onto `out`.
+ *
+ * `shorthand` says whether `{ hidden }` counts. For enumeration it does — its key is also
+ * its value, so `hidden` really is a class the runtime can build. For deciding whether an
+ * object was *meant* as something else it does not: a destructuring parameter is written
+ * `({ open, dark }) =>` and is the commonest object literal in a React file, while the
+ * mistake being looked for always spells its entries out.
+ */
+function collectKeys(group: string, out: string[], shorthand = true): void {
   const close = group.lastIndexOf("}");
   const inner = close > 0 ? group.slice(1, close) : group.slice(1);
   for (const raw of splitArgs(inner)) {
@@ -606,9 +672,35 @@ function collectKeys(group: string, out: string[]): void {
     if (entry === "" || entry.startsWith("...")) continue;
     const colon = topLevelColon(entry);
     // No colon is shorthand — `{ hidden }` — whose key is also its value.
+    if (colon === -1 && !shorthand) continue;
     const key = normalizeKey(colon === -1 ? entry : entry.slice(0, colon).trim());
     if (key !== null) out.push(key);
   }
+}
+
+/** Leading whitespace and comments before a property's key. */
+const leadingTrivia = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
+/** `slots`, `slots:` or `"slots":` at the start of a property. */
+const slotsKey = /^(?:slots|["']slots["'])\s*(?::|$)/;
+
+/**
+ * True when the object literal `config` declares a `slots` property at all — including
+ * the shorthand `{ slots }`, which {@link parseObject} skips.
+ *
+ * `parseObject` answers what a key's *value* is, and rightly ignores a property whose
+ * value carries no readable class. One reading turns on whether the key is there at all:
+ * a recipe with slots has option values one level deeper, whether or not the map was
+ * written inline. Hoisted to a const, or built with a spread, the slot *names* are
+ * invisible while the recipe is still slotted — and answering "not slotted" there emitted
+ * `root:md:p-8`, a candidate matching no utility, in place of the `md:p-8` the runtime
+ * really builds.
+ */
+export function declaresSlots(config: string): boolean {
+  const t = config.trim();
+  if (!t.startsWith("{")) return false;
+  const close = t.lastIndexOf("}");
+  const inner = close > 0 ? t.slice(1, close) : t.slice(1);
+  return splitArgs(inner).some((raw) => slotsKey.test(raw.replace(leadingTrivia, "")));
 }
 
 /**
@@ -657,9 +749,26 @@ export function scanCalls(code: string): RawCall[] {
     if (name === undefined) continue;
     // The pattern ends at the `(`, so the match's last character is the paren.
     const open = match.index + match[0].length - 1;
-    calls.push({ name, args: splitArgs(readParen(code, open)) });
+    calls.push({
+      name,
+      args: splitArgs(readParen(code, open)),
+      receiver: receiverBefore(code, match.index),
+    });
   }
   return calls;
+}
+
+/** `foo` in `foo.ss(`, at the end of the text before the name. */
+const memberReceiver = /([A-Za-z_$][\w$]*)\s*\.\s*$/;
+
+/**
+ * The identifier a call was reached through, or `""` when it was called bare.
+ *
+ * The lookback is bounded: an identifier and a dot are a few characters, and this runs
+ * once per matched call across every file in the project.
+ */
+function receiverBefore(code: string, at: number): string {
+  return memberReceiver.exec(code.slice(Math.max(0, at - 80), at))?.[1] ?? "";
 }
 
 /**
@@ -684,7 +793,7 @@ export function outerCalls(code: string): RawCall[] {
     if (name === undefined) continue;
     const open = match.index + match[0].length - 1;
     const args = readParen(code, open);
-    calls.push({ name, args: splitArgs(args) });
+    calls.push({ name, args: splitArgs(args), receiver: receiverBefore(code, match.index) });
     // Resume past this call's own arguments; the recursion reaches what is inside
     // them through this call rather than beside it.
     outerCallPattern.lastIndex = Math.max(outerCallPattern.lastIndex, open + 1 + args.length);

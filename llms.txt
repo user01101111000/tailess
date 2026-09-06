@@ -52,8 +52,9 @@ finds the literal wherever it really lives.
 - `configure({ merge, onWarn, keys })`
 
 Nesting runs one way: a helper goes **inside** an `ss` bucket, never the reverse.
-`ss({ hover: on("hover", "underline") })` is right; `on("hover", { base: … })` builds
-the class `hover:base`.
+`ss({ md: on("hover", "underline") })` is right — `"md:hover:underline"`; the bucket key
+and the helper each add their own variant, so do not repeat one in the other.
+`on("hover", { base: … })` builds the class `hover:base`.
 
 ## Checking
 
@@ -62,8 +63,15 @@ npx tailess doctor   # is the plugin wired up at all?
 npx tailess check    # compile for real; exits 1 if a class has no rule
 ```
 
-The build plugin reports eleven things it can prove wrong from the source, including
-every shape listed above.
+The build plugin reports ten things it can prove wrong from the source. Of the shapes
+above it reports the variable, the interpolated template and the renamed import — and
+**not** the spread, the computed key or the computed prefix: for those the scanner
+enumerates nothing, so there is no candidate for `check` to compile and it exits 0. A
+green `tailess check` does not prove those three are styled. Do not write them.
+
+The checks only speak about a file that imports from `"tailess"`. Reach the helpers
+through your own re-export and the classes are still enumerated and still verified by
+`check`, but the source-level warnings go quiet.
 
 ## Docs
 

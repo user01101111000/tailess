@@ -30,6 +30,12 @@ Run `npx tailess check` after generating class-building code. It compiles the pr
 and exits 1 if a class has no CSS. `npx tailess doctor` answers whether the plugin is
 wired up at all.
 
+**A green `check` is not proof for three of the four shapes above.** It verifies the
+classes the scanner enumerated, and a spread, a computed key and a computed prefix
+enumerate nothing — so there is no candidate to fail and the gate exits 0 while the
+element is unstyled. The variable and the interpolated template *are* reported. Follow
+the rules; do not lean on the check to catch you.
+
 ## Working on this repository
 
 Read `CONTRIBUTING.md` first — in particular **The one invariant** and the

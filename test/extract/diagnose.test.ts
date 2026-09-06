@@ -10,7 +10,19 @@ import { diagnose } from "../../src/extract/diagnose.js";
  * So the silent half of this suite matters more than the loud half.
  */
 
-const kinds = (code: string): string[] => diagnose(code).map((d) => d.kind);
+/**
+ * The import line each of these snippets stands in for.
+ *
+ * The checks only speak about a file that imports the helpers: `on`, `data`, `group`,
+ * `has`, `inside` and `between` are ordinary identifiers, so without this a file that has
+ * never heard of the package would be told one of its classes is unstyled.
+ */
+const importsThem = `import { ss, cn, on, until, between, data, aria, withPrefix, supports, notSupports, group, peer, container, has, notHas, inside, nth, nthLast, variants } from "tailess";\n`;
+
+/** Diagnose `code` as the body of a file that imports the helpers. */
+const diag = (code: string, file?: string) => diagnose(importsThem + code, file);
+
+const kinds = (code: string): string[] => diag(code).map((d) => d.kind);
 
 describe("a class the merge always discards", () => {
   it("reports two conflicting utilities in one string", () => {
@@ -20,7 +32,7 @@ describe("a class the merge always discards", () => {
   });
 
   it("names the class that never arrives", () => {
-    const [first] = diagnose(`ss({ base: "p-4 p-2" })`);
+    const [first] = diag(`ss({ base: "p-4 p-2" })`);
     expect(first?.message).toContain('"p-4" never reaches the element');
     expect(first?.message).toContain('"p-2" replaces it');
   });
@@ -66,9 +78,7 @@ describe("a range no viewport can satisfy", () => {
   });
 
   it("suggests the order that would have worked", () => {
-    expect(diagnose(`between("lg", "sm", "block")`)[0]?.message).toContain(
-      'between("sm", "lg", …)',
-    );
+    expect(diag(`between("lg", "sm", "block")`)[0]?.message).toContain('between("sm", "lg", …)');
   });
 
   it("says nothing about a range that works", () => {
@@ -88,14 +98,12 @@ describe("a prefix that cannot form a class name", () => {
 
   it("reports whitespace in a prefix", () => {
     expect(kinds(`withPrefix("has-[data-x=a b]", "p-4")`)).toEqual(["spaced-prefix"]);
-    expect(diagnose(`withPrefix("has-[data-x=a b]", "p-4")`)[0]?.message).toContain(
-      "has-[data-x=a_b]",
-    );
+    expect(diag(`withPrefix("has-[data-x=a b]", "p-4")`)[0]?.message).toContain("has-[data-x=a_b]");
   });
 
   it("reports whitespace inside a data() variant", () => {
     expect(kinds(`data("state", "half open", "p-2")`)).toEqual(["spaced-prefix"]);
-    expect(diagnose(`data("state", "half open", "p-2")`)[0]?.message).toContain("half_open");
+    expect(diag(`data("state", "half open", "p-2")`)[0]?.message).toContain("half_open");
   });
 
   it("reports an empty entry in an on() array", () => {
@@ -132,6 +140,56 @@ describe("reporting", () => {
   });
 });
 
+/**
+ * Every one of these was a build failing on code that works. `on`, `data`, `group`,
+ * `has`, `inside`, `between` and `responsive` are among the most common identifiers in
+ * a JavaScript codebase, and enumeration deliberately matches them on any receiver and
+ * inside any string — which is right for candidates and wrong for warnings.
+ */
+describe("code that has nothing to do with tailess", () => {
+  it("says nothing about a file that never imports it", () => {
+    const presence = `import { useEffect, useState } from "react";
+import { socket } from "./socket";
+export function Presence() {
+  const [ui, setUi] = useState({ open: false, dark: false });
+  useEffect(() => {
+    socket.on("presence", ({ open, dark }) => setUi({ open, dark }));
+  }, []);
+  return <span>{ui.open ? "y" : "n"}</span>;
+}`;
+    expect(diagnose(presence, "src/Presence.tsx")).toEqual([]);
+
+    for (const code of [
+      `emitter.on("change", { first: true, last: false })`,
+      `form.on("submit", { disabled: isSubmitting })`,
+      `sel.data(rows, "key", { active: true })`,
+      `group(source, "key", { first: true })`,
+      `inside(point, { first: a, last: b })`,
+      `between(lo, hi, { base: 1 })`,
+    ]) {
+      expect(diagnose(code, "src/app.ts")).toEqual([]);
+    }
+  });
+
+  it("says nothing about a method call on something that is not tailess", () => {
+    // The file does import the package, which is the harder case: enumeration still
+    // reads `socket.on` as a call, and only the reporting has to know better.
+    expect(kinds(`socket.on("presence", { base: "x", md: "y" })`)).toEqual([]);
+    expect(kinds(`emitter.on("change", { first: true, last: false })`)).toEqual([]);
+  });
+
+  it("still reports a call through a namespace import, which really is ours", () => {
+    const code = `import * as tl from "tailess";\ntl.on("hover", { base: "underline" });`;
+    expect(diagnose(code, "src/app.ts").map((d) => d.kind)).toEqual(["bucket-as-dictionary"]);
+  });
+
+  it("does not read a destructuring parameter as a clsx dictionary", () => {
+    // `({ base, md }) => …` is a pattern, not an object handed to a helper.
+    expect(kinds(`on("hover", ({ base, md }) => render(base, md))`)).toEqual([]);
+    expect(kinds(`until("md", (({ base }) => base))`)).toEqual([]);
+  });
+});
+
 describe("a feature query the build cannot enumerate", () => {
   it("reports a query holding a character no class name can carry", () => {
     // The candidate list is written into a stylesheet, so these are dropped there
@@ -147,7 +205,7 @@ describe("a feature query the build cannot enumerate", () => {
   });
 
   it("names the helper and the query", () => {
-    const [first] = diagnose(`notSupports("display: grid;", "flex")`);
+    const [first] = diag(`notSupports("display: grid;", "flex")`);
     expect(first?.message).toContain("notSupports(");
     expect(first?.message).toContain("display: grid;");
   });
@@ -185,8 +243,8 @@ describe("a feature query the build cannot enumerate", () => {
   });
 
   it("names what each helper calls its value", () => {
-    expect(diagnose(`has("", "p-4")`)[0]?.message).toContain("empty selector");
-    expect(diagnose(`nth("", "p-4")`)[0]?.message).toContain("empty position");
+    expect(diag(`has("", "p-4")`)[0]?.message).toContain("empty selector");
+    expect(diag(`nth("", "p-4")`)[0]?.message).toContain("empty position");
   });
 
   it("says nothing about ordinary selectors and positions", () => {
@@ -210,14 +268,14 @@ describe("output stays readable", () => {
     // A generated file can hold one string with thousands of conflicting utilities.
     // Naming each would bury the build output and every other file's findings with it.
     const many = Array.from({ length: 5000 }, (_, i) => `p-${i}`).join(" ");
-    const found = diagnose(`ss({ base: "${many}" })`);
+    const found = diag(`ss({ base: "${many}" })`);
     expect(found.length).toBe(21);
     expect(found.at(-1)?.message).toMatch(/^and \d+ more problems in this file/);
   });
 
   it("does not cap a file with an ordinary number of problems", () => {
     const code = `between("lg", "sm", "a");\nss({ base: "p-4 p-2" });`;
-    const found = diagnose(code);
+    const found = diag(code);
     expect(found).toHaveLength(2);
     expect(found.some((d) => d.message.startsWith("and "))).toBe(false);
   });
@@ -227,7 +285,7 @@ describe("a helper imported under another name", () => {
   it("reports it, because the scanner finds calls by identifier", () => {
     // One line that removes every class in the file from the candidate list, while the
     // file compiles, type-checks and renders the right class attribute.
-    const [first, ...rest] = diagnose(`import { ss as tw } from "tailess";\ntw({ md: "p-4" });`);
+    const [first, ...rest] = diag(`import { ss as tw } from "tailess";\ntw({ md: "p-4" });`);
     expect(rest).toEqual([]);
     expect(first?.kind).toBe("renamed-import");
     expect(first?.message).toContain("ss()");
@@ -235,7 +293,7 @@ describe("a helper imported under another name", () => {
   });
 
   it("reports each renamed helper in a multi-specifier import", () => {
-    const kinds = diagnose(`import { cn, ss as tw, on as when, has } from "tailess";`).map(
+    const kinds = diag(`import { cn, ss as tw, on as when, has } from "tailess";`).map(
       (d) => d.kind,
     );
     expect(kinds).toEqual(["renamed-import", "renamed-import"]);
@@ -271,6 +329,25 @@ describe("where an import statement is prose rather than code", () => {
     expect(diagnose(code, "page.html")).toEqual([]);
   });
 
+  it("says nothing about an import that is commented out or quoted", () => {
+    // A commented-out line is the everyday shape, and this check asserts the strongest
+    // failure the package reports — in the same output that says every class has CSS.
+    const commented = `import { ss, cn } from "tailess";
+// import { ss as tw } from "tailess";
+export const cls = ss({ base: "flex", md: "p-6" });`;
+    expect(diagnose(commented, "src/Card.tsx")).toEqual([]);
+
+    const quoted = `import { ss } from "tailess";
+const sample = \`import { ss as tw } from "tailess";\`;
+export const cls = ss({ base: "flex" });`;
+    expect(diagnose(quoted, "src/Docs.tsx")).toEqual([]);
+
+    const inString = `import { ss } from "tailess";
+const sample = 'import { ss as tw } from "tailess";';
+export const cls = ss({ base: "flex" });`;
+    expect(diagnose(inString, "src/Docs.tsx")).toEqual([]);
+  });
+
   it("still reports it in a file whose imports run", () => {
     const code = `import { ss as tw } from "tailess";`;
     expect(diagnose(code, "src/App.tsx").map((d) => d.kind)).toEqual(["renamed-import"]);
@@ -280,11 +357,14 @@ describe("where an import statement is prose rather than code", () => {
     expect(diagnose(code).map((d) => d.kind)).toEqual(["renamed-import"]);
   });
 
-  it("still reports everything else in a Markdown file", () => {
-    // Only the import check is gated; a class written in a fenced block is still a class.
-    expect(diagnose(`ss({ base: "p-4 p-2" })`, "docs/guide.md").map((d) => d.kind)).toEqual([
+  it("still reports everything else in a Markdown file that imports the helpers", () => {
+    // Only the import check is gated by the extension; a class written in a fence whose
+    // sample imports tailess is still a class.
+    expect(diag(`ss({ base: "p-4 p-2" })`, "docs/guide.md").map((d) => d.kind)).toEqual([
       "dead-class",
     ]);
+    // Without that import there is nothing saying the call is ours, so it stays quiet.
+    expect(diagnose(`ss({ base: "p-4 p-2" })`, "docs/guide.md")).toEqual([]);
   });
 });
 
@@ -293,7 +373,7 @@ describe("an ss map handed to a helper that takes a flat class value", () => {
     // Composition runs one way: a helper nests *inside* an `ss` bucket. The other way
     // round, the object is a clsx dictionary and `on("hover", { base: "underline" })`
     // builds "hover:base" — silently, and only where a cast let it past the types.
-    const [first] = diagnose(`on("hover", { base: "underline", md: "font-bold" })`);
+    const [first] = diag(`on("hover", { base: "underline", md: "font-bold" })`);
     expect(first?.kind).toBe("bucket-as-dictionary");
     expect(first?.message).toContain("ss({ base: on(…) })");
     expect(kinds(`until("md", { base: "hidden" })`)).toEqual(["bucket-as-dictionary"]);
@@ -327,7 +407,7 @@ describe("a bucket the scanner cannot read", () => {
   });
 
   it("names the value and the way out", () => {
-    const [first] = diagnose(`ss({ md: size })`);
+    const [first] = diag(`ss({ md: size })`);
     expect(first?.message).toContain('"md" bucket is set to `size`');
     expect(first?.message).toContain("match(size, { … })");
     expect(first?.message).toContain("vars()");

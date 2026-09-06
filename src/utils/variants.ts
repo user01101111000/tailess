@@ -1,4 +1,6 @@
+import { isDev } from "../internal/env.js";
 import { ownOr } from "../internal/lookup.js";
+import { firstTime, warn } from "../internal/settings.js";
 import type { SsArg } from "../types.js";
 import { ss } from "./ss.js";
 
@@ -42,6 +44,13 @@ type AnyGroups = Record<string, Record<string, unknown>>;
 type AnyRecipe = { readonly variants: AnyGroups };
 /** Any built recipe with parts. The `slots` key is what keeps the two overloads apart. */
 type AnySlottedRecipe = AnyRecipe & { readonly slots: SlotDefaults };
+/**
+ * A recipe a flat config may build on: the same key, required absent.
+ *
+ * `AnyRecipe` alone is satisfied by a slotted component, which is how a flat recipe came
+ * to compile as returning `string` while returning an object of parts.
+ */
+type FlatRecipe = AnyRecipe & { slots?: never };
 
 /**
  * What one variant group accepts as a prop.
@@ -52,10 +61,27 @@ type AnySlottedRecipe = AnyRecipe & { readonly slots: SlotDefaults };
  * `<Button disabled={isDisabled}>` and forward the prop it already has. The string
  * spellings stay accepted, because the option keys really are `"true"` and `"false"` and
  * refusing them would break code written against them.
+ *
+ * The `never` case is guarded first because it is not a boolean variant at all. Numeric
+ * option keys — `{ cols: { 1: …, 2: … } }`, a gap or elevation scale — leave
+ * `keyof O & string` empty, and `never extends "true" | "false"` is *true*, so such a
+ * group used to be typed boolean: every value the types accepted did nothing, and `2`,
+ * the one that worked, was a compile error.
  */
-type Option<O> = keyof O & string extends "true" | "false"
-  ? boolean | (keyof O & string)
-  : keyof O & string;
+/**
+ * One option name, in both spellings that select it.
+ *
+ * A numeric key is `2` in the group and `"2"` as a property name, and the runtime looks
+ * up the string — so both select it, exactly as `true` and `"true"` both do for a boolean
+ * variant, and for the same reason: the key really is the string.
+ */
+type NameOf<K> = K extends number ? K | `${K}` : K;
+type Names<O> = NameOf<keyof O & (string | number)>;
+type Option<O> = [keyof O & string] extends [never]
+  ? Names<O>
+  : keyof O & string extends "true" | "false"
+    ? boolean | (keyof O & string)
+    : Names<O>;
 
 /**
  * One optional key per variant, whose value is one of that variant's own options.
@@ -128,8 +154,13 @@ export interface VariantsConfig<V extends VariantGroups> {
    * A recipe to build on. Its base, variants, compounds and defaults come first, and
    * anything declared here wins — per option, not per group, so adding one `tone` does
    * not drop the ones inherited.
+   *
+   * A *slotted* recipe is not one of these. Extending one from a flat config switches
+   * what the built component returns — an object of parts, where the declared type still
+   * says `string` — and drops every class the child declares, because a flat option value
+   * has no part to spread into. Declare `slots` here too and the slotted overload applies.
    */
-  extend?: AnyRecipe;
+  extend?: FlatRecipe;
 }
 
 /** What {@link variants} is given when the component has named parts. */
@@ -176,7 +207,33 @@ export interface SlottedComponent<V extends AnyGroups, S extends SlotDefaults> {
  */
 function optionKey(value: unknown): string | undefined {
   if (typeof value === "boolean") return String(value);
+  // A numeric option key is spelled `2` at the call site and `"2"` in the group, so the
+  // number has to become the string too. `NaN` and the infinities name no key and are
+  // left to fall through to the default, which is what they did before.
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
   return typeof value === "string" ? value : undefined;
+}
+
+/** Slot sets already reported, so a recipe built in a render loop warns once. */
+const warnedFlatExtends = new Set<string>();
+
+/**
+ * Warn that a flat recipe extended a slotted one, and what was dropped.
+ *
+ * Only reachable through a cast or an untyped boundary — {@link FlatRecipe} refuses it —
+ * but that is exactly where it was silent before: the built component returned an object
+ * of parts while its type said `string`, so React rendered `class="[object Object]"` and
+ * `.split()` on the value threw.
+ */
+function warnFlatExtendsSlotted(slots: string[]): void {
+  const named = slots.join(", ");
+  if (!firstTime(warnedFlatExtends, named)) return;
+  warn(
+    `variants(): this recipe extends a slotted one (${named}) but declares no slots of ` +
+      `its own, so there is nothing to spread the inherited parts into. The parent's slot ` +
+      `classes are ignored and this stays a flat component. Declare slots here too, or ` +
+      `extend a recipe without them.`,
+  );
 }
 
 /** True when a compound rule's requirement — one option, or a list — is satisfied. */
@@ -194,14 +251,30 @@ interface Resolved {
   variants: Record<string, Record<string, unknown>>;
   compound: ReadonlyArray<Record<string, unknown>>;
   defaults: Record<string, unknown>;
+  /** Slot names on an ancestor a flat recipe could not inherit; see {@link resolve}. */
+  skippedSlots?: string[];
 }
 
-/** Read a config down to one shape, following `extend` first so the child overrides. */
-function resolve(config: Record<string, unknown>): Resolved {
+/**
+ * Read a config down to one shape, following `extend` first so the child overrides.
+ *
+ * `wantSlots` is whether the recipe being built has slots of its own, and it decides
+ * where the chain stops. A flat recipe cannot inherit from a slotted one: its options are
+ * flat class values with no part to spread into, so following that parent hands back an
+ * object of parts where the caller declared a `string` — React renders
+ * `class="[object Object]"` — and spreads the parent's option values by their slot names,
+ * emitting `root:p-2` and other prefixes that match no utility. {@link FlatRecipe} refuses
+ * the shape at compile time; this is what happens when a cast gets it through anyway.
+ */
+function resolve(config: Record<string, unknown>, wantSlots: boolean): Resolved {
   const parent = config.extend as { config?: Record<string, unknown> } | undefined;
-  const from: Resolved = parent?.config
-    ? resolve(parent.config)
-    : { base: [], variants: {}, compound: [], defaults: {} };
+  const parentConfig = parent?.config;
+  const parentSlots = parentConfig?.slots as Record<string, SsArg> | undefined;
+  const skipped = !wantSlots && parentSlots !== undefined ? Object.keys(parentSlots) : undefined;
+  const from: Resolved =
+    parentConfig && !skipped
+      ? resolve(parentConfig, wantSlots)
+      : { base: [], variants: {}, compound: [], defaults: {} };
 
   const own = config.variants as Record<string, Record<string, unknown>>;
   // Merged per *option*, not per group: a child adding one `tone` must not drop the
@@ -217,12 +290,14 @@ function resolve(config: Record<string, unknown>): Resolved {
   >;
   const ownDefaults = (config.defaults ?? config.defaultVariants ?? {}) as Record<string, unknown>;
 
+  const inherited = skipped ?? from.skippedSlots;
   return {
     base: [...from.base, config.base as SsArg],
     ...(slots || from.slots ? { slots: mergeSlots(from.slots, slots) } : {}),
     variants: merged,
     compound: [...from.compound, ...ownCompound],
     defaults: { ...from.defaults, ...ownDefaults },
+    ...(inherited ? { skippedSlots: inherited } : {}),
   };
 }
 
@@ -341,7 +416,8 @@ export function variants(first: any, second?: any): any {
   // `cva`'s shape: base classes first, config second. A config object always has
   // `variants`; a base value never does, so the two cannot be confused.
   const config = second === undefined ? first : { ...second, base: first };
-  const resolved = resolve(config);
+  const resolved = resolve(config, config.slots !== undefined);
+  if (isDev && resolved.skippedSlots) warnFlatExtendsSlotted(resolved.skippedSlots);
   const groups = resolved.variants;
   const names = Object.keys(groups);
   const slots = resolved.slots;

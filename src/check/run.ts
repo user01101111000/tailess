@@ -45,6 +45,39 @@ export interface Options {
 const listOptions = new Set(["--content", "--extensions", "--ignore"]);
 const pathOptions = new Set(["--css", "--out"]);
 
+/** The subcommands, in one place: `parse` reads them, and so does the crash handler. */
+const commands = ["check", "emit", "init", "doctor"] as const;
+
+/**
+ * The subcommand `argv` names, or `check` — which a bare `tailess …` means.
+ *
+ * Exported because the binary's catch has to name the command in its JSON without having
+ * got as far as a parsed {@link Options}: the throw it is catching may have come from
+ * `parse` itself.
+ */
+export function commandIn(argv: readonly string[]): Options["command"] {
+  const first = argv[0];
+  return (commands as readonly string[]).includes(first ?? "")
+    ? (first as Options["command"])
+    : "check";
+}
+
+/**
+ * The JSON form of a result.
+ *
+ * One shape for every exit path of every command. `--json` is documented as "one JSON
+ * object instead of prose", and the exit-code table calls `2` the one worth wiring an
+ * alert to — so a path that answers with prose, or with nothing, hands the job that
+ * followed that advice a parse error instead of a finding.
+ */
+export function jsonResult(
+  command: Options["command"],
+  code: number,
+  body: Record<string, unknown>,
+): string {
+  return JSON.stringify({ tailess: 1, command, ok: code === 0, code, ...body });
+}
+
 export function parse(argv: readonly string[]): Options | "help" | "version" {
   const content: string[] = [];
   const extensions: string[] = [];
@@ -59,8 +92,8 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
   // other command, so the subcommand is read here rather than in the binary.
   let command: Options["command"] = "check";
   let rest = argv;
-  if (rest[0] === "check" || rest[0] === "emit" || rest[0] === "init" || rest[0] === "doctor") {
-    command = rest[0];
+  if ((commands as readonly string[]).includes(rest[0] ?? "")) {
+    command = rest[0] as Options["command"];
     rest = rest.slice(1);
   }
 
@@ -362,6 +395,12 @@ async function runEmit(options: Options): Promise<number> {
   });
 
   if (files.length === 0) {
+    // `check` answers this same condition in JSON; answering it in prose here left the
+    // two commands' contracts disagreeing on the one exit code a CI job watches.
+    if (options.json) {
+      console.log(jsonResult("emit", 2, { error: "no-files", roots: shown(roots, options.cwd) }));
+      return 2;
+    }
     console.error(
       `[tailess] scanned no files, so there is nothing to emit. Looked in: ${roots.join(", ")}.`,
     );
@@ -372,11 +411,7 @@ async function runEmit(options: Options): Promise<number> {
   // rather than at the stylesheet it wrapped them in. The documented way to answer
   // "did it see my class?" was reading escaped selectors out of the built CSS.
   if (options.json) {
-    const body = JSON.stringify({
-      tailess: 1,
-      command: "emit",
-      ok: true,
-      code: 0,
+    const body = jsonResult("emit", 0, {
       files: files.length,
       classes: classes.map((cls) => ({
         class: cls,
@@ -426,9 +461,7 @@ async function runCheck(options: Options): Promise<number> {
   };
   /** Print the JSON form, if that is what was asked for, and hand back the exit code. */
   const finish = (code: number, body: Record<string, unknown>): number => {
-    if (quiet) {
-      console.log(JSON.stringify({ tailess: 1, command: "check", ok: code === 0, code, ...body }));
-    }
+    if (quiet) console.log(jsonResult("check", code, body));
     return code;
   };
 

@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parse, run, version } from "../../src/check/run.js";
+import { commandIn, jsonResult, parse, run, version } from "../../src/check/run.js";
 import { clearCache } from "../../src/extract/collect.js";
 import { clearReported } from "../../src/integration/report.js";
 
@@ -186,7 +186,10 @@ describe("the check itself", () => {
     // These are exactly the failures compiling cannot find: the candidate carrying an
     // unusable value is dropped from the list before it ever reaches Tailwind, so no
     // amount of comparing generated CSS can notice it.
-    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" });\nhas('input[type="x"]', "p-2");`);
+    await writeFile(
+      join(dir, "a.tsx"),
+      `import { ss, has } from "tailess";\nss({ md: "p-4" });\nhas('input[type="x"]', "p-2");`,
+    );
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
     const { code, output } = await check();
     expect(output).toContain("cannot appear in a class name");
@@ -195,7 +198,10 @@ describe("the check itself", () => {
   });
 
   it("makes those diagnostics fail the gate under --strict", async () => {
-    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" });\nss({ base: "p-4 p-2" });`);
+    await writeFile(
+      join(dir, "a.tsx"),
+      `import { ss } from "tailess";\nss({ md: "p-4" });\nss({ base: "p-4 p-2" });`,
+    );
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
     const { code, output } = await check({ strict: true });
     // Every class here does have CSS — the gate fails on the diagnostic alone.
@@ -313,7 +319,10 @@ describe("the check itself", () => {
   });
 
   it("prints one JSON object under --json, and nothing else", async () => {
-    await writeFile(join(dir, "Card.tsx"), `ss({ md: "p-4" });\nss({ base: "p-4 p-2" });`);
+    await writeFile(
+      join(dir, "Card.tsx"),
+      `import { ss } from "tailess";\nss({ md: "p-4" });\nss({ base: "p-4 p-2" });`,
+    );
     await writeFile(
       join(dir, "a.css"),
       `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
@@ -549,5 +558,62 @@ describe("tailess emit --json", () => {
       { class: "hover:underline", files: ["Row.tsx"] },
       { class: "md:p-4", files: ["Card.tsx", "Row.tsx"] },
     ]);
+  });
+
+  it("answers in JSON when there is nothing to emit, as check does", async () => {
+    // `--json` is documented as "one JSON object instead of prose", and the exit-code
+    // table calls 2 the one worth an alert. This path printed prose, so a job doing
+    // `tailess emit --json | jq -e .ok` got a parse error on the very condition it was
+    // watching for — while `check --json` answered the identical condition in JSON.
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void out.push(String(m)));
+    const empty = join(dir, "empty");
+    await mkdir(empty, { recursive: true });
+    const code = await run({
+      command: "emit",
+      content: [empty],
+      css: undefined,
+      cwd: dir,
+      strict: false,
+      extensions: [],
+      ignore: [],
+      json: true,
+      max: 20,
+      out: undefined,
+      write: false,
+    });
+    expect(code).toBe(2);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({
+      tailess: 1,
+      command: "emit",
+      ok: false,
+      code: 2,
+      error: "no-files",
+    });
+  });
+});
+
+describe("the JSON contract, on the paths that throw", () => {
+  it("names the command from argv, without a parsed config to read it from", () => {
+    // The binary's catch has to fill this in after a throw that may have come from
+    // `parse` itself, so it reads argv rather than options.
+    expect(commandIn(["emit", "--json"])).toBe("emit");
+    expect(commandIn(["doctor"])).toBe("doctor");
+    expect(commandIn(["--content", "src"])).toBe("check");
+    expect(commandIn([])).toBe("check");
+    expect(commandIn(["nonsense"])).toBe("check");
+  });
+
+  it("has one shape, whatever produced it", () => {
+    expect(JSON.parse(jsonResult("check", 2, { error: "crashed", message: "boom" }))).toEqual({
+      tailess: 1,
+      command: "check",
+      ok: false,
+      code: 2,
+      error: "crashed",
+      message: "boom",
+    });
+    expect(JSON.parse(jsonResult("emit", 0, { files: 3 }))).toMatchObject({ ok: true, code: 0 });
   });
 });

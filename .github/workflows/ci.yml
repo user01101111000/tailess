@@ -148,6 +148,16 @@ jobs:
           grep -q "@source inline" /tmp/tailess.css || { echo "::error::emit wrote no @source"; exit 1; }
           node dist/cli.js --version | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'
 
+          # `--json` is documented as one JSON object instead of prose, and exit 2 as the
+          # code worth an alert — so the paths that exit 2 are exactly the ones a job
+          # parsing stdout depends on. The catch in `cli.ts` knew nothing about --json and
+          # printed the help text to stderr instead, which reads as a broken pipeline.
+          for args in "check --json --css src/does-not-exist.css" "emit --json --content src/nope" "check --json --bogus"; do
+            out=$(node dist/cli.js $args 2>/dev/null)
+            echo "$out" | node -e 'process.stdin.on("data",d=>{const o=JSON.parse(d.toString());if(o.ok!==false||o.code!==2)throw new Error("wrong body: "+d)})' \
+              || { echo "::error::\`$args\` did not print one JSON object with ok:false"; exit 1; }
+          done
+
   example:
     # The only place a real Vite build runs. Everything else calls the plugin's hooks
     # directly, which cannot catch a plugin that is shaped wrong for the host — and the

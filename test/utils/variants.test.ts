@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { type VariantProps, variants } from "../../src/utils/variants.js";
+import { type VariantComponent, type VariantProps, variants } from "../../src/utils/variants.js";
 
 /**
  * A `cva`-shaped recipe, with the one difference that makes it worth having here:
@@ -348,6 +348,104 @@ describe("extend — building on another recipe", () => {
     // The inherited option still works, and the inherited slot keeps its classes.
     expect(wide({ size: "sm" }).root).toBe("rounded border p-2");
   });
+
+  it("refuses to build a flat recipe on a slotted one", () => {
+    // The types say `string` for a flat recipe, so following a slotted parent would hand
+    // back an object of parts — `class="[object Object]"` — and spread its options by
+    // slot name, emitting `root:p-2`, a candidate matching no utility. The child's own
+    // classes were dropped entirely, since a flat value has no part to spread into.
+    const card = variants({
+      slots: { root: "rounded", title: "font-bold" },
+      variants: { size: { sm: { root: "p-2" }, lg: { root: "p-4" } } },
+      defaults: { size: "sm" },
+    });
+    // @ts-expect-error a slotted recipe is not something a flat config may extend.
+    const flat = variants({ base: "flex", variants: { tone: { a: "bg-red-500" } }, extend: card });
+
+    const built = flat({ tone: "a" });
+    expect(typeof built).toBe("string");
+    expect(built).toBe("flex bg-red-500");
+    expect(built).not.toContain("root:");
+  });
+
+  it("still stops at a slotted ancestor further up the chain", () => {
+    const card = variants({
+      slots: { root: "rounded" },
+      variants: { size: { sm: { root: "p-2" } } },
+    });
+    const middle = variants({
+      base: "flex",
+      variants: { tone: { a: "text-red-500" } },
+      // Through a cast, which is the only way this shape exists at all — and the reason
+      // the runtime has to stop at the boundary rather than trust the declared type.
+      extend: card as unknown as VariantComponent<{ tone: { a: string } }>,
+    });
+    const leaf = variants({
+      base: "gap-2",
+      variants: { edge: { hard: "rounded-none" } },
+      extend: middle,
+    });
+
+    // `middle`'s own base and variants are inherited normally — only the slotted
+    // grandparent is dropped, and nothing turns into a `root:` prefix on the way down.
+    expect(leaf({ edge: "hard", tone: "a" })).toBe("flex gap-2 text-red-500 rounded-none");
+    expect(leaf({ edge: "hard" })).not.toContain("root:");
+    expect(typeof leaf({ edge: "hard" })).toBe("string");
+  });
+});
+
+describe("a variant whose options are numbered", () => {
+  /**
+   * `{ cols: { 1: …, 2: … } }` is an ordinary recipe — a column count, a gap or an
+   * elevation scale. Numeric keys leave `keyof O & string` empty, and `never` extends
+   * `"true" | "false"`, so the group was classified boolean: every value the types
+   * accepted did nothing, and `2` — the one that worked — was a compile error.
+   */
+  const grid = variants({
+    base: "grid",
+    variants: { cols: { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3" } },
+  });
+
+  it("takes the number the option is keyed by", () => {
+    expect(grid({ cols: 2 })).toBe("grid grid-cols-2");
+    expect(grid({ cols: 1 })).toBe("grid grid-cols-1");
+  });
+
+  it("takes the string spelling too, since that is the key itself", () => {
+    // Both spellings, exactly as a boolean variant takes `true` and `"true"`.
+    expect(grid({ cols: "2" })).toBe("grid grid-cols-2");
+  });
+
+  it("is not a boolean variant", () => {
+    // @ts-expect-error `cols` names three options, none of them true or false.
+    expect(grid({ cols: true })).toBe("grid");
+    expectTypeOf<VariantProps<typeof grid>>().toEqualTypeOf<{
+      cols?: 1 | "1" | 2 | "2" | 3 | "3" | undefined;
+    }>();
+  });
+
+  it("treats a number exactly as it treats the string spelling of it", () => {
+    const withDefault = variants({
+      base: "grid",
+      variants: { cols: { 1: "grid-cols-1", 2: "grid-cols-2" } },
+      defaults: { cols: 1 },
+    });
+    // A value that names no key still names *something*, so it replaces the default and
+    // contributes nothing — which is what a string that names no option already did.
+    expect(withDefault({ cols: 9 as unknown as 2 })).toBe("grid");
+    expect(withDefault({ cols: "9" as unknown as 2 })).toBe("grid");
+    // `NaN` and the infinities name nothing at all, so the default stands.
+    expect(withDefault({ cols: Number.NaN as unknown as 2 })).toBe("grid grid-cols-1");
+    expect(withDefault({ cols: Number.POSITIVE_INFINITY as unknown as 2 })).toBe(
+      "grid grid-cols-1",
+    );
+  });
+
+  it("does not turn an empty group into a boolean one", () => {
+    const future = variants({ base: "b", variants: { future: {} } });
+    // @ts-expect-error the group offers nothing, so nothing selects it.
+    expect(future({ future: true })).toBe("b");
+  });
 });
 
 describe("what the scanner has to agree with", () => {
@@ -368,6 +466,46 @@ describe("what the scanner has to agree with", () => {
       "hover:underline",
       "md:p-8",
     ]);
+  });
+
+  it("still reads a slotted recipe whose slot names are not written inline", async () => {
+    // A recipe is slotted because it has a `slots` field, not because the scanner could
+    // read the names out of it. Hoisted to a const or built with a spread, the names are
+    // invisible while the option values are still one level deep — and reading those as
+    // a flat `ss` map emitted `root:md:p-8`, junk matching no utility, in place of the
+    // `md:p-8` the runtime does build.
+    const { extractClasses } = await import("../../src/extract/extract.js");
+
+    const hoisted = `const slots = { root: "rounded", title: "font-semibold" };
+    variants({
+      slots,
+      variants: { size: { lg: { root: { md: "p-8" }, title: { md: "text-xl" } } } },
+    })`;
+    expect(extractClasses(hoisted)).toEqual(["md:p-8", "md:text-xl"]);
+
+    const spread = `variants({
+      slots: { ...shared, title: "font-semibold" },
+      variants: { size: { lg: { root: { lg: "p-9" }, title: { lg: "text-2xl" } } } },
+    })`;
+    expect(extractClasses(spread)).toEqual(["lg:p-9", "lg:text-2xl"]);
+
+    // A quoted key is the same declaration.
+    const quoted = `variants({
+      "slots": slotMap,
+      variants: { size: { lg: { root: { md: "p-7" } } } },
+    })`;
+    expect(extractClasses(quoted)).toEqual(["md:p-7"]);
+  });
+
+  it("still reads a flat recipe's option values as class values", async () => {
+    // The other half of the same decision: no `slots` field means the option value is a
+    // class value, and descending into it would lose the map it really is.
+    const { extractClasses } = await import("../../src/extract/extract.js");
+    const flat = `variants({
+      base: "rounded",
+      variants: { size: { lg: { md: "p-8", hover: "shadow" } } },
+    })`;
+    expect(extractClasses(flat)).toEqual(["hover:shadow", "md:p-8"]);
   });
 
   it("reads the cva spellings the same as the tailess ones", async () => {
