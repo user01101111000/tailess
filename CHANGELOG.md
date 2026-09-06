@@ -1,5 +1,509 @@
 # tailess
 
+## 0.12.0
+
+### Minor Changes
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`24a7d88`](https://github.com/user01101111000/tailess/commit/24a7d88ddd1e76075a3d422f497a3062687520ba) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess emit`, a gate you can point at your build, and an app that proves both.
+
+  **`tailess emit` writes the stylesheet the plugins inject.** It unlocks two things that
+  were simply not possible before.
+
+  The first is every host that compiles Tailwind without a PostCSS chain — Tailwind's own
+  CLI, Rspack's native pipeline, Bun's bundler, the standalone binary. They were unsupported
+  with no escape hatch. Now they run one command and `@import` the result:
+
+  ```bash
+  npx tailess emit --content src --out src/tailess.css
+  ```
+
+  The second is publishing a component library. A consumer's scan skips `node_modules`, and
+  pointed at your package it would be reading a bundled `dist` where the helper names are
+  gone — so shipping components built on tailess did not work. Enumerate the classes at your
+  build time and ship the file instead; your consumer adds one `@import` and needs neither
+  the plugin nor a scan of your source. Verified end to end: a project with **no tailess
+  plugin in the pipeline at all** gets CSS for every class, `md:p-4` and
+  `has-[>_img]:p-0` included.
+
+  **The gate can be made to agree with the build.** `tailess check` took only `--content`
+  and `--css`, so a project that narrowed `extensions` or `ignore` had a plugin enumerating
+  one set of files and a gate reading another — wrong in both directions, and silently. It
+  now takes `--extensions` and `--ignore` too, both repeatable and comma-separated.
+
+  **Every finding names its file.** The report was a list of class names, and the documented
+  way to locate one was grepping escaped selectors in the built CSS by hand. `--json` gives
+  a CI job the same thing as one object, `--max` controls the cap (`0` lists everything —
+  on a `@theme` that moved a breakpoint the list _is_ the project), and `--version` exists.
+
+  **A real app, in `examples/vite-react`.** Vite, React, every helper, every class built at
+  runtime. Two things about it matter more than being a demo. It is the only place a real
+  Vite build runs anywhere in this repo — everything else calls the plugin's hooks directly,
+  which cannot catch a plugin shaped wrong for its host. And CI asserts the _negative_:
+  after removing `tailess()` from the config, the build still succeeds and the page still
+  renders the right `class` attributes, so the gate is what has to go red. If it does not,
+  the job fails.
+
+  **CONTRIBUTING.md described a source tree that does not exist.** It documented
+  `src/config/` with a `defineConfig`, `src/core/` with a `createTailess` factory, and a
+  matching `test/core/` — none of which are real, over half the package unmentioned, and
+  two package facts wrong besides (`clsx` has not been a dependency since it was vendored,
+  and `sideEffects` is not `false`). It now describes the actual tree, states the invariant
+  the whole package turns on, and carries the checklist a helper actually needs: miss the
+  scanner's name list and everything is green while every class it builds is unstyled.
+
+  **An editor section, and a `.vscode/settings.json` to copy.** Moving a `className` into
+  `ss({ … })` turns off Tailwind IntelliSense — no completion, no colour swatches, no hover,
+  and no unknown-class warning, which was the only thing catching a typo _inside_ a class
+  string. `tailwindCSS.classFunctions` turns it back on, and unlike the prettier list it is
+  safe to give every helper: the extension reads, it never rewrites.
+
+  **A migration table for cva and tailwind-variants**, which `variants()` is meant to
+  replace and which the docs did not name once. Three renamed keys, what you gain, what is
+  deliberately absent (`twMergeConfig`, and responsive variant selection at the call site),
+  and the one difference that will
+  bite: a boolean variant is keyed by the strings `"true"`/`"false"`, where cva and tv give
+  you a `boolean`.
+
+  One fix that came out of building the example: the `renamed-import` diagnostic fired on
+  Markdown, because the scanner reads `.md` for classes and this example README documents
+  `import { ss as tw }` as the thing not to do. An import statement in Markdown or HTML is
+  prose; `.mdx` is deliberately excluded from that, since its imports really do run. And the
+  "is the plugin wired up" check now requires the plugin to be _called_ — a leftover import
+  after a deleted `tailess()` is exactly the case it exists to catch, and reading for the
+  word alone called that wired.
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`2bd055b`](https://github.com/user01101111000/tailess/commit/2bd055b95237ad7fbfd94aa3262bf3372b153544) Thanks [@user01101111000](https://github.com/user01101111000)! - Close the gaps that let a broken build pass — and the one that broke a working one.
+
+  `tailess check` shipped as a CI gate that could not fail on the failures that matter
+  most, and the plugins had no way to make a proven-wrong class stop a build at all. Both
+  are fixed here, along with a Tailwind option that silently unstyles every page.
+
+  **A Tailwind `prefix(…)` is now detected instead of silently unstyling everything.**
+  `@import "tailwindcss" prefix(tw)` makes the working class `tw:hover:underline`; tailess
+  builds `hover:underline`, for which Tailwind generates no rule at all. Nothing reported
+  it: the plugin ran, the marker was written, the integration check passed, and not one
+  runtime-built class on the page had CSS. Both plugins now report it as the total failure
+  it is, and `tailess check` names it and exits `2` rather than listing every class in the
+  project as broken under a heading blaming a moved breakpoint.
+
+  **A helper imported under another name is now a build-time diagnostic.** The scanner
+  finds calls by identifier, so `import { ss as tw } from "tailess"` is a single line that
+  removes every class in that file from the candidate list — while the file compiles,
+  type-checks, and renders exactly the `class` attribute that was written. It was the
+  widest silent failure left and the only one provable from the import statement alone.
+  Renaming `cn` or `match` still costs nothing, because the scanner never looks for them.
+
+  **`tailess check` exits `2` when it scanned nothing.** A mistyped `--content`, a task
+  runner in the wrong directory, or a glob where a directory was expected all used to print
+  a cheerful line and exit `0` forever after — a gate that had silently stopped gating, and
+  in CI indistinguishable from a passing one. A scan that finds real files but no tailess
+  calls still exits `0`, and now says how many files it read, so the two are distinguishable
+  in a log. The exit codes are documented.
+
+  **`tailess check` reports the build-time diagnostics it already computed.** It collected
+  them on the way past and dropped them, which was exactly backwards: they are the failures
+  compiling _cannot_ find, since a class carrying an unusable value never reaches Tailwind
+  to be found missing. They print by default; `--strict` makes them fail the gate too.
+
+  **`tailess check` says when no build config mentions tailess.** The plugin not being wired
+  up is the first failure the troubleshooting section lists and the one that unstyles an
+  entire application — and the check could not see it, because it scans your source itself
+  rather than reading what your build produced. A project with the plugin deleted passed
+  green. It is a heuristic, so it warns by default and fails only under `--strict`.
+
+  **Both plugins take a `diagnostics` option** — `"warn"` (the default), `"error"` or
+  `"off"`. Everything the scanner can prove wrong used to be `console.warn` and nothing
+  else, so an unstyled build passed CI by design. `"error"` prints the whole list and then
+  fails, which is what a CI build wants; `"off"` exists because a warning nobody can silence
+  is a warning everybody learns to scroll past.
+
+  **The prettier configuration in the README was rewriting selectors.** `tailwindFunctions`
+  listed `has`, `notHas`, `inside`, `supports`, `notSupports` and the four `nth*` helpers,
+  and the plugin sorts _every_ string argument of a listed function — but the first argument
+  of those is a selector or a feature query. `has("table [data-open]", …)` was rewritten to
+  `has("[data-open] table", …)`: Tailwind knows `table` as a utility and `[data-open]` as
+  unknown, so it moved them, and the selector came to mean the opposite of what it said.
+  On format-on-save, silently. The list now holds only the helpers whose string arguments
+  are all class lists.
+
+  **CI built after it tested, so the suite that asserts on `dist/` never ran.** It guards
+  the shape of the string-named PostCSS entry — the thing Next.js loads — and skips itself
+  when there is no build, which on a fresh checkout is always. It has now been green by
+  never executing for its whole life. The workflows build first, and the suite fails loudly
+  instead of skipping when it finds no `dist/` in CI.
+
+  **The release workflow pins `changesets/action` to a commit** rather than the moving `v1`
+  tag. That step runs with `id-token: write` and the npm token in its environment.
+
+  Two smaller things: `src/integration/report.ts` held literal NUL bytes in a template
+  string, which made it a binary file to grep, GitHub diffs and most editors — they are now
+  written as `\0`. And the scanner's helper-name list is exported and the call pattern built
+  from it, so the diagnostics and the scanner cannot drift apart about which names matter.
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`8b0536a`](https://github.com/user01101111000/tailess/commit/8b0536a33d091554f4f9f221c5f12c074f90e1b9) Thanks [@user01101111000](https://github.com/user01101111000)! - Hold the claims to the code: peer dependency, coverage floor, and CI that runs.
+
+  **`tailwindcss` is a peer dependency** at `^4.0.0`. The plugins and the CLI resolve it
+  from the consumer's tree, so it always was one in fact — but nothing declared it, and
+  nothing warned a project on Tailwind 3, or a future 5, until the CSS was quietly wrong.
+
+  **`engines` is now `>=20.19`**, and CI loads the built package on exactly that version.
+  It promised Node 18, which has been end-of-life since April 2025; 20.19 is what Vite 8
+  requires, so it is what a Tailwind v4 toolchain already needs. Nothing that could run
+  before is stranded — but this is a support-floor change, so it is called out here rather
+  than buried.
+
+  **CI runs before merge, not after.** It triggered only on `main`, so every failure was
+  found at merge time. It now runs on `dev`, on any pull request, and on demand — a feature
+  branch is covered from the moment its pull request is open, which is the thing to do
+  early. Windows runs on both ends of the Node range rather than one, since it is the
+  platform the path handling actually differs on.
+
+  **Next.js is built.** It is the first setup the README documents and the reason
+  `scripts/postbuild.mjs` exists — its `export =` correction is what makes a string-named
+  `"tailess/postcss"` resolve for Next — and nothing had ever built one. A new CI job
+  scaffolds a Next app, builds it, and asserts the runtime-built classes have rules in the
+  stylesheet Next emitted. Verified both ways: with the plugin removed the build still
+  succeeds and the check goes red, which is the whole point.
+
+  **A weekly job runs the suite against the _latest_ Tailwind**, not the pinned one. The
+  305 keys are a contract with Tailwind's variant registry, and the lockfile meant a
+  release that renamed or dropped a variant would reach a consumer's project before it
+  reached this one.
+
+  **Coverage is enforced**, not merely collected. It ran on every CI job and was checked
+  nowhere, so a change could delete a suite's worth of it in silence.
+
+  **The binary is run as a process.** Every test imported `check/run.ts` directly, so
+  `src/cli.ts` — argv slicing, the subcommand alias, the shebang, the catch that returns
+  2 — was covered by nothing. CI now asserts six exit codes from the built binary.
+
+  **The scanner has a fuzz suite.** It reads every file in a consumer's project and it is
+  a tokeniser, not a parser, so the inputs that matter are minified bundles and half-saved
+  files. Two properties, over a deterministic 2,000-sample corpus: it never throws, and it
+  never emits a candidate that could not be a class name — one of those poisons the rest of
+  its `@source inline` chunk, measured at 60 lost classes.
+
+  **The README is held to the code.** Its key counts were hand-maintained in five places
+  with nothing checking them, which is exactly how the docs site came to say 149. A test
+  now sums the Keys table against the real key set, checks every count in the prose,
+  resolves every table-of-contents anchor, holds the exported-types list to what
+  `src/index.ts` actually exports — it had fallen eight names behind — and compiles every
+  code example through the real Tailwind.
+
+  **The performance table is reproducible.** `npm run bench` produces it. Writing that
+  script found that the old numbers were measured with a benchmark bug: taking the best of
+  three scans without clearing the cache measured one cold scan and two warm ones, then
+  reported the warm number as the cold one. The cache is fine — 287 ms cold, 52 ms warm on
+  the machine named in the README — but the number that was published was not the number
+  that was measured.
+
+  **Governance that was missing entirely:** `SECURITY.md` (including what `tailess check`
+  executes from your project, which is the part worth knowing), `CODE_OF_CONDUCT.md`,
+  `CODEOWNERS`, issue and pull-request templates, and a Dependabot config that watches the
+  Actions pinned by SHA. A stability policy in `CONTRIBUTING.md` says what `0.x` actually
+  promises per surface, how deprecation works, and how to publish a prerelease — with the
+  version-drift trap written down, since it has bitten this repository twice.
+
+  **`llms.txt` and `AGENTS.md`.** A large share of Tailwind classes are now written by
+  coding agents, and every default habit one has — hoisting a class into a `const`,
+  building `text-${size}`, aliasing an import — produces code that compiles, type-checks,
+  renders the right `class` attribute and has no styles. The one rule is now written where
+  a tool will read it.
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`ea5b747`](https://github.com/user01101111000/tailess/commit/ea5b74743d3a444d429e511886a089de53017569) Thanks [@user01101111000](https://github.com/user01101111000)! - Close the gaps in the library itself: slots, `extend`, `configure`, and keys you declare.
+
+  **`variants()` grew the four things that sent teams to `tailwind-variants` instead.**
+
+  `slots` builds a multi-part component. A Dialog is root, overlay, panel, title and close;
+  before this it was one `variants()` call per part, with the shared variants written out
+  five times. Declare the parts instead of `base`, and every option says what it adds to
+  each one:
+
+  ```ts
+  const card = variants({
+    slots: {
+      root: "rounded-lg border",
+      title: "font-semibold",
+      body: "text-sm",
+    },
+    variants: {
+      size: { lg: { root: { base: "p-5", md: "p-8" }, title: "text-xl" } },
+    },
+  });
+  const { root, title, body } = card({ size: "lg" });
+  ```
+
+  Each part merges on its own, so an override on `root` cannot disturb `title`, and a
+  slot's value is an `SsArg` like anywhere else — a part can carry its own breakpoints.
+
+  `extend` builds on another recipe, merging **per option** rather than per group, so a
+  product package adding one `tone` keeps the ones it inherited rather than replacing the
+  group. Types merge too. Slotted recipes extend the same way, gaining parts.
+
+  A boolean variant takes a `boolean` — `<Button disabled={isDisabled}>` — which is what a
+  component already has and what `cva` and `tv` hand back. The string spellings still work,
+  since `"true"` and `"false"` really are the option keys.
+
+  A compound rule matches a list: `{ tone: ["danger", "warning"], size: ["md", "lg"] }`.
+  That was four rules kept in step by hand, and the count is multiplicative.
+
+  `compoundVariants`, `defaultVariants` and `className` are accepted as aliases, so a `cva`
+  recipe ports by changing the function name and nothing else.
+
+  The scanner learned slots, which is the half that matters. An option's value is a slot
+  map, not a class value, and reading it as an `ss` map emitted `root:md:p-8` — junk — while
+  missing the `md:p-8` the runtime builds.
+
+  **`configure({ merge, onWarn, keys })`.** `cn` called a bare `twMerge`, with no way to
+  reach `extendTailwindMerge` — so in a project with its own `@utility` or theme scale,
+  `cn("text-sm", "text-hero")` emitted both and the winner was decided by CSS source order
+  rather than by argument order, which is the one guarantee `cn` makes. `onWarn` is where a
+  development warning goes: throw to make it fatal in CI, collect it in a test, or silence
+  it, because a warning nobody can silence is one everybody learns to scroll past.
+
+  **Keys your own CSS adds.** The built-in keys are closed on purpose — that is what makes
+  a typo a compile error. But a `@theme` adding `--breakpoint-3xl`, or a `@custom-variant`,
+  creates a variant that genuinely works and that tailess cannot know about; the build check
+  already reported it and the only answer was `withPrefix`. Augment `CustomKeys` and it
+  joins the union, and name it in `configure({ keys })` so the runtime — which cannot see a
+  type — stops calling it unknown on every render.
+
+  **A ninth build-time check: an `ss` map handed to a helper that takes a flat class value.**
+  Composition runs one way — a helper nests inside an `ss` bucket, never the reverse — and
+  every helper's class argument is a `ClassValue`, where an object is a `clsx` dictionary.
+  So `on("hover", { base: "underline", md: "font-bold" })` builds `"hover:base hover:md"`.
+  The types refuse it; this catches the cast and the untyped boundary that get past them.
+
+  **The six warning memos are bounded.** They were sets of every value ever seen, and a dev
+  server or an SSR process in development sees a fresh one on every request — `has(userInput)`
+  is enough. They clear rather than stop accepting, so the worst case is a warning printing
+  twice, not a real one never printing.
+
+  Runtime cost: routing `cn` and `ss` through `internal/settings.ts` puts them at **5,683
+  characters**, from 5,177 on the last release — the figure of 5,170 that stood in this
+  paragraph was `main`'s, and nothing had re-measured it. `variants` on top of that is 2,908.
+  The size budget moved deliberately, and every number is now measured in the test that pins
+  it rather than carried forward by hand.
+
+  Four things were considered and deliberately not built, each for a reason now in the
+  README: responsive variant selection at the call site (the scanner reads your recipe,
+  never the call sites of the component it builds, so it would enumerate every option under
+  all thirteen breakpoints or let the class land with no CSS); memoizing `ss` (React builds
+  the object fresh on every render, and `tailwind-merge` already caches the expensive half);
+  exporting the whole theme as JS (a second copy of your theme is a copy that drifts —
+  `var(--color-brand)` is the answer); and folding a static call into a literal at build
+  time (it means rewriting your JavaScript, which is a much larger promise than adding CSS).
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`976c240`](https://github.com/user01101111000/tailess/commit/976c240da420fbb2295dddd481bd12a2ab4558c3) Thanks [@user01101111000](https://github.com/user01101111000)! - Close the remaining thirty-three findings from the same adversarial review — the ones
+  below blocker, which is where the promises this release makes turned out not to be kept.
+
+  **`configure` kept three of them badly.** `keys` said declared keys get "a stable
+  position, in the order given" and gave every one of them the same rank, so the emitted
+  order was whatever order the object literal happened to use — two components declaring
+  the same two keys the other way round emitted them the other way round, and which one won
+  a `tailwind-merge` conflict depended on how someone typed an object. `onWarn` could not
+  see a warning that had already fired, so "collect it in a test", one of its three
+  documented uses, passed vacuously the moment anything earlier in the process had tripped
+  that warning; passing `onWarn` clears that history now, and `resetWarnings` is exported.
+  And the README's own `configure` example did not compile under `exactOptionalPropertyTypes`,
+  because `Partial<T>` refuses an explicitly undefined value and a conditional setting is
+  exactly that — `ConfigureOptions` replaces it, and the example is compiled against the
+  built types. The README also now says the settings are process-global rather than leaving
+  "before anything renders" to imply it.
+
+  **Four warning sites had no memo** while the changeset claimed all of them did — including
+  `ss()`'s unknown key, the highest-frequency site in the package, where a project
+  mid-migration got a console line per render and, under the documented fatal `onWarn`, a
+  throw per render.
+
+  **`variants` handed out its caller's own objects** behind a `readonly` declaration.
+  Writing to `component.config` made a child built later inherit a definition its parent
+  does not have, and adding an option to `component.variants` produced a class the runtime
+  builds and the scanner can never enumerate. Both are snapshots. A slot or group named
+  `__proto__` was dropped and reassigned the accumulator's prototype; `compound` and
+  `defaults` were typed against the child's own variants only, so relating a new variant to
+  an inherited one — most of the point of `extend` — was a compile error whose only escape
+  was `as any` over the whole config; `variants("flex")` threw from `Object.keys`; and an
+  `extend` cycle threw a bare `RangeError` naming nothing.
+
+  **The scanner lost a class in one more shape and a diagnostic misdirected in another.**
+  `nth(cond ? 2 : "odd", …)` dropped its numeric branch, because the guard that keeps the
+  digits inside `"3n+1"` from being read as positions was "if any string was found, ignore
+  all numbers"; it blanks the strings and sweeps the rest now. And `bucket-as-dictionary`
+  asserted the nesting mistake even when the key was a name someone plausibly gave a class
+  of their own — `first`, `open`, `disabled`, the vocabulary of a `clsx` dictionary — where
+  the class is dead for a different reason and the suggested rewrite builds something else.
+  For those keys it names both readings.
+
+  **`check --strict` failed a correctly wired project** whenever the plugin list is composed
+  outside a `*.config.*` file, which is what a monorepo or a shared preset looks like; the
+  guess abstains now rather than failing a build it cannot see through, and no longer
+  reports `checked: N` for a check it never ran. `--json` was silently ignored by `doctor`
+  and `init`, every failure printed the whole usage text, and `-v` was undocumented.
+
+  **Half of what a consumer installs is gone.** Sourcemaps were 66% of the tarball, and
+  581 kB of that was the scanner's source inlined three times into CJS maps nothing can
+  debug — the argument `tsup.config.ts` already makes for the CLI's map, applied where it
+  is worth more. Packed 421,892 → 197,121 bytes. `*.tgz` is ignored, so hand-verifying a
+  release cannot leave a binary blob one `git add -A` from being in history.
+
+  **The release waits for CI.** It published on push to `main` while CI ran beside it,
+  re-verifying a strict subset — not the platform matrix, not the `engines` floor, not the
+  example, not Next.js, which are the three things CI's own comment says no unit test
+  reaches. An npm version cannot be unpublished. The `gate must fail` step also accepted
+  _any_ non-zero exit as proof, where `check` has two failure codes. Both read-only
+  workflows declare `permissions: contents: read`.
+
+  **And the documents were held to the code once more.** The count of build-time checks was
+  eleven in three published places and is ten — now asserted against the `kind` union, since
+  a hand-maintained number is how the docs site came to say 149. The migration table said
+  `className` is not accepted in a compound rule while the diff three lines below it uses
+  one. A changeset told the changelog that `slots` and `extend` are deliberately absent from
+  the release that adds both. Another said `ss` + `cn` was "unchanged at 5,170 characters",
+  a figure nothing had re-measured — it is 5,683, and every number in that budget is now
+  measured rather than carried forward. "CI runs on the branch the work happens on" is
+  softened to what the trigger list does. And "the last one is the only check that reads
+  your CSS" stopped being true when this release added a second.
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`d194cae`](https://github.com/user01101111000/tailess/commit/d194cae0f93fb1469f3870f501853cd65b4019c8) Thanks [@user01101111000](https://github.com/user01101111000)! - Tooling: `init`, `doctor`, `tailess/build`, and two checks that replace a lint plugin.
+
+  **`tailess init` and `tailess doctor`.** Setup is the one failure nothing else can catch:
+  wiring the plugin is four hand-edited variants across two config shapes, ordering matters
+  in one of them, and getting it wrong produces no build error at all — the build succeeds,
+  the class attributes are correct, and nothing on the page has styles.
+
+  ```bash
+  npx tailess doctor        # exits 1 when the plugin is not wired up, and says how to fix it
+  npx tailess init          # shows the edit it would make
+  npx tailess init --write  # makes it
+  ```
+
+  `init` reads the project, picks the right integration, and inserts the plugin — for
+  PostCSS, _first_ in the list, because it has to write the candidate list before Tailwind
+  reads it. It refuses to guess: a config with no `plugins` list it recognises is left
+  alone, and `doctor` prints the line to add by hand. The diff it shows before writing is a
+  real LCS diff, because showing a wrong one and then editing someone's build config on the
+  strength of it is worse than not offering the command.
+
+  **`tailess/build` — the scanner, as a library.** Everything here that is not the runtime
+  rests on one question, _which classes can this source build at runtime?_, and the two
+  plugins and the binary were the only ways to ask. A webpack or rspack loader, an esbuild
+  plugin, an Astro or Nuxt module, an editor extension, a lint rule, a company's own CI
+  script: all of them needed it, and all of them had to reach into `dist/` internals.
+
+  ```ts
+  import { collect, buildPrelude, diagnose } from "tailess/build";
+  ```
+
+  Node-only, so it is a subpath rather than part of `tailess` itself — the runtime pulls in
+  no Node types at all, and that stays true.
+
+  **Two more build-time checks, in place of an ESLint plugin.** The rules worth
+  having were the ones the type system cannot express, and both are now diagnostics that
+  need no install, no config, and run in CI for everyone:
+
+  - **A bucket the scanner cannot read.** `ss({ md: size })` is perfectly well typed and
+    completely unstyled, and it is the package's most common support case. Reported for a
+    _prefixed_ key only: `base` adds no prefix, so its value passes through and Tailwind
+    finds the literal wherever it really lives.
+  - **An `ss` map handed to a helper** that takes a flat class value, from the previous
+    release, which catches the other half of the same confusion.
+
+  An ESLint plugin would add editor squiggles and autofix on top of these. That is a
+  separate package's worth of work and reaches only the people who install and configure
+  it; the diagnostics reach everybody on the next build.
+
+  **`tailess emit --json`** prints the candidate list itself, with the file each class came
+  from, rather than the stylesheet it would be wrapped in. The documented way to answer
+  "did the scanner see my class?" was reading escaped selectors out of the built CSS.
+
+  **And no codemod, because there is nothing left for one to do.** `variants` now accepts
+  `cva`'s own call shape — the base classes as a first argument — on top of the
+  `compoundVariants`, `defaultVariants` and `className` aliases from the previous release.
+  Porting a `cva` codebase is `cva(` → `variants(` and nothing else.
+
+- [#56](https://github.com/user01101111000/tailess/pull/56) [`e576831`](https://github.com/user01101111000/tailess/commit/e57683184faa716e13a0becd23e46c97313e4583) Thanks [@user01101111000](https://github.com/user01101111000)! - Fix eleven defects an adversarial review found in the work above — three of which broke
+  a working project.
+
+  **The build no longer fails a file that has nothing to do with tailess.** `on`, `data`,
+  `group`, `has`, `inside`, `between` and `responsive` are ordinary identifiers, and the
+  scanner matches them on any receiver and inside any string — deliberately, because an
+  extra candidate costs a moment of compile time while a missing one costs a broken layout.
+  The new diagnostics borrowed that looseness and should not have:
+  `socket.on("presence", ({ open, dark }) => …)`, in a file with no tailess import and no
+  class in it, was reported as building an unstyled class — failing `check --strict` and,
+  with `diagnostics: "error"`, the build. Reporting is now gated on the file importing from
+  `"tailess"`, a call reached through something that is not a tailess namespace is skipped,
+  and a destructuring parameter is no longer read as a `clsx` dictionary. Enumeration is
+  unchanged. The trade is a project reaching the helpers through its own re-export: it keeps
+  full enumeration and `check` still proves the far end, but loses the source-level
+  warnings. A warning that fires on working code is worse, because it teaches people to
+  stop reading them.
+
+  **`renamed-import` no longer fires on a line that does not run.** A commented-out import,
+  and one quoted inside a docs sample, were both reported — asserting the strongest failure
+  the package has, in the same output that said every class has CSS.
+
+  **`tailess init --write` no longer writes a config that does not load.** Three ways it
+  could, each exiting 0 and printing a plausible diff. A file not beginning with `import` —
+  a leading comment is ordinary in a build config — got the `tailess()` call and no import,
+  so Vite threw `ReferenceError` and the dev server would not start. A multi-line first
+  import, which is what a formatter produces past its print width, had the new import
+  spliced _inside_ it, leaving the file unparseable. And `css.postcss.plugins`, a documented
+  Vite option that can precede the top-level array, took the Vite plugin instead — leaving
+  the project unwired after a success message. Positions are now found in a comment- and
+  template-masked copy of the source and spliced by index, the whole first import is matched
+  rather than its first line, more than one candidate list is refused outright, and the
+  result is read back with `wired()` before anything is written. It also keeps a CRLF file
+  on CRLF, and adds no dangling comma to an empty list.
+
+  **`wired()` is no longer fooled by a comment.** `// we removed tailess() from the plugins
+array` — the likeliest leftover of exactly the deletion this check exists to catch — made
+  `doctor` and `init` call an unwired project wired and exit 0. Quoting `"tailess/postcss"`
+  in a comment did the same, with no call required at all. This is the one failure that
+  unstyles a whole application with no build error, and all three commands built to catch it
+  went green.
+
+  **A flat recipe can no longer extend a slotted one.** It compiled as returning `string`,
+  returned an object of parts — `class="[object Object]"`, and `.split()` on it threw — and
+  dropped every class the child declared, since a flat value has no part to spread into. The
+  type refuses it now; through a cast the runtime stops at the boundary, keeps the child's
+  own classes, and says what it ignored.
+
+  **A variant group with numbered options works.** `{ cols: { 1: …, 2: … } }` — a column
+  count, a gap or an elevation scale — was unusable: numeric keys leave `keyof O & string`
+  empty, so 0.11.0 accepted no value at all and the boolean-variant support added above then
+  classified the group as boolean, making `true` type-check and do nothing while `2`, the
+  only spelling that worked, was a compile error. Both `2` and `"2"` are accepted now, as
+  `true` and `"true"` already were, and for the same reason: the key really is the string.
+
+  **A slotted recipe whose slots are not written inline keeps its classes.** `variants({
+slots, … })` with the map hoisted to a const, and `slots: { ...shared, title: … }`, are
+  both slotted while their slot _names_ are invisible — and the scanner read them as flat,
+  emitting `root:md:p-8`, junk matching no utility, in place of the `md:p-8` the runtime
+  builds. Whether option values are per-slot now turns on the presence of the `slots` field,
+  never on whether its names could be read.
+
+  **`--json` answers on every exit path.** A crash printed the help text to stderr and
+  nothing to stdout, and `emit`'s no-files path printed prose where `check` printed JSON for
+  the identical condition — so a job doing `tailess check --json | jq -e .ok` got a parse
+  error on exactly the exit code the README calls the one worth an alert. Every path of
+  every command now prints one object in one shape, including a throw from the parser. CI
+  asserts it.
+
+  **`llms.txt` no longer overstates what the build catches.** It said the plugin reports
+  every shape it lists; three of the six — a spread, a computed key, a computed prefix —
+  produce no diagnostic at all, and since the scanner enumerates nothing for them there is
+  no candidate for `check` to fail on either. It said eleven checks; there are ten. And its
+  example of correct nesting, `ss({ hover: on("hover", …) })`, builds `hover:hover:underline`
+  — a doubled variant, in the one file written to be copied by a tool. `AGENTS.md` now says
+  plainly that a green `check` does not prove those three shapes are styled.
+
+  The bundle budget moves 12,200 -> 13,000 for the two `variants` fixes. While measuring it,
+  the note claiming a consumer using only `ss` and `cn` bundles 5,170 characters "unchanged"
+  through several earlier raises turned out to be neither — nothing had re-measured it. It
+  is 5,344, measured, along with `vars` (+411) and `variants` (+2,322).
+
 ## 0.11.0
 
 ### Minor Changes
