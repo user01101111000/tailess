@@ -7,6 +7,16 @@ on:
     branches: [main, dev]
   pull_request:
   workflow_dispatch:
+  # Called by release.yml, so the publish waits on this exact matrix rather than
+  # running a subset of it concurrently.
+  workflow_call:
+
+# Least privilege, on the workflows that write nothing back. Both run `npm ci` — every
+# install script in the dependency tree — on `push`, where the token is not the read-only
+# fork token, and a repository created before GitHub's 2023 default change inherits
+# read/write on `contents`. `release.yml` declares its own, wider, because it has to.
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -202,11 +212,20 @@ jobs:
         working-directory: examples/vite-react
         run: |
           sed -i 's/, tailess({ diagnostics: "error" })//' vite.config.ts
-          if npx tailess check --content src --strict; then
-            echo "::error::the gate passed a project with the plugin removed"
+          grep -q "tailess(" vite.config.ts && { echo "::error::the sed did not remove the plugin"; exit 1; }
+          # Exit 1 specifically, not "any failure". `check` also exits 2 for "nothing
+          # could be checked" — a renamed flag, a moved stylesheet, a typo in this very
+          # command line — and treating that as proof leaves the step green while the
+          # negative it exists to demonstrate is no longer being demonstrated.
+          set +e
+          npx tailess check --content src --strict
+          code=$?
+          set -e
+          if [ "$code" != "1" ]; then
+            echo "::error::expected exit 1 (a class with no rule), got $code"
             exit 1
           fi
-          echo "the gate failed, as it must"
+          echo "the gate failed with exit 1, as it must"
 
   nextjs:
     # Next.js is the first setup the README documents and the reason `postbuild.mjs`

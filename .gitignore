@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 *.tsbuildinfo
+# `npm pack` writes here by default, and hand-verifying a release is the natural
+# reason to run it — 400 kB of dist, one `git add -A` away from being in history.
+*.tgz
 
 # Test / coverage
 coverage/
