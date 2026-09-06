@@ -38,7 +38,7 @@ jobs:
           - os: macos-latest
             node: 22
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -64,7 +64,7 @@ jobs:
     # Lint and the packaging checks are platform-independent, so run them once.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -92,7 +92,7 @@ jobs:
     # needs — not because the code could not run lower.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -174,7 +174,7 @@ jobs:
     # gate itself is never dogfooded anywhere else either.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -235,7 +235,7 @@ jobs:
     # example anyone reads.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
