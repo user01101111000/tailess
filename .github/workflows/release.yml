@@ -31,14 +31,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # 22, not 20: `@changesets/cli` v3 declares `node: "^22.11 || ^24 || >=26"` and its
+      # `bin.js` calls `module.enableCompileCache()`, which Node 20 does not have — so the
+      # publish step died with `TypeError: enableCompileCache is not a function` before it
+      # could do anything. This is the *development* floor moving, not the package's:
+      # `engines` still promises consumers Node >= 20.19, and the CI matrix still proves it.
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # `--engine-strict` here and nowhere else. npm only *warns* when a dependency's
+      # `engines` are not satisfied, which is how a devDependency raising its Node floor
+      # stayed invisible until the one job that runs it — the release — reached the step
+      # that cannot be retried by rerunning a green CI. Failing the install instead makes
+      # the next one of these loud, and early.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --engine-strict
 
       # `needs: ci` above is the verification now — the whole matrix, on the same
       # commit, finished before this job starts. What is left here is the build the
