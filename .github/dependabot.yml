@@ -17,8 +17,21 @@ updates:
       prefix: "chore"
     groups:
       # One PR for the toolchain, which moves together and is never interesting alone.
+      #
+      # A *major* is the exception, and grouping one holds the rest hostage: the
+      # TypeScript 6 → 7 bump arrived with esbuild 0.27 → 0.28 and the pair could not
+      # merge, because `tsup`'s bundled `rollup-plugin-dts` reads a compiler-API shape
+      # TypeScript 7 does not expose and the `.d.ts` build dies on it. That is an
+      # upstream wait, and it should not keep four green updates out of the repository.
+      # Restricting the group leaves majors to arrive one PR at a time, which is what
+      # "never interesting alone" was always meant to mean.
+      #
+      # Worth recording for whoever picks TypeScript 7 up: `tsc --noEmit` passes on both
+      # `tsconfig.json` and `tsconfig.build.json` under 7.0.2, so the source is ready and
+      # the block is entirely in the `dts` step of the build.
       dev-tooling:
         patterns: ["@biomejs/*", "vitest", "@vitest/*", "tsup", "typescript", "esbuild"]
+        update-types: ["minor", "patch"]
     ignore:
       # Pinned deliberately: the formatter's output changes between minors, and a
       # surprise reformat in a dependency PR hides whatever else is in it.
