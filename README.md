@@ -872,9 +872,17 @@ skip merging entirely.
 
 **`onWarn`** is where a development warning goes, `console.warn` by default. Throw to
 make them fatal in CI, collect to assert on them in a test, or pass `() => {}` to
-silence them.
+silence them. Each warning is reported once per process, so passing `onWarn` also clears
+that history — otherwise a collector set up after the code under test had already warned
+would stay empty and the assertion would pass without asserting anything.
 
 **`keys`** is the runtime half of the next section.
+
+The settings are **process-global**: one of each per module instance, and the last call
+wins for every render already in flight. That is why it belongs at module scope of your
+entry. Calling it per request — or per tenant in a shared SSR process — is not supported;
+two requests configuring different `merge` functions produce wrong output for one of
+them, with no error.
 
 ### Keys your own CSS adds
 
@@ -919,7 +927,7 @@ Every exported type, grouped by what it is for. A test holds this list to what
 | **`ss` itself** | `SsInput` `SsValue` `SsArg` `SsKey` `ClassValue` `ResponsiveMap` |
 | **Key families** — for a `Record<…>` keyed by one | `ScreenKey` `MaxScreenKey` `ContainerKey` `MaxContainerKey` `AnyContainerKey` `StateKey` `ElementStateKey` `StandaloneStateKey` `GroupStateKey` `PeerStateKey` `HasStateKey` `InStateKey` `NotStateKey` `NegatableStateKey` |
 | **Recipes** | `VariantProps` `VariantsConfig` `VariantComponent` `VariantGroups` `VariantOptions` `CompoundRule` `SlotDefaults` `SlotValue` `SlottedConfig` `SlottedComponent` `SlottedGroups` |
-| **The rest** | `NthValue` `CssVars` `CssVarInput` `CssVarName` `CustomKeys` `TailessSettings` |
+| **The rest** | `NthValue` `CssVars` `CssVarInput` `CssVarName` `CustomKeys` `TailessSettings` `ConfigureOptions` |
 
 The plugin option types are on their own entries: `TailessViteOptions` from
 `tailess/vite`, `TailessPostcssOptions` from `tailess/postcss`, and `CollectOptions`,

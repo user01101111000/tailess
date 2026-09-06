@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetWarnings } from "../../src/internal/settings.js";
 import { ss } from "../../src/utils/ss.js";
+
+// Every warning here is memoised, so one test tripping a key would leave the next one
+// asserting on a warning that has already been spent. This is the trap the reset exists
+// for, and a suite is the first place to fall into it.
+beforeEach(resetWarnings);
 
 describe("ss", () => {
   it("keeps base unprefixed and prefixes each breakpoint key", () => {

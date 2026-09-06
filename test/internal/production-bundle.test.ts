@@ -116,14 +116,38 @@ describe("the browser bundle", () => {
     // of the 707 characters is the warning text for the second, which is only reachable
     // through a cast — and is exactly where it used to be silent.
     //
+    // Raised again to 13,500 for the `variants` hardening the same review asked for:
+    // 12,640 -> 13,226, all of it inside that helper (7,666 -> 8,250 on top of `ss` + `cn`)
+    // and none of it paid by a consumer who does not import it. A slot or group named
+    // `__proto__` was silently dropped and reassigned the accumulator's prototype — a
+    // declared class emitted nowhere, with no error. `config` and `variants` were the
+    // caller's own live objects behind a `readonly` declaration, so writing to them made a
+    // parent and a child disagree about the parent, and adding an option to
+    // `component.variants` produced a class the runtime builds and the scanner can never
+    // enumerate. Both are snapshots now. `variants("flex")` — cva's one-argument call —
+    // threw an unattributed TypeError, and an `extend` cycle a bare `RangeError`.
+    //
+    // Raised again to 14,000 for four `configure` defects from the same review:
+    // 13,226 -> 13,645, and this is the raise that moves `ss` + `cn` — 5,344 -> 5,683 —
+    // so it is the one to weigh hardest. `configure({ keys })` promised declared keys "a
+    // stable position, in the order given" and gave every one of them the same rank, so
+    // the emitted order was whatever order the object literal happened to use and which
+    // key won a `tailwind-merge` conflict depended on how someone typed it. The unknown-key
+    // warning — the highest-frequency site in the package, one bucket map per component
+    // per render — was the one with no memo, so a project mid-migration got a console line
+    // per render and, under the documented fatal `onWarn`, a throw per render. `onWarn`
+    // could not see a warning that had already fired, which made "collect it in a test"
+    // pass vacuously. And a custom `merge` returning a non-string put that value straight
+    // into the class attribute.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 5,344 chars, which is the number worth watching, since it is what most projects
+    // 5,683 chars, which is the number worth watching, since it is what most projects
     // actually pay. That figure was recorded as 5,170 and described as unchanged through
     // several of the raises above; it was neither — nothing re-measured it. It is
-    // measured here now, along with the rest: `vars` on top costs 411 (5,755), and
-    // `variants` on top costs 2,322 (7,666).
-    expect(code.length).toBeLessThan(13_000);
+    // measured here now, along with the rest: `vars` on top costs 411 (6,094), and
+    // `variants` on top costs 2,908 (8,591).
+    expect(code.length).toBeLessThan(14_000);
   });
 
   it("pulls in no Node builtins", async () => {

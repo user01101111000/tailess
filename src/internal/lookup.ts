@@ -16,3 +16,25 @@ export function ownOr<T>(map: Record<string, T>, key: string, fallback: T): T {
   }
   return fallback;
 }
+
+/**
+ * Write `map[key] = value` as an own property, whatever `key` is called.
+ *
+ * The write side of the same problem {@link ownOr} solves for reads, and the one key
+ * where a plain assignment does something else entirely: `map["__proto__"] = v` invokes
+ * the prototype setter instead of creating a property, so the entry vanishes and the
+ * object's prototype is replaced. A slot or variant named `__proto__` is contrived, but
+ * the result was a class the recipe declares being emitted nowhere with no error — the
+ * silent failure this package exists to prevent, arrived at from the other direction.
+ *
+ * `defineProperty` rather than a null-prototype object, so what a caller receives is
+ * still an ordinary object with `toString` and `hasOwnProperty` on it.
+ */
+export function own<T>(map: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(map, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}

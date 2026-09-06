@@ -1,7 +1,7 @@
 import { rankOf, unknownRank } from "../constants.js";
 import { isDev } from "../internal/env.js";
 import { join } from "../internal/join.js";
-import { isCustomKey, warn } from "../internal/settings.js";
+import { customRank, firstTime, warn } from "../internal/settings.js";
 import type { ClassValue, SsArg, SsInput, SsValue } from "../types.js";
 import { cn } from "./cn.js";
 import { withPrefix } from "./prefix.js";
@@ -28,6 +28,18 @@ const maxDepth = 10;
 function isMap(value: SsValue): value is SsInput {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/**
+ * Keys and scopes already reported.
+ *
+ * This is the highest-frequency warning site in the package — one bucket map per
+ * component per render — and it was the one with no memo: a project that has declared a
+ * `@custom-variant` but not yet reached `configure({ keys })` got an identical console
+ * line per render, thousands of them in a React dev session, and under the documented
+ * fatal `onWarn` a throw on every one of them rather than the first.
+ */
+const warnedKeys = new Set<string>();
+const warnedScopes = new Set<string>();
 
 function warnUnknownKey(key: string): void {
   warn(
@@ -69,18 +81,22 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
 
     let rank = rankOf(key);
     if (rank === undefined) {
-      rank = unknownRank;
       // A key the project declared for its own `@theme` or `@custom-variant` is not
-      // unknown — it just is not one Tailwind ships, which is a different thing.
-      if (isDev && !isCustomKey(key)) warnUnknownKey(key);
+      // unknown — it just is not one Tailwind ships, which is a different thing. It sorts
+      // by its position in `configure({ keys })`, which is what makes the documented
+      // "emitted after the built-in keys, in the order given" true: sharing one rank left
+      // the emitted order at the mercy of how the object literal happened to be written.
+      const declared = customRank(key);
+      rank = declared === undefined ? unknownRank : unknownRank + declared;
+      if (isDev && declared === undefined && firstTime(warnedKeys, key)) warnUnknownKey(key);
     }
     keys.push(key);
     values.push(value);
     ranks.push(rank);
   }
 
-  // Insertion sort: a bucket map has a handful of keys, and being stable is what
-  // keeps unknown keys — which all share `unknownRank` — in the order written.
+  // Insertion sort: a bucket map has a handful of keys, and being stable is what keeps
+  // keys that share a rank — the undeclared unknown ones — in the order written.
   for (let i = 1; i < ranks.length; i += 1) {
     const key = keys[i] as string;
     const value = values[i] as SsValue;
@@ -111,7 +127,7 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
     let part: string;
     if (isMap(value)) {
       if (depth >= maxDepth) {
-        if (isDev) warnTooDeep(scope);
+        if (isDev && firstTime(warnedScopes, scope)) warnTooDeep(scope);
         continue;
       }
       part = emitMap(value, scope, depth + 1);

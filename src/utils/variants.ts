@@ -1,5 +1,5 @@
 import { isDev } from "../internal/env.js";
-import { ownOr } from "../internal/lookup.js";
+import { own, ownOr } from "../internal/lookup.js";
 import { firstTime, warn } from "../internal/settings.js";
 import type { SsArg } from "../types.js";
 import { ss } from "./ss.js";
@@ -67,13 +67,9 @@ type FlatRecipe = AnyRecipe & { slots?: never };
  * `keyof O & string` empty, and `never extends "true" | "false"` is *true*, so such a
  * group used to be typed boolean: every value the types accepted did nothing, and `2`,
  * the one that worked, was a compile error.
- */
-/**
- * One option name, in both spellings that select it.
  *
- * A numeric key is `2` in the group and `"2"` as a property name, and the runtime looks
- * up the string — so both select it, exactly as `true` and `"true"` both do for a boolean
- * variant, and for the same reason: the key really is the string.
+ * {@link NameOf} is why a numeric option takes both `2` and `"2"`: the key really is the
+ * string, exactly as it is for `true` and `"true"`.
  */
 type NameOf<K> = K extends number ? K | `${K}` : K;
 type Names<O> = NameOf<keyof O & (string | number)>;
@@ -137,19 +133,27 @@ export type VariantProps<T> = T extends { variants: infer V extends AnyGroups }
  * `defaults`, so a `cva` or `tailwind-variants` recipe ports by changing nothing but the
  * function name. Give both spellings of one and the tailess name wins.
  */
-export interface VariantsConfig<V extends VariantGroups> {
+export interface VariantsConfig<V extends VariantGroups, P extends AnyGroups = Empty> {
   /** Classes every instance gets, before any variant applies. */
   base?: SsArg;
   /** The variants themselves. */
   variants: V;
-  /** Extra classes for a *combination* of variants, applied after the singles. */
-  compound?: ReadonlyArray<CompoundRule<V>>;
+  /**
+   * Extra classes for a *combination* of variants, applied after the singles.
+   *
+   * Matched against the inherited variants as well as this recipe's own. Relating a new
+   * variant to one the parent declared — "ring when `tone` is danger and `size` is lg" —
+   * is most of the reason `extend` exists, and typing the rule against `V` alone made it
+   * an error TypeScript blamed on the property name, whose only way out was `as any` over
+   * the whole config.
+   */
+  compound?: ReadonlyArray<CompoundRule<V & P>>;
   /** `cva` / `tailwind-variants` spelling of {@link VariantsConfig.compound}. */
-  compoundVariants?: ReadonlyArray<CompoundRule<V>>;
-  /** What each variant is when the caller does not say. */
-  defaults?: PropsOf<V>;
+  compoundVariants?: ReadonlyArray<CompoundRule<V & P>>;
+  /** What each variant is when the caller does not say — inherited ones included. */
+  defaults?: PropsOf<V & P>;
   /** `cva` / `tailwind-variants` spelling of {@link VariantsConfig.defaults}. */
-  defaultVariants?: PropsOf<V>;
+  defaultVariants?: PropsOf<V & P>;
   /**
    * A recipe to build on. Its base, variants, compounds and defaults come first, and
    * anything declared here wins — per option, not per group, so adding one `tone` does
@@ -164,15 +168,21 @@ export interface VariantsConfig<V extends VariantGroups> {
 }
 
 /** What {@link variants} is given when the component has named parts. */
-export interface SlottedConfig<S extends SlotDefaults, V extends SlottedGroups<S>> {
+export interface SlottedConfig<
+  S extends SlotDefaults,
+  V extends SlottedGroups<S>,
+  P extends AnyGroups = Empty,
+  PS extends SlotDefaults = Empty,
+> {
   /** The parts, each with the classes it always gets. Replaces `base`. */
   slots: S;
   /** The variants themselves; every option says what it adds to each part. */
   variants: V;
-  compound?: ReadonlyArray<CompoundRule<V, SlotValue<S>>>;
-  compoundVariants?: ReadonlyArray<CompoundRule<V, SlotValue<S>>>;
-  defaults?: PropsOf<V>;
-  defaultVariants?: PropsOf<V>;
+  /** Matched against inherited variants too, and free to name an inherited slot. */
+  compound?: ReadonlyArray<CompoundRule<V & P, SlotValue<MergedSlots<S, PS>>>>;
+  compoundVariants?: ReadonlyArray<CompoundRule<V & P, SlotValue<MergedSlots<S, PS>>>>;
+  defaults?: PropsOf<V & P>;
+  defaultVariants?: PropsOf<V & P>;
   /** A slotted recipe to build on. Its slots and variants are merged, then overridden. */
   extend?: AnySlottedRecipe;
 }
@@ -256,6 +266,32 @@ interface Resolved {
 }
 
 /**
+ * A frozen copy of the config, which is what a component keeps and hands to its children.
+ *
+ * `config` and `variants` are declared `readonly`, and were the caller's own objects — so
+ * the promise was one the values did not keep. Writing to either after building had two
+ * effects, neither of them an error: a child built later inherited a definition its parent
+ * does not have, so the two disagree about the parent; and adding an option to
+ * `component.variants` produced a class the runtime builds and the scanner can never
+ * enumerate, which is the invariant this package is written around.
+ *
+ * A copy rather than freezing what was passed in, because freezing someone else's object
+ * as a side effect of reading it is its own surprise. One level per group is enough: an
+ * option's *value* is a class value, and nothing reads through it again.
+ */
+function snapshot(config: Record<string, unknown>): Record<string, unknown> {
+  const groups = (config.variants ?? {}) as Record<string, Record<string, unknown>>;
+  const copied: Record<string, Record<string, unknown>> = {};
+  for (const name of Object.keys(groups)) own(copied, name, Object.freeze({ ...groups[name] }));
+  const slots = config.slots as Record<string, unknown> | undefined;
+  return Object.freeze({
+    ...config,
+    variants: Object.freeze(copied),
+    ...(slots ? { slots: Object.freeze({ ...slots }) } : {}),
+  });
+}
+
+/**
  * Read a config down to one shape, following `extend` first so the child overrides.
  *
  * `wantSlots` is whether the recipe being built has slots of its own, and it decides
@@ -266,22 +302,37 @@ interface Resolved {
  * emitting `root:p-2` and other prefixes that match no utility. {@link FlatRecipe} refuses
  * the shape at compile time; this is what happens when a cast gets it through anyway.
  */
-function resolve(config: Record<string, unknown>, wantSlots: boolean): Resolved {
+function resolve(
+  config: Record<string, unknown>,
+  wantSlots: boolean,
+  seen: Set<object> = new Set(),
+): Resolved {
+  // A cycle used to be a bare `RangeError: Maximum call stack size exceeded` thrown from
+  // library code, naming neither this function nor either recipe — nothing to search for.
+  // Unreachable through the public API now that a component keeps a frozen `snapshot` of
+  // its config — but the recursion is the kind that fails as a bare
+  // `RangeError: Maximum call stack size exceeded` naming neither this package nor either
+  // recipe, so it is worth the guard and a sentence.
+  if (seen.has(config)) throw new Error("variants(): `extend` chain is a cycle.");
+  seen.add(config);
   const parent = config.extend as { config?: Record<string, unknown> } | undefined;
   const parentConfig = parent?.config;
   const parentSlots = parentConfig?.slots as Record<string, SsArg> | undefined;
   const skipped = !wantSlots && parentSlots !== undefined ? Object.keys(parentSlots) : undefined;
   const from: Resolved =
     parentConfig && !skipped
-      ? resolve(parentConfig, wantSlots)
+      ? resolve(parentConfig, wantSlots, seen)
       : { base: [], variants: {}, compound: [], defaults: {} };
 
-  const own = config.variants as Record<string, Record<string, unknown>>;
+  // `?? {}` so `variants("flex")` — cva's one-argument call, which only JavaScript and an
+  // `any`-typed call site can reach — builds a component that just emits its base rather
+  // than throwing an unattributed TypeError out of `Object.keys`.
+  const declared = (config.variants ?? {}) as Record<string, Record<string, unknown>>;
   // Merged per *option*, not per group: a child adding one `tone` must not drop the
   // ones it inherited, which is the whole reason to extend rather than copy.
   const merged: Record<string, Record<string, unknown>> = { ...from.variants };
-  for (const group of Object.keys(own)) {
-    merged[group] = { ...from.variants[group], ...own[group] };
+  for (const group of Object.keys(declared)) {
+    own(merged, group, { ...from.variants[group], ...declared[group] });
   }
 
   const slots = config.slots as Record<string, SsArg> | undefined;
@@ -304,11 +355,11 @@ function resolve(config: Record<string, unknown>, wantSlots: boolean): Resolved 
 /** Concatenate two slot maps, so an inherited part keeps its classes and gains more. */
 function mergeSlots(
   from: Record<string, SsArg[]> | undefined,
-  own: Record<string, SsArg> | undefined,
+  slots: Record<string, SsArg> | undefined,
 ): Record<string, SsArg[]> {
   const out: Record<string, SsArg[]> = {};
-  for (const name of new Set([...Object.keys(from ?? {}), ...Object.keys(own ?? {})])) {
-    out[name] = [...(from?.[name] ?? []), own?.[name]];
+  for (const name of new Set([...Object.keys(from ?? {}), ...Object.keys(slots ?? {})])) {
+    own(out, name, [...(from?.[name] ?? []), slots?.[name]]);
   }
   return out;
 }
@@ -342,12 +393,12 @@ export function variants<
   const V extends SlottedGroups<S>,
   const E extends AnySlottedRecipe | undefined = undefined,
 >(
-  config: SlottedConfig<S, V> & { extend?: E },
+  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E },
 ): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
 export function variants<
   const V extends VariantGroups,
   const E extends AnyRecipe | undefined = undefined,
->(config: VariantsConfig<V> & { extend?: E }): VariantComponent<V & Inherited<E>>;
+>(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
 /**
  * `cva`'s own call shape: the base classes first, everything else second.
  *
@@ -360,8 +411,10 @@ export function variants<
   const E extends AnyRecipe | undefined = undefined,
 >(
   base: SsArg,
-  config: Omit<VariantsConfig<V>, "base"> & { extend?: E },
+  config: Omit<VariantsConfig<V, Inherited<E>>, "base"> & { extend?: E },
 ): VariantComponent<V & Inherited<E>>;
+/** `cva`'s other call: base classes and nothing else. */
+export function variants(base: SsArg): VariantComponent<Empty>;
 
 /**
  * Build a component's `className` from a set of typed variants.
@@ -415,10 +468,22 @@ export function variants<
 export function variants(first: any, second?: any): any {
   // `cva`'s shape: base classes first, config second. A config object always has
   // `variants`; a base value never does, so the two cannot be confused.
-  const config = second === undefined ? first : { ...second, base: first };
+  // A lone base value is `cva("flex items-center")`, which has no config at all. It is
+  // told apart the same way the scanner tells it apart: a config always has `variants`,
+  // and a base value never does.
+  const bare =
+    second === undefined && (typeof first !== "object" || first === null || !("variants" in first));
+  const config = snapshot(
+    bare
+      ? { base: first, variants: {} }
+      : second === undefined
+        ? first
+        : { ...second, base: first },
+  );
   const resolved = resolve(config, config.slots !== undefined);
   if (isDev && resolved.skippedSlots) warnFlatExtendsSlotted(resolved.skippedSlots);
-  const groups = resolved.variants;
+  for (const name of Object.keys(resolved.variants)) Object.freeze(resolved.variants[name]);
+  const groups = Object.freeze(resolved.variants);
   const names = Object.keys(groups);
   const slots = resolved.slots;
 
@@ -429,12 +494,12 @@ export function variants(first: any, second?: any): any {
     // prop it did not receive.
     const chosen: Record<string, string | undefined> = {};
     for (const name of Object.keys(resolved.defaults)) {
-      chosen[name] = optionKey(resolved.defaults[name]);
+      own(chosen, name, optionKey(resolved.defaults[name]));
     }
     if (props) {
       for (const name of Object.keys(props)) {
         const key = optionKey(props[name]);
-        if (key !== undefined) chosen[name] = key;
+        if (key !== undefined) own(chosen, name, key);
       }
     }
     return chosen;
@@ -462,7 +527,7 @@ export function variants(first: any, second?: any): any {
     const component = (props?: Record<string, unknown>, extra?: Record<string, SsArg>) => {
       const chosen = pick(props);
       const parts: Record<string, SsArg[]> = {};
-      for (const slot of slotNames) parts[slot] = [...(slots[slot] as SsArg[])];
+      for (const slot of slotNames) own(parts, slot, [...(slots[slot] as SsArg[])]);
 
       /** Spread one per-slot value across the parts it names. */
       const spread = (value: unknown): void => {
@@ -484,7 +549,7 @@ export function variants(first: any, second?: any): any {
       if (extra) spread(extra);
 
       const out: Record<string, string> = {};
-      for (const slot of slotNames) out[slot] = ss(...(parts[slot] as SsArg[]));
+      for (const slot of slotNames) own(out, slot, ss(...(parts[slot] as SsArg[])));
       return out;
     };
     return Object.assign(component, { variants: groups, slots, config });

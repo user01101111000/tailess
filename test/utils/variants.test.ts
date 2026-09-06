@@ -394,6 +394,100 @@ describe("extend — building on another recipe", () => {
   });
 });
 
+describe("a recipe's definition, once it is built", () => {
+  it("is a snapshot, so writing to config or variants cannot change it", () => {
+    // Both are declared `readonly` and were the caller's own objects. Writing to `config`
+    // made a child built later inherit a definition its parent does not have — the two
+    // disagree about the parent, with no error either way — and adding an option to
+    // `component.variants` produced a class the runtime builds and the scanner can never
+    // enumerate, which is the invariant the package is written around.
+    const cfg = { base: "orig", variants: { t: { a: "A" } }, defaults: { t: "a" } } as const;
+    const live = variants(cfg);
+    expect(live.config).not.toBe(cfg);
+    expect(Object.isFrozen(live.config)).toBe(true);
+    expect(Object.isFrozen(live.variants)).toBe(true);
+    expect(Object.isFrozen(live.variants.t)).toBe(true);
+
+    // Frozen objects are silent in sloppy mode and throw in strict; either way nothing
+    // takes, which is what the assertions below check rather than the throw itself.
+    try {
+      (live.variants.t as Record<string, string>).zzz = "SMUGGLED";
+    } catch {
+      /* strict mode */
+    }
+    expect(live({ t: "zzz" } as never)).not.toContain("SMUGGLED");
+    expect(live()).toBe("orig A");
+    // Both bases first, then the variants — the child inherits the parent as declared.
+    expect(variants({ base: "child", variants: {}, extend: live })()).toBe("orig child A");
+  });
+
+  it("leaves the caller's own object alone", () => {
+    // Freezing what was handed in would be its own surprise.
+    const cfg = { base: "b", variants: { t: { a: "A" } } };
+    variants(cfg);
+    expect(Object.isFrozen(cfg)).toBe(false);
+    cfg.base = "changed";
+    expect(cfg.base).toBe("changed");
+  });
+
+  it("names an extend cycle instead of overflowing the stack", () => {
+    const a = { base: "a", variants: {} } as Record<string, unknown>;
+    const built = variants(a as never);
+    // The snapshot is what a child reads, so this no longer closes a loop — the guard is
+    // for the chain itself, which used to fail as a bare RangeError from library code.
+    a.extend = built;
+    expect(() => variants(a as never)).not.toThrow();
+    const self = { base: "s", variants: {} } as Record<string, unknown>;
+    self.extend = { config: self, variants: {} };
+    expect(() => variants(self as never)).toThrow(/cycle/);
+  });
+});
+
+describe("a slot or option named like an Object member", () => {
+  it("keeps a `__proto__` slot's classes instead of losing them to the prototype", () => {
+    // `map["__proto__"] = v` invokes the prototype setter rather than creating a key, so
+    // the part vanished and the accumulator's prototype was replaced — a class the recipe
+    // declares emitted nowhere, with no error.
+    // Typed loosely on purpose: TypeScript will not infer the slotted overload through a
+    // `__proto__` key at all, so this shape only ever arrives from JavaScript — which is
+    // exactly why the runtime has to hold it.
+    const card = variants({
+      slots: { ["__proto__"]: "p-proto", constructor: "p-ctor", root: "p-root" },
+      variants: { s: { a: { root: "r-a", ["__proto__"]: "proto-a" } } },
+      defaults: { s: "a" },
+    } as never) as unknown as () => Record<string, string>;
+    const built = card();
+    // Read through a descriptor, not `built.__proto__` — going through the accessor is
+    // precisely the mistake under test, and it would report the prototype either way.
+    expect(Object.hasOwn(built, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(built, "__proto__")?.value).toBe("p-proto proto-a");
+    expect(built.constructor).toBe("p-ctor");
+    expect(built.root).toBe("p-root r-a");
+  });
+
+  it("keeps a `__proto__` variant group", () => {
+    const t = variants({
+      base: "b",
+      variants: { ["__proto__"]: { x: "px" }, constructor: { x: "cx" } },
+      defaults: { ["__proto__"]: "x", constructor: "x" },
+    });
+    expect(Object.keys(t.variants).sort()).toEqual(["__proto__", "constructor"]);
+    expect(t()).toBe("b px cx");
+  });
+});
+
+describe("cva's one-argument call", () => {
+  it("builds a component that just emits its base", () => {
+    // `cva("font-semibold border rounded")` with no config is documented and common; this
+    // threw `TypeError: Cannot convert undefined or null to object` from `Object.keys`,
+    // naming neither tailess nor the recipe.
+    const plain = variants("flex items-center");
+    expect(plain()).toBe("flex items-center");
+    expect(plain({}, "gap-2")).toBe("flex items-center gap-2");
+    expect(variants({ base: "only" } as never)()).toBe("only");
+  });
+});
+
 describe("a variant whose options are numbered", () => {
   /**
    * `{ cols: { 1: …, 2: … } }` is an ordinary recipe — a column count, a gap or an

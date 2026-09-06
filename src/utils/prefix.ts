@@ -22,6 +22,8 @@ function isBlank(code: number): boolean {
 
 /** Prefixes already reported, so a warning in a render loop is printed once. */
 const warnedPrefixes = new Set<string>();
+/** The empty prefix has no value to key on, so it gets a memo of its own. */
+const warnedEmpty = new Set<string>();
 
 /**
  * Warn, in dev, about a prefix that can never produce a working class.
@@ -65,7 +67,10 @@ export function withPrefix(prefix: string, value: ClassValue): string {
   if (flat === "") return "";
 
   if (prefix === "") {
-    if (isDev) {
+    // Memoised like every other warning in the package: this one sits on the render path
+    // of anything that computes its prefix, so without it one mistake is one console line
+    // per render — and a throw per render under the documented fatal `onWarn`.
+    if (isDev && firstTime(warnedEmpty, "")) {
       warn(
         "[tailess] withPrefix() was called with an empty prefix. The classes are " +
           'returned unprefixed, since an empty prefix would produce ":class", ' +
