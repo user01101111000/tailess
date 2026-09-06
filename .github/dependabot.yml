@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # The actions are pinned by SHA where they hold secrets, which means nothing tells us
+  # when they move. This does.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    groups:
+      # One PR for the toolchain, which moves together and is never interesting alone.
+      dev-tooling:
+        patterns: ["@biomejs/*", "vitest", "@vitest/*", "tsup", "typescript", "esbuild"]
+    ignore:
+      # Pinned deliberately: the formatter's output changes between minors, and a
+      # surprise reformat in a dependency PR hides whatever else is in it.
+      - dependency-name: "@biomejs/biome"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]

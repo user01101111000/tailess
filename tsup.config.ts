@@ -18,6 +18,7 @@ export default defineConfig([
     ...shared,
     entry: {
       index: "src/index.ts",
+      build: "src/build.ts",
       "postcss/index": "src/postcss/index.ts",
       "vite/index": "src/vite/index.ts",
     },

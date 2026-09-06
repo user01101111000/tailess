@@ -9,7 +9,7 @@ import {
   stateKeys,
 } from "../constants.js";
 import type { Diagnostic } from "../extract/diagnose.js";
-import { importSpecifiers, readStylesheet } from "./entry.js";
+import { importSpecifiers, readStylesheet, tailwindPrefixIn } from "./entry.js";
 
 /**
  * Breakpoints tailess ships keys for, checked against the ones the project's CSS
@@ -211,6 +211,8 @@ export interface CollectedTheme {
   breakpoints: BreakpointDecl[];
   /** `@custom-variant` names tailess has no key for. */
   variants: string[];
+  /** The prefix Tailwind was imported with, which tailess cannot build classes for. */
+  prefix?: string | undefined;
 }
 
 export async function collectTheme(
@@ -219,10 +221,15 @@ export async function collectTheme(
   depth = maxDepth,
   seen: Set<string> = new Set(),
 ): Promise<CollectedTheme> {
-  const empty: CollectedTheme = { breakpoints: [], variants: [] };
+  const prefix = tailwindPrefixIn(css);
+  const empty: CollectedTheme = { breakpoints: [], variants: [], prefix };
   if (hasJsConfig(css)) return empty;
 
-  const own: CollectedTheme = { breakpoints: breakpointsIn(css), variants: customVariantsIn(css) };
+  const own: CollectedTheme = {
+    breakpoints: breakpointsIn(css),
+    variants: customVariantsIn(css),
+    prefix,
+  };
   if (depth <= 0 || !file) return own;
 
   // Comments stripped here too, so a commented-out `@import` is not followed into a
@@ -242,11 +249,15 @@ export async function collectTheme(
     const from = await collectTheme(nested, path, depth - 1, seen);
     imported.breakpoints.push(...from.breakpoints);
     imported.variants.push(...from.variants);
+    // Tailwind is often imported from a file the entry pulls in, so the prefix has to
+    // travel back up the chain the same way the breakpoints do.
+    imported.prefix ??= from.prefix;
   }
 
   return {
     breakpoints: [...imported.breakpoints, ...own.breakpoints],
     variants: [...new Set([...imported.variants, ...own.variants])],
+    prefix: own.prefix ?? imported.prefix,
   };
 }
 
@@ -324,8 +335,24 @@ function sameWidth(a: string, b: string): boolean {
 export function themeDiagnostics(
   declared: readonly BreakpointDecl[],
   variants: readonly string[] = [],
+  prefix?: string | undefined,
 ): Diagnostic[] {
   const out: Diagnostic[] = [];
+
+  // Reported first and on its own, because it is not drift — it is total. With a
+  // prefix every class tailess builds is the wrong name, so nothing else this
+  // function could say would matter next to it.
+  if (prefix !== undefined) {
+    out.push({
+      kind: "unsupported-prefix",
+      message:
+        `your CSS imports Tailwind with prefix("${prefix}"), so the working class is ` +
+        `"${prefix}:hover:underline" — but tailess builds "hover:underline", and no rule ` +
+        "is generated for it. Every runtime-built class on the page is unstyled. tailess " +
+        "does not support a Tailwind prefix yet: drop it, or keep tailess out of the " +
+        "stylesheets that use one.",
+    });
+  }
 
   for (const name of variants) {
     out.push({

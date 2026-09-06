@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { collect } from "../extract/collect.js";
 import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceChunks } from "../integration/inject.js";
-import { reportDiagnostics } from "../integration/report.js";
+import { type DiagnosticMode, reportDiagnostics } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
@@ -26,6 +26,11 @@ export interface TailessPostcssOptions {
    * `node_modules/.cache/tailess`.
    */
   cacheDir?: string | undefined;
+  /**
+   * What a build does about the checks the scanner can prove from your source.
+   * "warn" prints them, "error" also fails the build, "off" says nothing.
+   */
+  diagnostics?: DiagnosticMode | undefined;
 }
 
 // Minimal structural types for the slice of the PostCSS API we use, so tailess
@@ -215,18 +220,19 @@ const tailessPostcss = Object.assign(
           extensions: options.extensions,
         });
 
-        reportDiagnostics(diagnostics, process.cwd());
+        reportDiagnostics(diagnostics, process.cwd(), options.diagnostics);
 
         // The breakpoint keys are compiled in, so a `@theme` that moves them is
         // invisible to the source scan — and three of the four ways it can are
         // silent. This is the one place the CSS itself is in hand.
         const theme = await collectTheme(themeSource(root), from);
         reportDiagnostics(
-          themeDiagnostics(theme.breakpoints, theme.variants).map((d) => ({
+          themeDiagnostics(theme.breakpoints, theme.variants, theme.prefix).map((d) => ({
             ...d,
             file: from ?? "your stylesheet",
           })),
           process.cwd(),
+          options.diagnostics,
         );
 
         // Prefer the sidecar: it is a build dependency Tailwind tracks, so a

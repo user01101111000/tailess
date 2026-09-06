@@ -1,16 +1,29 @@
 name: CI
 
 on:
+  # `dev` too, and by hand: this ran only on `main`, so the branch the work actually
+  # happens on was never checked and every failure was found at merge time.
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
+  # Called by release.yml, so the publish waits on this exact matrix rather than
+  # running a subset of it concurrently.
+  workflow_call:
+
+# Least privilege, on the workflows that write nothing back. Both run `npm ci` — every
+# install script in the dependency tree — on `push`, where the token is not the read-only
+# fork token, and a repository created before GitHub's 2023 default change inherits
+# read/write on `contents`. `release.yml` declares its own, wider, because it has to.
+permissions:
+  contents: read
 
 jobs:
   verify:
     # The build integrations touch the file system directly, so they are exercised
     # on Windows and macOS too — path separators, case sensitivity and atomic
-    # renames all differ there.
+    # renames all differ there. Windows runs on both ends of the Node range rather
+    # than one, since it is the platform those differences actually live on.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -20,8 +33,10 @@ jobs:
         include:
           - os: windows-latest
             node: 20
+          - os: windows-latest
+            node: 24
           - os: macos-latest
-            node: 20
+            node: 22
     steps:
       - uses: actions/checkout@v4
 
@@ -36,11 +51,14 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm run test:coverage
-
+      # Before the tests, not after: `test/integration/plugin-shape.test.ts` asserts on
+      # `dist/` and skips itself when there is none, so running the suite first left the
+      # one check guarding the string-named PostCSS entry green *by never running*.
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm run test:coverage
 
   package:
     # Lint and the packaging checks are platform-independent, so run them once.
@@ -69,9 +87,91 @@ jobs:
         run: npm run check:exports
 
   engines:
-    # `engines` claims Node >= 18, but the test runner itself needs 20+. Build on a
-    # supported Node, then load the published artifact on the oldest one we promise,
-    # so the claim is verified rather than asserted.
+    # The floor `engines` promises, loaded rather than asserted. It is 20.19 because
+    # that is what Vite 8 requires and what a Tailwind v4 toolchain therefore already
+    # needs — not because the code could not run lower.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19
+
+      - name: Load the built package on the oldest supported Node
+        run: |
+          node --input-type=module -e "
+            import assert from 'node:assert/strict';
+            const { cn, ss, on, variants, configure } = await import('./dist/index.js');
+            const { createRequire } = await import('node:module');
+            const require = createRequire(process.cwd() + '/x.js');
+
+            assert.equal(cn('px-2', 'px-4'), 'px-4');
+            assert.equal(ss({ base: 'flex', md: 'grid', hover: 'underline' }), 'flex md:grid hover:underline');
+            assert.equal(on(['dark', 'hover'], 'bg-black'), 'dark:hover:bg-black');
+            assert.equal(typeof configure, 'function');
+
+            const card = variants({ slots: { root: 'rounded' }, variants: { s: { a: { root: 'p-2' } } } });
+            assert.equal(card({ s: 'a' }).root, 'rounded p-2');
+
+            assert.equal(require('./dist/index.cjs').cn('p-2', 'p-4'), 'p-4');
+            assert.equal(typeof (await import('./dist/vite/index.js')).default, 'function');
+            assert.equal(typeof require('./dist/postcss/index.cjs'), 'function');
+            assert.equal(typeof (await import('./dist/build.js')).collect, 'function');
+            assert.equal(typeof require('./dist/build.cjs').buildPrelude, 'function');
+            console.log('ok on ' + process.version);
+          "
+
+      # The binary's own entry path — argv slicing, the subcommand alias, the shebang,
+      # the catch that returns 2, the `process.exitCode` assignment — is covered by
+      # nothing else: every test imports `check/run.ts` directly.
+      - name: Run the binary as a process
+        run: |
+          set +e
+          expect() {
+            local want=$1; shift
+            "$@" > /dev/null 2>&1
+            local got=$?
+            if [ "$got" != "$want" ]; then
+              echo "::error::\`$*\` exited $got, expected $want"
+              exit 1
+            fi
+          }
+          expect 0 node dist/cli.js --version
+          expect 0 node dist/cli.js --help
+          expect 2 node dist/cli.js --bogus
+          # No build config in this repo, so there is nothing to wire the plugin into.
+          expect 2 node dist/cli.js doctor
+          expect 2 node dist/cli.js check --content src --css src/does-not-exist.css
+          expect 0 node dist/cli.js emit --content src --out /tmp/tailess.css
+          grep -q "@source inline" /tmp/tailess.css || { echo "::error::emit wrote no @source"; exit 1; }
+          node dist/cli.js --version | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'
+
+          # `--json` is documented as one JSON object instead of prose, and exit 2 as the
+          # code worth an alert — so the paths that exit 2 are exactly the ones a job
+          # parsing stdout depends on. The catch in `cli.ts` knew nothing about --json and
+          # printed the help text to stderr instead, which reads as a broken pipeline.
+          for args in "check --json --css src/does-not-exist.css" "emit --json --content src/nope" "check --json --bogus"; do
+            out=$(node dist/cli.js $args 2>/dev/null)
+            echo "$out" | node -e 'process.stdin.on("data",d=>{const o=JSON.parse(d.toString());if(o.ok!==false||o.code!==2)throw new Error("wrong body: "+d)})' \
+              || { echo "::error::\`$args\` did not print one JSON object with ok:false"; exit 1; }
+          done
+
+  example:
+    # The only place a real Vite build runs. Everything else calls the plugin's hooks
+    # directly, which cannot catch a plugin that is shaped wrong for the host — and the
+    # gate itself is never dogfooded anywhere else either.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,24 +187,181 @@ jobs:
       - name: Build
         run: npm run build
 
+      # `file:../..` links the package itself, so this is the built artifact a consumer
+      # would install rather than a copy of `src/`.
+      - name: Install the example
+        run: npm install --no-audit --no-fund
+        working-directory: examples/vite-react
+
+      - name: Typecheck the example
+        run: npx tsc -p tsconfig.json
+        working-directory: examples/vite-react
+
+      - name: Build the example
+        run: npm run build
+        working-directory: examples/vite-react
+
+      - name: Gate the example
+        run: npx tailess check --content src --strict
+        working-directory: examples/vite-react
+
+      # The negative: with the plugin removed the build still succeeds and the page
+      # renders the right class attributes with no styles behind them, so the gate has
+      # to be what goes red. A green run here would mean the gate proves nothing.
+      - name: The gate must fail when the plugin is not wired up
+        working-directory: examples/vite-react
+        run: |
+          sed -i 's/, tailess({ diagnostics: "error" })//' vite.config.ts
+          grep -q "tailess(" vite.config.ts && { echo "::error::the sed did not remove the plugin"; exit 1; }
+          # Exit 1 specifically, not "any failure". `check` also exits 2 for "nothing
+          # could be checked" — a renamed flag, a moved stylesheet, a typo in this very
+          # command line — and treating that as proof leaves the step green while the
+          # negative it exists to demonstrate is no longer being demonstrated.
+          set +e
+          npx tailess check --content src --strict
+          code=$?
+          set -e
+          if [ "$code" != "1" ]; then
+            echo "::error::expected exit 1 (a class with no rule), got $code"
+            exit 1
+          fi
+          echo "the gate failed with exit 1, as it must"
+
+  nextjs:
+    # Next.js is the first setup the README documents and the reason `postbuild.mjs`
+    # exists at all — its `export =` correction is there so a string-named
+    # `"tailess/postcss"` resolves for Next — and nothing built one. The app is
+    # scaffolded here rather than committed: it is a smoke test of the host, not an
+    # example anyone reads.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
+          cache: npm
 
-      - name: Import the built package on the oldest supported Node
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pack the package a consumer would install
         run: |
-          node --input-type=module -e "
-            import assert from 'node:assert/strict';
-            const { cn, ss, on } = await import('./dist/index.js');
-            const { createRequire } = await import('node:module');
-            const require = createRequire(process.cwd() + '/x.js');
+          npm run build
+          npm pack --silent
+          echo "TARBALL=$(ls tailess-*.tgz)" >> "$GITHUB_ENV"
 
-            assert.equal(cn('px-2', 'px-4'), 'px-4');
-            assert.equal(ss({ base: 'flex', md: 'grid', hover: 'underline' }), 'flex md:grid hover:underline');
-            assert.equal(on(['dark', 'hover'], 'bg-black'), 'dark:hover:bg-black');
+      # The app is TypeScript, so the TypeScript toolchain is declared rather than left
+      # to Next. Off CI, `next build` quietly installs `typescript` and `@types/react`
+      # itself and writes a tsconfig — which is why this scaffold built for anyone who
+      # tried it locally. On a runner, `CI=true`, and Next refuses to install anything:
+      # it prints "It looks like you're trying to use TypeScript but do not have the
+      # required package(s) installed" and the worker exits 1. Declaring them keeps the
+      # type-check, which is worth having: this is the only place the published types are
+      # compiled inside a real Next app.
+      - name: Scaffold a Next.js app
+        run: |
+          mkdir -p /tmp/next-smoke/app
+          cd /tmp/next-smoke
+          cat > package.json <<'JSON'
+          {
+            "name": "next-smoke",
+            "private": true,
+            "scripts": { "build": "next build" },
+            "dependencies": { "next": "^15.5.0", "react": "^19.2.0", "react-dom": "^19.2.0" },
+            "devDependencies": {
+              "@tailwindcss/postcss": "^4.3.3",
+              "tailwindcss": "^4.3.3",
+              "@types/node": "^20.19.0",
+              "@types/react": "^19.2.0",
+              "typescript": "^5.8.2"
+            }
+          }
+          JSON
+          cat > postcss.config.mjs <<'MJS'
+          const config = {
+            plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} },
+          };
+          export default config;
+          MJS
+          echo '@import "tailwindcss";' > app/globals.css
+          cat > app/layout.tsx <<'TSX'
+          import "./globals.css";
+          export default function RootLayout({ children }: { children: React.ReactNode }) {
+            return (<html lang="en"><body>{children}</body></html>);
+          }
+          TSX
+          cat > app/page.tsx <<'TSX'
+          import { ss, on, has, variants } from "tailess";
+          const card = variants({
+            slots: { root: "rounded border", title: "font-semibold" },
+            variants: { size: { lg: { root: { base: "p-5", md: "p-8" }, title: { hover: "underline" } } } },
+            defaults: { size: "lg" },
+          });
+          export default function Page() {
+            const { root, title } = card();
+            return (
+              <main className={ss({ base: "p-4", md: "p-10", dark: "bg-black" })}>
+                <section className={root}>
+                  <h1 className={title}>tailess on Next.js</h1>
+                  <p className={on(["dark", "hover"], "text-white")}>compound</p>
+                  <p className={has("> code", "text-blue-700")}>has</p>
+                </section>
+              </main>
+            );
+          }
+          TSX
+          # Written as a file, not as `node -e`: the selector escaping needs a literal
+          # backslash, and one inside a double-quoted shell argument does not survive.
+          cat > verify.mjs <<'MJS'
+          import { readFileSync, readdirSync } from "node:fs";
+          import { join } from "node:path";
 
-            assert.equal(require('./dist/index.cjs').cn('p-2', 'p-4'), 'p-4');
-            assert.equal(typeof (await import('./dist/vite/index.js')).default, 'function');
-            assert.equal(typeof require('./dist/postcss/index.cjs'), 'function');
-            console.log('ok on ' + process.version);
-          "
+          const dir = ".next/static/css";
+          const css = readdirSync(dir)
+            .filter((name) => name.endsWith(".css"))
+            .map((name) => readFileSync(join(dir, name), "utf8"))
+            .join("\n");
+
+          /** How Tailwind escapes a class name inside a selector. */
+          const selectorFor = (cls) =>
+            "." + [...cls].map((ch) => (/[a-zA-Z0-9_-]/.test(ch) ? ch : "\\" + ch)).join("");
+
+          const want = [
+            "md:p-10",
+            "dark:bg-black",
+            "md:p-8",
+            "hover:underline",
+            "dark:hover:text-white",
+            "has-[>_code]:text-blue-700",
+          ];
+
+          if (!css.includes("--tailess")) {
+            console.error("::error::the marker is absent — the plugin did not run at all");
+            process.exit(1);
+          }
+          const missing = want.filter((cls) => !css.includes(selectorFor(cls)));
+          if (missing.length) {
+            console.error("::error::Next emitted no rule for " + missing.join(", "));
+            process.exit(1);
+          }
+          console.log("all " + want.length + " runtime-built classes have a rule");
+          MJS
+
+      - name: Build it
+        run: |
+          cd /tmp/next-smoke
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$TARBALL"
+          npx next build
+          # Next only type-checks when there is a tsconfig, and it writes one itself. If
+          # that ever stops, the build would still pass having checked nothing — and this
+          # is the only place the published types are compiled inside a real Next app.
+          test -f tsconfig.json || { echo "::error::no tsconfig — the app was not type-checked"; exit 1; }
+
+      # The point of the job: the classes the runtime builds have to be in the
+      # stylesheet Next emitted, which only happens if the string-named plugin loaded.
+      - name: The runtime-built classes must be in the emitted CSS
+        run: |
+          cd /tmp/next-smoke
+          node verify.mjs
+          npx tailess check --content app --strict

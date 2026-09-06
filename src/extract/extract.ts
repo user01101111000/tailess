@@ -1,9 +1,11 @@
 import { escapeCondition } from "../internal/condition.js";
 import {
+  declaresKey,
   dictionaryKeys,
   extractStrings,
   isArrayLiteral,
   isObjectLiteral,
+  maskLiterals,
   objectLiterals,
   outerCalls,
   parseObject,
@@ -487,20 +489,66 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     // does need enumerating. So each of the three places a class can hide is walked
     // to explicitly, and everything else in the config is left alone.
     case "variants": {
-      const [config] = objectLiterals(args[0] ?? "");
+      // `cva`'s shape puts the base classes first and the config second. Which argument
+      // is which is decided by the `variants` key: a config always has one, and a base
+      // value never does — including when it is an `ss` map, which a string-only test
+      // would have read as the config.
+      const first = objectLiterals(args[0] ?? "")[0];
+      const isConfig = first !== undefined && parseObject(first).some((f) => f.key === "variants");
+      const cva = args.length > 1 && !isConfig;
+      if (cva) emitMaps(args[0] ?? "", depth, add, follow);
+      const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
       if (config === undefined) return;
-      for (const { key, value } of parseObject(config)) {
+      const fields = parseObject(config);
+
+      // Whether an option's value is one level deeper — `{ root: …, title: … }` rather
+      // than a class value — turns on the *presence* of a `slots` field, never on whether
+      // its names could be read. `variants({ slots, … })` with the map hoisted to a const,
+      // and `slots: { ...shared, title: … }`, both leave the names invisible while the
+      // recipe is still slotted; reading those as flat emitted `root:md:p-8` — junk
+      // matching no utility — and lost the `md:p-8` the runtime does build.
+      const slotted = declaresKey(config, "slots");
+
+      /**
+       * Emit one per-slot value, or a plain class value when there are no slots.
+       *
+       * A recipe that inherits its parts rather than declaring them — `extend` pointing
+       * at a slotted recipe, with no `slots` of its own — used to break the parity here:
+       * the scanner read it as flat while the runtime followed the parent's slots. It is
+       * the runtime that changed. That shape is refused by the types and, when a cast
+       * gets it through, `resolve` stops at the boundary and stays flat rather than
+       * switching what the component returns — so the flat reading is now the right one
+       * on both sides, and this needs no second guess about which it is looking at.
+       */
+      const emitPart = (text: string): void => {
+        if (!slotted) {
+          emitMaps(text, depth, add, follow);
+          return;
+        }
+        // Every key, not only those a readable `slots:` named. A key that is not a slot
+        // yields a candidate the runtime never builds, which `@source inline(…)` ignores;
+        // a slot whose name could not be read would otherwise lose its classes outright.
+        for (const group of objectLiterals(text)) {
+          for (const part of parseObject(group)) emitMaps(part.value, depth, add, follow);
+        }
+      };
+
+      for (const { key, value } of fields) {
         if (key === "base") {
           emitMaps(value, depth, add, follow);
+        } else if (key === "slots") {
+          for (const group of objectLiterals(value)) {
+            for (const slot of parseObject(group)) emitMaps(slot.value, depth, add, follow);
+          }
         } else if (key === "variants") {
           for (const group of objectLiterals(value)) {
             for (const option of parseObject(group)) {
               for (const choices of objectLiterals(option.value)) {
-                for (const leaf of parseObject(choices)) emitMaps(leaf.value, depth, add, follow);
+                for (const leaf of parseObject(choices)) emitPart(leaf.value);
               }
             }
           }
-        } else if (key === "compound") {
+        } else if (key === "compound" || key === "compoundVariants") {
           // A real array of rule objects, which is not what an array means anywhere
           // else here: inside an `ss` value an object is a `clsx` dictionary, so
           // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
@@ -509,7 +557,9 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
           const rules = list.startsWith("[") && list.endsWith("]") ? list.slice(1, -1) : list;
           for (const rule of objectLiterals(rules)) {
             for (const field of parseObject(rule)) {
-              if (field.key === "class") emitMaps(field.value, depth, add, follow);
+              // `className` is the `cva`/`tv` spelling, accepted so a ported recipe
+              // does not lose its compound classes without a word.
+              if (field.key === "class" || field.key === "className") emitPart(field.value);
             }
           }
         }
@@ -528,10 +578,13 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       const variant = nthVariants[name];
       const arg = args[0] ?? "";
       const prefixes = extractStrings(arg).map((value) => `${variant}-[${escapeCondition(value)}]`);
-      // Only when the argument holds no string at all, so the digits inside `"3n+1"`
-      // are never read as a position of their own.
-      if (prefixes.length === 0) {
-        for (const value of staticValues(arg)) prefixes.push(`${variant}-${value}`);
+      // The sweep runs over the argument with its strings blanked, rather than being
+      // skipped whenever a string is present. `nth(cond ? 2 : "odd", …)` has both, and
+      // the old gate dropped the numeric branch entirely and silently; blanking keeps the
+      // digits inside `"3n+1"` from being read as a position while a bare `2` beside it
+      // is still found.
+      for (const value of staticValues(maskLiterals(arg, true))) {
+        prefixes.push(`${variant}-${value}`);
       }
       emitValue(args[1] ?? "", prefixes, add, follow);
       return;

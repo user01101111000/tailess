@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 *.tsbuildinfo
+# `npm pack` writes here by default, and hand-verifying a release is the natural
+# reason to run it — 400 kB of dist, one `git add -A` away from being in history.
+*.tgz
 
 # Test / coverage
 coverage/
@@ -23,8 +26,12 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
 
 # Cache
 .cache/
 .turbo/
+
+# Example apps resolve tailess by file:, so their lock churns on every version bump.
+examples/*/package-lock.json

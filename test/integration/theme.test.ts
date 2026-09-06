@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { tailwindPrefixIn } from "../../src/integration/entry.js";
 import {
   breakpointsIn,
   collectBreakpoints,
@@ -396,5 +397,37 @@ describe("following the stylesheets a theme is split across", () => {
   it("does not follow a bare specifier, which needs a resolver we do not have", async () => {
     const found = await collectBreakpoints(`@import "@acme/styles";`, join(dir, "app.css"));
     expect(found).toEqual([]);
+  });
+});
+
+describe("Tailwind imported with a prefix", () => {
+  it("finds the prefix wherever the import options put it", () => {
+    expect(tailwindPrefixIn(`@import "tailwindcss" prefix(tw);`)).toBe("tw");
+    expect(tailwindPrefixIn(`@import "tailwindcss" source(none) prefix(acme);`)).toBe("acme");
+    expect(tailwindPrefixIn(`@import 'tailwindcss/utilities' prefix( tw );`)).toBe("tw");
+  });
+
+  it("says nothing about an ordinary import", () => {
+    expect(tailwindPrefixIn(`@import "tailwindcss";`)).toBeUndefined();
+    expect(tailwindPrefixIn(`@import "tailwindcss" source(none);`)).toBeUndefined();
+    // Not Tailwind's import, so its options are none of this check's business.
+    expect(tailwindPrefixIn(`@import "@acme/styles" prefix(tw);`)).toBeUndefined();
+    // A commented-out one is not one.
+    expect(tailwindPrefixIn(`/* @import "tailwindcss" prefix(tw); */`)).toBeUndefined();
+    // `prefix` further down the file belongs to something else.
+    expect(tailwindPrefixIn(`@import "tailwindcss";\n.a { --prefix: tw; }`)).toBeUndefined();
+  });
+
+  it("reports it as the total failure it is, ahead of anything else", () => {
+    // Every runtime-built class is the wrong name, so no other diagnostic matters.
+    const [first] = themeDiagnostics([], [], "tw");
+    expect(first?.kind).toBe("unsupported-prefix");
+    expect(first?.message).toContain('prefix("tw")');
+    expect(first?.message).toContain("tw:hover:underline");
+  });
+
+  it("says nothing when there is no prefix", () => {
+    expect(themeDiagnostics([], [], undefined)).toEqual([]);
+    expect(themeDiagnostics([])).toEqual([]);
   });
 });

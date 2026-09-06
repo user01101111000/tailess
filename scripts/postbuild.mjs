@@ -5,7 +5,7 @@
  * isn't there, so a tsup upgrade that changes the emitted shape breaks the build
  * instead of silently shipping the thing the step was meant to fix.
  */
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -95,8 +95,46 @@ async function dedupeSourceMapComments() {
   }
 }
 
+/**
+ * Drop the CJS sourcemaps, which nothing can use and everyone installs.
+ *
+ * The same argument `tsup.config.ts` already makes for the CLI's map, applied where it is
+ * worth far more. tsup does not code-split CJS, so `postcss/index.cjs`, `vite/index.cjs`
+ * and `build.cjs` each carry a full copy of the scanner — and each map carried a full copy
+ * of its source. That was 581 kB, 38% of the unpacked tarball, for three bundles that run
+ * inside someone else's build pipeline, where nobody steps through tailess internals.
+ * What a consumer might plausibly debug resolves through the `import` condition and keeps
+ * its map.
+ *
+ * Done here rather than in `tsup.config.ts` because `sourcemap` is per-config, not
+ * per-format, and splitting the entry in two to express it would run `dts` twice.
+ */
+async function dropCjsSourceMaps() {
+  const walk = async (dir) => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path);
+        continue;
+      }
+      if (entry.name.endsWith(".cjs.map")) {
+        await rm(path);
+        continue;
+      }
+      if (!entry.name.endsWith(".cjs")) continue;
+      // The comment has to go too, or a consumer's devtools asks for a file that is not
+      // there on every load.
+      const source = await readFile(path, "utf8");
+      const stripped = source.replace(/\r?\n\/\/# sourceMappingURL=[^\r\n]*\s*$/, "\n");
+      if (stripped !== source) await writeFile(path, stripped, "utf8");
+    }
+  };
+  await walk(fileURLToPath(dist));
+}
+
 await fixCjsDefaultTypes();
 await dedupeSourceMapComments();
+await dropCjsSourceMaps();
 
 if (problems.length > 0) {
   console.error(`\n[tailess] post-build check failed:\n\n${problems.join("\n\n")}\n`);

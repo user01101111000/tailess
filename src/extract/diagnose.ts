@@ -1,6 +1,16 @@
 import { twMerge } from "tailwind-merge";
-import { screenKeys } from "../constants.js";
-import { extractStrings, isArrayLiteral, type RawCall, scanCalls } from "./scan.js";
+import { maxScreenKeys, screenKeys, stateKeys } from "../constants.js";
+import {
+  dictionaryKeys,
+  extractStrings,
+  helperNames,
+  isArrayLiteral,
+  maskLiterals,
+  objectLiterals,
+  parseObject,
+  type RawCall,
+  scanCalls,
+} from "./scan.js";
 
 /**
  * Problems the scanner can prove from the source alone, reported while the project
@@ -24,7 +34,15 @@ export interface Diagnostic {
     | "spaced-prefix"
     | "unusable-query"
     /** Not from a source file: the project's CSS redefines `--breakpoint-*`. */
-    | "theme-drift";
+    | "theme-drift"
+    /** Not from a source file either: Tailwind was imported with a `prefix(…)`. */
+    | "unsupported-prefix"
+    /** A helper imported under another name, which the scanner cannot follow. */
+    | "renamed-import"
+    /** An `ss` map handed to a helper whose class argument is a clsx value. */
+    | "bucket-as-dictionary"
+    /** A prefixed bucket whose value the scanner cannot read. */
+    | "dynamic-value";
   /** One line, written for whoever has to fix it. */
   message: string;
 }
@@ -82,6 +100,106 @@ function deadClasses(text: string | undefined, report: (d: Diagnostic) => void):
           `"${cls}" never reaches the element` +
           (winner ? ` — "${winner}" replaces it in the same string` : "") +
           `. Drop the unused one, or move the override into its own argument.`,
+      });
+    }
+  }
+}
+
+/** Every key `ss` knows, for telling a bucket map from a `clsx` dictionary. */
+const everyKey = new Set<string>(["base", ...screenKeys, ...maxScreenKeys, ...stateKeys]);
+
+/**
+ * The keys that are also plausible class names of someone's own.
+ *
+ * A dash rules it out: nobody writes a class called `group-hover` or `max-md`, and a
+ * breakpoint is not a class name either. What is left — `first`, `last`, `open`,
+ * `checked`, `disabled`, `active` — is exactly the vocabulary of a `clsx` dictionary
+ * (`.active` in Bootstrap, `.open` in a CSS module), so for those the report has to name
+ * both readings instead of asserting the one that happens to be more common.
+ */
+const ambiguousAsClass = new Set<string>(
+  stateKeys.filter((key) => !key.includes("-") && !(screenKeys as readonly string[]).includes(key)),
+);
+
+/**
+ * Report an `ss` map handed to a helper that takes a flat class value.
+ *
+ * Composition here runs one way: a helper nests *inside* an `ss` bucket, not the other
+ * way round. `on`, `until`, `supports` and the rest take a `ClassValue`, where an object
+ * is a `clsx` dictionary — `until("md", { hidden: !open })` is the documented shape — so
+ * an `ss` map handed to one is read as a dictionary and its *keys* become the classes:
+ * `on("hover", { base: "underline", md: "font-bold" })` builds `"hover:base hover:md"`.
+ *
+ * The type system refuses it, so this only fires where a cast or an untyped boundary let
+ * it through — and there it is silent, which is why it is worth a build check. The test
+ * is exact: `base`, `md` and `hover` are `ss` keys and none of them is a Tailwind
+ * utility, so a dictionary key that is one of them was meant as a bucket.
+ */
+function bucketMapAsDictionary(
+  name: string,
+  text: string | undefined,
+  report: (d: Diagnostic) => void,
+): void {
+  if (!text) return;
+  // Spelled-out entries only. `({ open, dark }) => …` is a destructuring parameter, not a
+  // dictionary, and it is the commonest object literal in a component file.
+  for (const key of dictionaryKeys(text, true, false)) {
+    if (!everyKey.has(key)) continue;
+    report({
+      kind: "bucket-as-dictionary",
+      message:
+        `${name}() was given an object with the key "${key}", which is an ss bucket — but ` +
+        `its class argument is a clsx value, so "${key}" becomes the class name. Nest the ` +
+        `other way round: ss({ ${key}: ${name}(…) }).` +
+        // `first`, `last`, `open`, `checked`, `disabled` are ordinary conditional class
+        // names — Bootstrap's `.active`, a CSS module's `.open` — so the nesting mistake
+        // is not the only way to land here. The class is dead either way, but only one of
+        // the two readings has the rewrite above as its fix, and asserting the wrong one
+        // sends the reader to change code that was doing what they meant.
+        (ambiguousAsClass.has(key)
+          ? ` If "${key}" really is your own class name, it is not the nesting that is ` +
+            `wrong — it still takes the ${name}() prefix, and nothing generates a rule ` +
+            `for "${key}".`
+          : ""),
+    });
+    return;
+  }
+}
+
+/** Values that contribute no class at all, so being unreadable costs nothing. */
+const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '""', "''", "``"]);
+
+/**
+ * Report a bucket whose value the scanner cannot read.
+ *
+ * The README lists these as things the scanner cannot see — a variable, an interpolated
+ * template, a call it does not know — and every one of them is silent: the runtime
+ * builds `md:p-4` from whatever the value turns out to be, and no candidate was ever
+ * enumerated for it, so the class lands with no rule. It is the package's most common
+ * support case and the type system cannot express any of it, because `ss({ md: size })`
+ * is perfectly well typed.
+ *
+ * Only a *prefixed* bucket is reported. `base` adds no prefix, so its value passes
+ * through unchanged and Tailwind finds the literal wherever it really lives — which is
+ * why the same shape there is fine, and reporting it would be a warning on working code.
+ */
+function dynamicBuckets(text: string | undefined, report: (d: Diagnostic) => void): void {
+  if (!text) return;
+  for (const map of objectLiterals(text)) {
+    for (const { key, value } of parseObject(map)) {
+      if (key === "base") continue;
+      const trimmed = value.trim();
+      if (trimmed === "" || contributesNothing.has(trimmed)) continue;
+      // A literal anywhere in the value is enough: the sweep reads both branches of a
+      // ternary and both halves of `cond && "p-4"`, so those are not dynamic.
+      if (extractStrings(value).length > 0 || objectLiterals(value).length > 0) continue;
+      report({
+        kind: "dynamic-value",
+        message:
+          `the "${key}" bucket is set to \`${trimmed}\`, which the scanner cannot read — so ` +
+          `nothing enumerates the class it builds and it reaches the element with no rule. ` +
+          `Keep the class literal at the call site: match(${trimmed}, { … }) for a lookup, ` +
+          `or vars() when the value is a number.`,
       });
     }
   }
@@ -178,6 +296,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
         }
       }
       deadClasses(args[2], report);
+      bucketMapAsDictionary(name, args[2], report);
       return;
     }
 
@@ -185,6 +304,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       if (args.length < 2) return;
       checkPrefix(args[0], report);
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
@@ -202,6 +322,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       if (args.length < 2) return;
       unusableValues(name, args[0] ?? "", report);
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
@@ -212,6 +333,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
     case "container": {
       if (args.length < 3) return;
       deadClasses(args[2], report);
+      bucketMapAsDictionary(name, args[2], report);
       return;
     }
 
@@ -232,6 +354,7 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
         }
       }
       deadClasses(args[2], report);
+      bucketMapAsDictionary(name, args[2], report);
       return;
     }
 
@@ -250,12 +373,14 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
         }
       }
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
     case "until":
     case "aria": {
       deadClasses(args[1], report);
+      bucketMapAsDictionary(name, args[1], report);
       return;
     }
 
@@ -263,7 +388,13 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
     case "responsive": {
       // Every argument of these is (or contains) class values; the literals inside
       // are what matter, and `extractStrings` reaches them wherever they sit.
-      for (const arg of args) deadClasses(arg, report);
+      // No `bucketMapAsDictionary` here: for these two an object argument really is a
+      // bucket map, which is the whole point of them — and is what makes it the one
+      // place a bucket the scanner cannot read is worth reporting.
+      for (const arg of args) {
+        deadClasses(arg, report);
+        dynamicBuckets(arg, report);
+      }
       return;
     }
   }
@@ -279,8 +410,97 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
  */
 const maxPerFile = 20;
 
-/** Every problem the scanner can prove from `code`. */
-export function diagnose(code: string): Diagnostic[] {
+/**
+ * Files where an `import` line is prose rather than code.
+ *
+ * The scanner reads Markdown and HTML because a class can appear in either, but the
+ * import statements there are examples — a README documenting `import { ss as tw }` as
+ * the thing *not* to do would otherwise be reported for doing it. `.mdx` is excluded
+ * from this list on purpose: its imports really do run.
+ */
+const proseFile = /\.(?:md|markdown|html?)$/i;
+
+/** A named import from tailess, with the whole specifier list in hand. */
+const tailessImport = /^[ \t]*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/gm;
+/** One `original as local` specifier inside it. */
+const renamedSpecifier = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g;
+const scannedHelpers = new Set<string>(helperNames);
+
+/**
+ * Report a helper imported under another name.
+ *
+ * The scanner finds calls by identifier, so `import { ss as tw } from "tailess"` is one
+ * line that removes *every* class in the file from the candidate list. Nothing else
+ * notices: the file compiles, type-checks, renders the right `class` attribute, and
+ * every variant on it is unstyled. It is the largest silent failure the package has and
+ * the only one provable from the import statement alone.
+ *
+ * `code` here is the masked source and the match is anchored to the start of a line, so a
+ * commented-out import and one quoted inside a docs sample are both what they are: text
+ * about code. This check asserts the strongest failure the package reports, and asserting
+ * it about a line that does not run — in the same output that says every class has CSS —
+ * is how a build gate teaches people to stop reading it.
+ */
+function renamedImports(code: string, report: (d: Diagnostic) => void): void {
+  tailessImport.lastIndex = 0;
+  for (let m = tailessImport.exec(code); m !== null; m = tailessImport.exec(code)) {
+    const list = m[1] as string;
+    renamedSpecifier.lastIndex = 0;
+    for (let s = renamedSpecifier.exec(list); s !== null; s = renamedSpecifier.exec(list)) {
+      const original = s[1] as string;
+      const local = s[2] as string;
+      if (!scannedHelpers.has(original) || original === local) continue;
+      report({
+        kind: "renamed-import",
+        message:
+          `${original}() is imported as "${local}", and the scanner finds calls by name — ` +
+          `so every class ${local}() builds in this file reaches the element with no rule ` +
+          `behind it. Import it under its own name, or re-export a wrapper the scanner ` +
+          `also knows.`,
+      });
+    }
+  }
+}
+
+/** Any import of the package itself, in either module system. */
+const anyTailessImport = /^[ \t]*import\b[^;]*?["']tailess["']|\brequire\(\s*["']tailess["']\s*\)/m;
+/** `import * as tl from "tailess"`, whose members are helper calls. */
+const namespaceImport = /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm;
+
+/**
+ * The names a call has to be reached through in this file to be one of ours, or `null`
+ * when the file does not import tailess at all.
+ *
+ * Enumeration is deliberately loose — a helper name in a string or on any receiver yields
+ * candidates, because an extra candidate costs a moment of compile time and a missing one
+ * costs a broken layout. Reporting cannot borrow that looseness. `on`, `data`, `group`,
+ * `has`, `inside`, `between` and `responsive` are ordinary identifiers in any codebase,
+ * and `socket.on("presence", ({ open, dark }) => …)` in a file that has never heard of
+ * this package was being told one of its classes is unstyled — failing the build under
+ * `check --strict` or `diagnostics: "error"`.
+ *
+ * The trade is a false negative for a project that reaches the helpers through its own
+ * re-export: it still gets full class enumeration and `tailess check` still proves the far
+ * end, it just loses the source-level warnings. A warning that fires on working code is
+ * worse, because it teaches people to stop reading them.
+ */
+function callableHere(masked: string): Set<string> | null {
+  if (!anyTailessImport.test(masked)) return null;
+  const receivers = new Set<string>([""]);
+  namespaceImport.lastIndex = 0;
+  for (let m = namespaceImport.exec(masked); m !== null; m = namespaceImport.exec(masked)) {
+    receivers.add(m[1] as string);
+  }
+  return receivers;
+}
+
+/**
+ * Every problem the scanner can prove from `code`.
+ *
+ * `file` is only ever read to decide whether an import statement in it is code, so a
+ * caller with no path in hand loses nothing else by omitting it.
+ */
+export function diagnose(code: string, file?: string): Diagnostic[] {
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;
@@ -297,7 +517,15 @@ export function diagnose(code: string): Diagnostic[] {
     found.push(d);
   };
 
-  for (const call of scanCalls(code)) check(call, report);
+  const masked = maskLiterals(code);
+  if (file === undefined || !proseFile.test(file)) renamedImports(masked, report);
+
+  const receivers = callableHere(masked);
+  if (receivers) {
+    for (const call of scanCalls(code)) {
+      if (receivers.has(call.receiver)) check(call, report);
+    }
+  }
 
   if (suppressed > 0) {
     found.push({

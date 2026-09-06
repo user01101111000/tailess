@@ -1,0 +1,6 @@
+# Everything, unless something below says otherwise.
+*                       @user01101111000
+
+# The two files that decide what ships, and to whom.
+/.github/workflows/     @user01101111000
+/package.json           @user01101111000
