@@ -47,16 +47,21 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Pinned to a commit, not the moving `v1` tag: this step runs with `id-token:
+      # Pinned to a commit, not the moving `v2` tag: this step runs with `id-token:
       # write` and the npm token in its environment, so whoever can move that tag can
-      # publish as this package. Bump it deliberately, the way a dependency is bumped.
+      # publish as this package. Bump it deliberately, the way a dependency is bumped —
+      # and read its inputs when you do. Every one of these was renamed in v2
+      # (`publish` -> `publish-script`, `version` -> `version-script`, `commit` ->
+      # `commit-message`, `title` -> `pr-title`), and an input a GitHub action does not
+      # declare is a warning rather than an error, so the step kept running with no
+      # publish script at all and failed further in.
       - name: Create release PR or publish to npm
         uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
-          publish: npm run release
-          version: npm run changeset -- version
-          commit: "chore: release"
-          title: "chore: release"
+          publish-script: npm run release
+          version-script: npm run changeset -- version
+          commit-message: "chore: release"
+          pr-title: "chore: release"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

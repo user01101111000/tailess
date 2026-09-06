@@ -94,7 +94,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20.19"
@@ -111,6 +112,7 @@
     "format": "biome format --write .",
     "check:exports": "attw --pack .",
     "check:publish": "publint",
+    "check:actions": "node scripts/check-actions.mjs",
     "prepublishOnly": "npm run build && npm run check:publish && npm run check:exports",
     "release": "changeset publish",
     "changeset": "changeset",
@@ -125,10 +127,12 @@
     "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.1",
     "@tailwindcss/postcss": "^4.3.3",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.1.0",
     "@vitest/coverage-v8": "^4.1.9",
     "clsx": "^2.1.1",
     "esbuild": "^0.28.2",
+    "js-yaml": "^5.4.1",
     "postcss": "^8.5.26",
     "publint": "^0.3.21",
     "tailwindcss": "^4.3.3",

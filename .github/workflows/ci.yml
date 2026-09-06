@@ -86,6 +86,14 @@ jobs:
       - name: Validate types (are-the-types-wrong)
         run: npm run check:exports
 
+      # An action given an input it does not declare *warns* and carries on, so a major
+      # bump that renames one leaves CI green and breaks the release — which is the one
+      # workflow nothing else exercises. That is not hypothetical: `changesets/action` v2
+      # renamed `publish` to `publish-script` and the publish step ran with no publish
+      # script at all. This resolves each action at the SHA the workflow pins.
+      - name: Validate workflow inputs against the actions they go to
+        run: npm run check:actions
+
   engines:
     # The floor `engines` promises, loaded rather than asserted. It is 20.19 because
     # that is what Vite 8 requires and what a Tailwind v4 toolchain therefore already
