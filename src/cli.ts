@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { commandIn, jsonResult } from "./check/result.js";
 /// <reference types="node" />
-import { commandIn, help, jsonResult, parse, run, version } from "./check/run.js";
+import { help, parse, run, UsageError, version } from "./check/run.js";
 
 /**
  * The `tailess` binary. Everything it does lives in `check/run.ts`, so the parts
@@ -33,7 +34,10 @@ async function main(): Promise<number> {
       return 2;
     }
     console.error(`[tailess] ${message}`);
-    console.error(`\n${help}`);
+    // Usage text answers a usage error. After "tailwindcss is not installed here" it is
+    // thirty lines that bury the one useful one and point the reader at flags that were
+    // never the problem.
+    if (error instanceof UsageError) console.error(`\n${help}`);
     return 2;
   }
 }

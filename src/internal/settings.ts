@@ -1,5 +1,5 @@
-import { isDev } from "./env.js";
 import { twMerge } from "tailwind-merge";
+import { isDev } from "./env.js";
 
 /**
  * The two things a project may need to change about how tailess behaves at runtime.

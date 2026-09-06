@@ -4,9 +4,11 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
+import { maskLiterals } from "../extract/scan.js";
 import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
+import { type Command, commands, jsonResult } from "./result.js";
 import { runDoctor, runInit, wired } from "./setup.js";
 import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
@@ -21,7 +23,7 @@ import { type BrokenClass, findBroken, probeList } from "./verify.js";
 
 export interface Options {
   /** Which command to run. `check` compiles and verifies; `emit` writes the prelude. */
-  command: "check" | "emit" | "init" | "doctor";
+  command: Command;
   content: string[];
   css: string | undefined;
   cwd: string;
@@ -44,39 +46,29 @@ export interface Options {
 /** Options that take a comma-separated list as well as being repeatable. */
 const listOptions = new Set(["--content", "--extensions", "--ignore"]);
 const pathOptions = new Set(["--css", "--out"]);
-
-/** The subcommands, in one place: `parse` reads them, and so does the crash handler. */
-const commands = ["check", "emit", "init", "doctor"] as const;
+/**
+ * What each option's value actually is, for the message when it is missing.
+ *
+ * `--ignore` takes directory *names* and was told it needed a path, which sends the
+ * reader looking for the wrong thing.
+ */
+const nouns: Record<string, string> = {
+  "--content": "path",
+  "--css": "path",
+  "--out": "path",
+  "--extensions": "list of extensions",
+  "--ignore": "directory name",
+};
 
 /**
- * The subcommand `argv` names, or `check` — which a bare `tailess …` means.
+ * An error in how the command was invoked, as opposed to one from running it.
  *
- * Exported because the binary's catch has to name the command in its JSON without having
- * got as far as a parsed {@link Options}: the throw it is catching may have come from
- * `parse` itself.
+ * The binary printed its whole usage text after *any* failure — including "tailwindcss is
+ * not installed here" and a module-resolution error — which is thirty lines of noise
+ * pushing the one useful line out of a CI log tail, and tells the reader to re-check
+ * flags that were fine.
  */
-export function commandIn(argv: readonly string[]): Options["command"] {
-  const first = argv[0];
-  return (commands as readonly string[]).includes(first ?? "")
-    ? (first as Options["command"])
-    : "check";
-}
-
-/**
- * The JSON form of a result.
- *
- * One shape for every exit path of every command. `--json` is documented as "one JSON
- * object instead of prose", and the exit-code table calls `2` the one worth wiring an
- * alert to — so a path that answers with prose, or with nothing, hands the job that
- * followed that advice a parse error instead of a finding.
- */
-export function jsonResult(
-  command: Options["command"],
-  code: number,
-  body: Record<string, unknown>,
-): string {
-  return JSON.stringify({ tailess: 1, command, ok: code === 0, code, ...body });
-}
+export class UsageError extends Error {}
 
 export function parse(argv: readonly string[]): Options | "help" | "version" {
   const content: string[] = [];
@@ -116,7 +108,7 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
     if (arg === "--max") {
       const value = rest[i + 1];
       if (value === undefined || !/^\d+$/.test(value)) {
-        throw new Error("--max needs a whole number (0 for no limit)");
+        throw new UsageError("--max needs a whole number (0 for no limit)");
       }
       max = Number(value);
       i += 1;
@@ -125,7 +117,7 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
     if (listOptions.has(arg) || pathOptions.has(arg)) {
       const value = rest[i + 1];
       if (value === undefined || value.startsWith("-")) {
-        throw new Error(`${arg} needs a ${arg === "--extensions" ? "value" : "path"}`);
+        throw new UsageError(`${arg} needs a ${nouns[arg] ?? "value"}`);
       }
       if (arg === "--css") css = value;
       else if (arg === "--out") out = value;
@@ -139,7 +131,14 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
       i += 1;
       continue;
     }
-    throw new Error(`unknown option ${arg}`);
+    // A bare word in the first position was meant as a command, not an option, and
+    // saying "unknown option" sends the reader to the flag list rather than the command
+    // list — where the answer is.
+    throw new UsageError(
+      i === 0 && !arg.startsWith("-")
+        ? `unknown command ${arg}. Expected one of: ${commands.join(", ")}.`
+        : `unknown option ${arg}`,
+    );
   }
 
   return {
@@ -179,7 +178,8 @@ export const help = `tailess — prove every class tailess builds has CSS behind
   --out <file>          where to write. (emit only)
   --write               let init change the config. Without it, it only shows the
                         edit it would make.
-  --version, -h --help
+  --version, -v         print the version and exit.
+  --help, -h            print this and exit.
 
 Give --extensions and --ignore the same values as the plugin, or the gate checks a
 different set of files than your build does.
@@ -302,6 +302,8 @@ async function loadCompiler(cwd: string): Promise<Compile> {
 
 /** A config file a build tool would read from the project root. */
 const configFile = /^(?:\..*rc(?:\..*)?|.*\.config\.[cm]?[jt]sx?|.*\.config\.json|package\.json)$/;
+/** A local module a config pulls its plugin list from, which this cannot follow. */
+const localImport = /^[ \t]*import\b[^;]*?["']\.[^"'\n]*["']|\brequire\(\s*["']\.[^"'\n]*["']/m;
 
 /**
  * True when nothing in the project's root config mentions tailess.
@@ -343,6 +345,11 @@ async function pluginLooksUnwired(cwd: string): Promise<boolean> {
 
     sawConfig = true;
     if (wired(text)) return false;
+    // A config that builds its plugin list somewhere else — `import base from
+    // "./vite.base.js"`, the shape every monorepo and shared preset has — is one this
+    // cannot see through, and concluding "unwired" there failed a correctly wired project
+    // under `--strict`. A guess that cannot see the whole config has to abstain.
+    if (localImport.test(maskLiterals(text))) return false;
   }
   // No config at all means this is not a project root worth guessing about.
   return sawConfig;
@@ -526,7 +533,14 @@ async function runCheck(options: Options): Promise<number> {
         'postcss.config before "@tailwindcss/postcss".',
     );
     if (options.strict) {
-      return finish(1, { error: "plugin-unwired", checked: classes.length, diagnostics: asJson });
+      // Nothing was compiled on this path, so `checked` has to say zero: reporting the
+      // class count told a consumer reading it that a verification had happened.
+      return finish(1, {
+        error: "plugin-unwired",
+        checked: 0,
+        found: classes.length,
+        diagnostics: asJson,
+      });
     }
   }
 
@@ -622,7 +636,7 @@ async function runCheck(options: Options): Promise<number> {
 
 export async function run(options: Options): Promise<number> {
   if (options.command === "emit") return runEmit(options);
-  if (options.command === "doctor") return runDoctor(options.cwd);
-  if (options.command === "init") return runInit(options.cwd, options.write);
+  if (options.command === "doctor") return runDoctor(options.cwd, options.json);
+  if (options.command === "init") return runInit(options.cwd, options.write, options.json);
   return runCheck(options);
 }

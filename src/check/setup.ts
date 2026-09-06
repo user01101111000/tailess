@@ -2,6 +2,7 @@
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { maskLiterals } from "../extract/scan.js";
+import { jsonResult } from "./result.js";
 
 /**
  * `tailess init` and `tailess doctor` — the two commands that exist because setup is
@@ -258,79 +259,115 @@ export function diffOf(edit: Edit): string {
   return lines.join("\n");
 }
 
-/** `tailess doctor` — read the project and say what it needs. */
-export async function runDoctor(cwd: string): Promise<number> {
+/**
+ * `tailess doctor` — read the project and say what it needs.
+ *
+ * `json` is honoured here for the same reason it is on `check`: `--help` lists it in the
+ * shared option block and annotates the command-scoped flags, so its silence on the other
+ * two read as "applies to all four" — and a CI job wiring `doctor --json` got prose on
+ * stderr and an empty stdout, with nothing saying the flag had been ignored.
+ */
+export async function runDoctor(cwd: string, json = false): Promise<number> {
   const host = await findHost(cwd);
   const where = (file: string) => relative(cwd, file) || file;
+  const say = (message: string, error = false) => {
+    if (json) return;
+    if (error) console.error(message);
+    else console.log(message);
+  };
+  const done = (code: number, body: Record<string, unknown>): number => {
+    if (json) console.log(jsonResult("doctor", code, body));
+    return code;
+  };
 
   if (host.kind === "unknown") {
-    console.error(
+    say(
       "[tailess] no vite.config or postcss.config here, so there is nothing to wire the " +
         "plugin into. Run this from the directory that holds your build config — in a " +
         "monorepo that is the app, not the root.",
+      true,
     );
-    return 2;
+    return done(2, { error: "no-config" });
   }
 
   if (wired(host.source)) {
-    console.log(`[tailess] ${where(host.file)} calls the plugin. Nothing to do.`);
-    return 0;
+    say(`[tailess] ${where(host.file)} calls the plugin. Nothing to do.`);
+    return done(0, { host: host.kind, file: where(host.file), wired: true });
   }
 
   const plan = planEdit(host);
-  console.error(
+  say(
     `[tailess] ${where(host.file)} does not call the plugin, so no variant class on the ` +
       "page has CSS behind it — and nothing else reports that: the build succeeds and the " +
       "class attributes are correct.",
+    true,
   );
-  console.error(
+  say(
     plan
       ? "\nRun `npx tailess init` to add it, or add it by hand:"
       : "\nThis config is not one `tailess init` can edit safely. Add it by hand:",
+    true,
   );
-  console.error(
+  say(
     host.kind === "vite"
       ? '\n  import tailess from "tailess/vite";\n  plugins: [tailwindcss(), tailess()]'
       : '\n  plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} }' +
           "\n\ntailess must come first: it writes the candidate list Tailwind then reads.",
+    true,
   );
-  return 1;
+  return done(1, {
+    host: host.kind,
+    file: where(host.file),
+    wired: false,
+    fixable: plan !== null,
+  });
 }
 
 /** `tailess init` — write that edit, after showing it. */
-export async function runInit(cwd: string, write: boolean): Promise<number> {
+export async function runInit(cwd: string, write: boolean, json = false): Promise<number> {
   const host = await findHost(cwd);
   const where = (file: string) => relative(cwd, file) || file;
+  const say = (message: string, error = false) => {
+    if (json) return;
+    if (error) console.error(message);
+    else console.log(message);
+  };
+  const done = (code: number, body: Record<string, unknown>): number => {
+    if (json) console.log(jsonResult("init", code, body));
+    return code;
+  };
 
   if (host.kind === "unknown") {
-    console.error(
+    say(
       "[tailess] no vite.config or postcss.config here. Create the one your build uses " +
         "first — there is nothing to add the plugin to.",
+      true,
     );
-    return 2;
+    return done(2, { error: "no-config" });
   }
 
   if (wired(host.source)) {
-    console.log(`[tailess] ${where(host.file)} already calls the plugin. Nothing to do.`);
-    return 0;
+    say(`[tailess] ${where(host.file)} already calls the plugin. Nothing to do.`);
+    return done(0, { file: where(host.file), wired: true, written: false });
   }
 
   const plan = planEdit(host);
   if (!plan) {
-    console.error(
+    say(
       `[tailess] ${where(host.file)} has no plugins list this can edit safely, so nothing ` +
         "was written. `npx tailess doctor` prints the line to add.",
+      true,
     );
-    return 2;
+    return done(2, { error: "not-editable", file: where(host.file) });
   }
 
-  console.log(`[tailess] ${where(plan.file)}\n\n${diffOf(plan)}\n`);
+  say(`[tailess] ${where(plan.file)}\n\n${diffOf(plan)}\n`);
   if (!write) {
-    console.log("[tailess] nothing written. Re-run with --write to apply it.");
-    return 0;
+    say("[tailess] nothing written. Re-run with --write to apply it.");
+    return done(0, { file: where(plan.file), written: false, diff: diffOf(plan) });
   }
 
   await writeFile(plan.file, plan.after, "utf8");
-  console.log(`[tailess] wrote ${where(plan.file)}. Restart your dev server.`);
-  return 0;
+  say(`[tailess] wrote ${where(plan.file)}. Restart your dev server.`);
+  return done(0, { file: where(plan.file), written: true, diff: diffOf(plan) });
 }

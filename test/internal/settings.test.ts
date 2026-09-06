@@ -102,7 +102,7 @@ describe("configure({ onWarn })", () => {
 });
 
 describe("a merge function that does not return a string", () => {
-  it("says so and falls back to the unmerged classes, rather than class=\"undefined\"", () => {
+  it('says so and falls back to the unmerged classes, rather than class="undefined"', () => {
     // `merge` is the consumer's code now, and one that falls off the end of a branch
     // hands React a class attribute with nothing to debug.
     const seen: string[] = [];

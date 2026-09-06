@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { commandIn, jsonResult, parse, run, version } from "../../src/check/run.js";
+import { commandIn, jsonResult } from "../../src/check/result.js";
+import { parse, run, version } from "../../src/check/run.js";
 import { clearCache } from "../../src/extract/collect.js";
 import { clearReported } from "../../src/integration/report.js";
 
@@ -28,6 +29,23 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
+
+/** The option set every command starts from, so a test only states what it changes. */
+function base(cwd: string): Parameters<typeof run>[0] {
+  return {
+    command: "check",
+    content: [cwd],
+    css: undefined,
+    cwd,
+    strict: false,
+    extensions: [],
+    ignore: [],
+    json: false,
+    max: 20,
+    out: undefined,
+    write: false,
+  };
+}
 
 /** Run the check quietly, returning its exit code and what it printed. */
 async function check(extra: Partial<Parameters<typeof run>[0]> = {}) {
@@ -591,6 +609,88 @@ describe("tailess emit --json", () => {
       code: 2,
       error: "no-files",
     });
+  });
+});
+
+describe("the unwired-plugin guess", () => {
+  it("abstains when the config builds its plugin list somewhere it cannot follow", async () => {
+    // `vite.base.js` is not a `*.config.*`, so the heuristic could not see the wiring and
+    // concluded there was none — failing a correctly wired monorepo or preset under
+    // `--strict`, which the code's own comment says a guess must never do.
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import { defineConfig } from "vite";\nimport base from "./vite.base.js";\nexport default defineConfig({ ...base });\n`,
+    );
+    await writeFile(
+      join(dir, "vite.base.js"),
+      `import tailess from "tailess/vite";\nexport default { plugins: [tailess()] };\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(0);
+    expect(output).not.toContain("may not be running");
+  });
+
+  it("still catches a config that really does not wire it", async () => {
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import { defineConfig } from "vite";\nexport default defineConfig({ plugins: [] });\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(1);
+    expect(output).toContain("may not be running");
+  });
+
+  it("does not claim to have checked anything on that path", async () => {
+    // Nothing is compiled before this returns, so `checked: N` told a consumer reading it
+    // that a verification had happened.
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import { defineConfig } from "vite";\nexport default defineConfig({ plugins: [] });\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+
+    const { output } = await check({ strict: true, json: true });
+    expect(JSON.parse(output)).toMatchObject({
+      error: "plugin-unwired",
+      checked: 0,
+      found: 1,
+    });
+  });
+});
+
+describe("doctor and init under --json", () => {
+  it("answers in the same envelope as the other two commands", async () => {
+    // `--help` lists `--json` in the shared option block and annotates the flags that are
+    // command-scoped, so its silence here read as "applies to all four" — and a job
+    // wiring `doctor --json` got prose on stderr and an empty stdout.
+    await writeFile(join(dir, "vite.config.ts"), `export default { plugins: [] };\n`);
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void out.push(String(m)));
+
+    const doctor = await run({ ...base(dir), command: "doctor", json: true });
+    expect(doctor).toBe(1);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({
+      tailess: 1,
+      command: "doctor",
+      ok: false,
+      code: 1,
+      wired: false,
+    });
+
+    out.length = 0;
+    const init = await run({ ...base(dir), command: "init", json: true });
+    expect(init).toBe(0);
+    const parsed = JSON.parse(out.join("\n"));
+    expect(parsed).toMatchObject({ command: "init", ok: true, written: false });
+    expect(parsed.diff).toContain("tailess()");
   });
 });
 
