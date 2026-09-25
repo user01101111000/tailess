@@ -296,9 +296,7 @@ async function loadStylesheet(id: string, base: string) {
           ? exports
           : undefined;
       const target = styleTarget(entry);
-      path = target
-        ? resolve(dir, target)
-        : resolve(dir, subpath || (pkg.style ?? "index.css"));
+      path = target ? resolve(dir, target) : resolve(dir, subpath || (pkg.style ?? "index.css"));
     }
   }
   return { base: dirname(path), path, content: await readFile(path, "utf8") };
