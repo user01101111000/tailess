@@ -1,6 +1,8 @@
 /// <reference types="node" />
 import { readdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { maskLiterals } from "../extract/scan.js";
 import { jsonResult } from "./result.js";
 
@@ -26,10 +28,26 @@ const postcssConfig = /^postcss\.config\.[cm]?[jt]s$/;
 /** A `postcss.config.json` or a `.postcssrc`, which are data rather than code. */
 const postcssData = /^(?:\.postcssrc(?:\.json)?|postcss\.config\.json)$/;
 
-/** `import tailess from "tailess/vite"` — the name is what the plugin is called here. */
-const esmImport = /import\s+(\w+)\s*(?:,[^\n]*?)?\s+from\s*["']tailess\/vite["']/;
-/** `const tailess = require("tailess/vite")` — the same, with the name on the other side. */
-const cjsImport = /(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*["']tailess\/vite["']/;
+/**
+ * `import tailess from "tailess/vite"` — the name is what the plugin is called here.
+ * `import { default as tw } from …` is the same binding spelled out.
+ */
+const esmImport =
+  /import\s+(?:([\w$]+)\s*(?:,[^\n]*?)?|\{\s*default\s+as\s+([\w$]+)\s*(?:,[^}]*)?\})\s*from\s*["']tailess\/vite["']/;
+/**
+ * `const tailess = require("tailess/vite")` — the same, with the name on the other side,
+ * and TypeScript's `import tailess = require(…)`.
+ */
+const cjsImport =
+  /(?:(?:const|let|var)\s+([\w$]+)\s*=|import\s+([\w$]+)\s*=)\s*require\(\s*["']tailess\/vite["']/;
+
+/** The name `code` binds the Vite plugin to, when it imports it at all. */
+function bindingOf(code: string): string | undefined {
+  const esm = esmImport.exec(code);
+  if (esm) return esm[1] ?? esm[2];
+  const cjs = cjsImport.exec(code);
+  return cjs ? (cjs[1] ?? cjs[2]) : undefined;
+}
 
 /**
  * True when `text` wires tailess in, rather than merely naming it.
@@ -49,8 +67,8 @@ const cjsImport = /(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*["']tailess\/vite
 export function wired(text: string): boolean {
   const code = maskLiterals(text);
   if (/["']tailess\/postcss["']/.test(code)) return true;
-  const name = esmImport.exec(code)?.[1] ?? cjsImport.exec(code)?.[1] ?? "tailess";
-  return new RegExp(`\\b${name}\\s*\\(`).test(code);
+  const name = (bindingOf(code) ?? "tailess").replace(/\$/g, "\\$");
+  return new RegExp(`(?<![\\w$.])${name}\\s*\\(`).test(code);
 }
 
 /**
@@ -90,14 +108,38 @@ const pluginsArray = /\bplugins\s*:\s*\[/;
 const pluginsObject = /\bplugins\s*:\s*\{/;
 
 /**
- * A whole top-level `import` statement, through its module specifier.
- *
- * Anchored to the start of a line and run through the specifier rather than to the first
- * newline, because a multi-line import is what a formatter produces past its print width
- * and stopping at the newline puts the next import *inside* the braces. `import(` and
+ * Where a top-level `import` statement starts: at the start of a line. `import(` and
  * `import.meta` are excluded: those are expressions, and can be anywhere.
  */
-const topLevelImport = /^[ \t]*import\b(?!\s*[.(])[^;]*?["'][^"'\n]*["'][ \t]*;?/gm;
+const importStart = /^[ \t]*import\b(?!\s*[.(])/gm;
+/**
+ * What may stand between `import` and its module specifier: nothing (a side-effect
+ * import), a clause ending in `from`, or TypeScript's `x = require(`. Anything else —
+ * `import type Alias = A.B` — has no specifier, and the next quote belongs to someone else.
+ */
+const importClause = /^(?:\s*|[\s\w$,{}*]*\bfrom\s*|\s*(?:type\s+)?[\w$]+\s*=\s*require\s*\(\s*)$/;
+
+/**
+ * Where the top-level import that starts at `from` ends, or -1 when it cannot be read.
+ *
+ * Walked rather than matched, because the specifier is not always the end: `import pkg
+ * from "./package.json" with { type: "json" }` carries an attributes clause after it,
+ * `import path = require("node:path")` a closing parenthesis, and splicing at the
+ * specifier cut both statements in two. Multi-line imports are what a formatter produces
+ * past its print width, so the specifier is found across lines rather than on the first.
+ */
+function importEnd(masked: string, from: number): number {
+  const open = masked.slice(from).search(/["']/);
+  if (open === -1 || !importClause.test(masked.slice(from, from + open))) return -1;
+  const close = masked.indexOf(masked[from + open] as string, from + open + 1);
+  if (close === -1) return -1;
+  let end = close + 1;
+  for (const tail of [/^[ \t]*\)/, /^\s*(?:with|assert)\s*\{[^}]*\}/, /^[ \t]*;/]) {
+    const found = tail.exec(masked.slice(end));
+    if (found) end += found[0].length;
+  }
+  return end;
+}
 
 /**
  * The one place `pattern` matches, or `null` when it matches anywhere but exactly once.
@@ -135,10 +177,45 @@ function listIsEmpty(masked: string, at: number, close: string): boolean {
  */
 function importInsertPoint(masked: string): number {
   let end = -1;
-  for (const match of masked.matchAll(topLevelImport)) end = (match.index ?? 0) + match[0].length;
-  if (end !== -1) return end;
-  const firstToken = masked.search(/\S/);
-  return firstToken === -1 ? masked.length : firstToken;
+  for (const match of masked.matchAll(importStart)) {
+    end = Math.max(end, importEnd(masked, (match.index ?? 0) + match[0].length));
+  }
+  return end !== -1 ? end : firstToken(masked);
+}
+
+/** The first real token, past a BOM, leading comments and a `"use strict"` directive. */
+function firstToken(masked: string): number {
+  const directive = /^\s*(["'])use strict\1[ \t]*;?/.exec(masked);
+  if (directive) return directive[0].length;
+  const at = masked.search(/\S/);
+  return at === -1 ? masked.length : at;
+}
+
+/** A top-level `const x = require("…")` line — what a CommonJS config imports with. */
+const topLevelRequire =
+  /^[ \t]*(?:const|let|var)\s+[^=;\n]+=\s*require\s*\(\s*["'][^"'\n]*["']\s*\)[^;\n]*;?/gm;
+
+/** Where a new `require` line goes: after the last one, or at the first real token. */
+function requireInsertPoint(masked: string): number {
+  let end = -1;
+  for (const match of masked.matchAll(topLevelRequire)) end = (match.index ?? 0) + match[0].length;
+  return end !== -1 ? end : firstToken(masked);
+}
+
+/** An ESM statement at the start of a line — what makes a `.js` config a module. */
+const esmSyntax = /^[ \t]*(?:import\b(?!\s*[.(])|export\b)/m;
+
+/**
+ * True when the config is CommonJS, so an `import` statement cannot go in it.
+ *
+ * A `.cjs` file always is. A `.js`, `.ts` or `.cts` one is when it has no ESM statement
+ * and uses `require` or `module.exports` — the README documents that shape, and an
+ * `import` prepended to it stopped Vite loading the config at all.
+ */
+function isCommonJs(file: string, masked: string): boolean {
+  if (/\.cjs$/.test(file)) return true;
+  if (/\.m[jt]s$/.test(file)) return false;
+  return !esmSyntax.test(masked) && /\brequire\s*\(|\bmodule\.exports\b/.test(masked);
 }
 
 /**
@@ -167,21 +244,35 @@ export function planEdit(host: Host): Edit | null {
     const list = soleMatch(masked, pluginsArray);
     if (!list) return null;
 
-    const importAt = importInsertPoint(masked);
-    const statement = 'import tailess from "tailess/vite";';
-    // Leading, when nothing but trivia precedes the insertion point; trailing otherwise,
-    // so the new line follows the import it is placed after rather than splitting it.
-    const importText =
-      masked.slice(0, importAt).trim() === "" ? `${statement}${eol}` : `${eol}${statement}`;
+    // An import left behind by a deleted call is the commonest unwired shape there is,
+    // and adding a second one declared the same name twice: a config that no longer
+    // parses, written after `doctor` recommended it. The binding that is there is reused.
+    const bound = bindingOf(masked);
+    // A `tailess` that is already something else would be declared twice as well.
+    if (!bound && /(?<![\w$.])tailess\b/.test(maskLiterals(host.source, true))) return null;
+    const name = bound ?? "tailess";
 
     // Later position first, so the earlier index is still valid when it is used.
     const listAt = (list.index ?? 0) + list[0].length;
     after = insertAt(
       host.source,
       listAt,
-      listIsEmpty(masked, listAt, "]") ? "tailess()" : "tailess(), ",
+      listIsEmpty(masked, listAt, "]") ? `${name}()` : `${name}(), `,
     );
-    after = insertAt(after, importAt, importText);
+
+    if (!bound) {
+      const cjs = isCommonJs(host.file, masked);
+      const importAt = cjs ? requireInsertPoint(masked) : importInsertPoint(masked);
+      if (importAt > listAt) return null;
+      const statement = cjs
+        ? 'const tailess = require("tailess/vite");'
+        : 'import tailess from "tailess/vite";';
+      // Leading, when nothing but trivia precedes the insertion point; trailing otherwise,
+      // so the new line follows the import it is placed after rather than splitting it.
+      const importText =
+        masked.slice(0, importAt).trim() === "" ? `${statement}${eol}` : `${eol}${statement}`;
+      after = insertAt(after, importAt, importText);
+    }
   } else {
     // PostCSS: order matters, so tailess goes first — it has to write the candidate list
     // before Tailwind reads it.
@@ -204,9 +295,77 @@ export function planEdit(host: Host): Edit | null {
   // The point of the command is a config that works afterwards. Anything less is a hand
   // edit `doctor` describes, not a file this writes.
   if (!wired(after)) return null;
-  if (host.kind === "vite" && !esmImport.test(maskLiterals(after))) return null;
+  if (host.kind === "vite" && !bindingOf(maskLiterals(after))) return null;
 
   return { file: host.file, before: host.source, after };
+}
+
+/** Parse `text` as the file `file`, answering with the first syntax error or `null`. */
+type Parse = (file: string, text: string) => Promise<string | null>;
+
+/**
+ * The parser of the Vite this project has, or `undefined` when it has none.
+ *
+ * The project's own, because that is the one that will load the config: Vite 8 ships
+ * oxc's `parseSync`, which reads TypeScript, and Vite 5–7 ship `transformWithEsbuild`.
+ * The ESM entry is imported rather than resolved with `require`, which in Vite 5 picks
+ * the CJS build and prints its deprecation notice into the command's output.
+ */
+async function hostParser(cwd: string): Promise<Parse | undefined> {
+  let entry: string;
+  try {
+    const manifest = createRequire(join(cwd, "_")).resolve("vite/package.json");
+    const pkg = JSON.parse(await readFile(manifest, "utf8")) as {
+      exports?: { "."?: string | { import?: string | { default?: string } } };
+      module?: string;
+      main?: string;
+    };
+    const dot = pkg.exports?.["."];
+    const esm = typeof dot === "string" ? dot : dot?.import;
+    const path = (typeof esm === "string" ? esm : esm?.default) ?? pkg.module ?? pkg.main;
+    if (!path) return undefined;
+    entry = join(dirname(manifest), path);
+  } catch {
+    return undefined;
+  }
+  const vite = (await import(pathToFileURL(entry).href).catch(() => undefined)) as
+    | {
+        parseSync?: (file: string, text: string) => { errors?: { message?: string }[] };
+        transformWithEsbuild?: (text: string, file: string) => Promise<unknown>;
+      }
+    | undefined;
+  const { parseSync, transformWithEsbuild } = vite ?? {};
+  if (typeof parseSync === "function") {
+    return async (file, text) => {
+      const error = parseSync(file, text).errors?.[0];
+      return error ? (error.message ?? "syntax error") : null;
+    };
+  }
+  if (typeof transformWithEsbuild === "function") {
+    return (file, text) =>
+      transformWithEsbuild(text, file).then(
+        () => null,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+  }
+  return undefined;
+}
+
+/**
+ * Why `edit` must not be written, or `undefined` when nothing says so.
+ *
+ * Every edit this command has ever written wrongly was one its own text matching
+ * thought was fine, so the result is parsed as well, where the project has a parser to
+ * do it with. Only a config that parsed *before* the edit and does not after is refused:
+ * a parser that cannot read the original — an older Vite, a syntax it predates — has
+ * nothing to say about the edit, and blocking on it would refuse working configs.
+ */
+export async function checkEdit(edit: Edit, cwd: string): Promise<string | undefined> {
+  const parse = await hostParser(cwd);
+  if (!parse) return undefined;
+  const broken = await parse(edit.file, edit.after);
+  if (broken === null || (await parse(edit.file, edit.before)) !== null) return undefined;
+  return broken;
 }
 
 /**
@@ -359,6 +518,16 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
       true,
     );
     return done(2, { error: "not-editable", file: where(host.file) });
+  }
+
+  const broken = await checkEdit(plan, cwd);
+  if (broken !== undefined) {
+    say(
+      `[tailess] the edit to ${where(plan.file)} would not parse (${broken}), so nothing ` +
+        "was written. `npx tailess doctor` prints the line to add by hand.",
+      true,
+    );
+    return done(2, { error: "not-editable", file: where(plan.file), reason: broken });
   }
 
   say(`[tailess] ${where(plan.file)}\n\n${diffOf(plan)}\n`);

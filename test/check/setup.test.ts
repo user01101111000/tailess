@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  checkEdit,
   diffOf,
   type Edit,
   findHost,
@@ -260,6 +261,165 @@ describe("tailess init", () => {
     it("adds no dangling separator to an empty list", async () => {
       const { after } = await initVite(`export default { plugins: [] };\n`);
       expect(after).toContain("plugins: [tailess()]");
+    });
+  });
+
+  /**
+   * Four shapes the release audit found `init --write` turning into a config Vite could not
+   * load — after exiting 0, with `doctor` calling the result wired. Each output is parsed
+   * with the Vite this repository tests against, because reading the edit's text is what
+   * let all four through.
+   */
+  describe("never writes a config that does not parse", () => {
+    /** Write `source` as `file`, run `init --write`, read it back. */
+    async function init(file: string, source: string) {
+      await writeFile(join(dir, file), source);
+      const { code, output } = await capture(() => runInit(dir, true));
+      return { code, output, after: await readFile(join(dir, file), "utf8") };
+    }
+
+    /** True when the project's own Vite parses `text` as `file`. */
+    async function parses(file: string, text: string): Promise<boolean> {
+      const vite = (await import("vite")) as unknown as {
+        parseSync: (file: string, text: string) => { errors: unknown[] };
+      };
+      return vite.parseSync(file, text).errors.length === 0;
+    }
+
+    /** How many times `text` imports or requires the Vite plugin. */
+    const imports = (text: string) => text.split('"tailess/vite"').length - 1;
+
+    it("reuses the import a deleted call left behind instead of declaring it again", async () => {
+      // The commonest unwired shape there is, and the one `doctor` sends people to `init`
+      // for. The second `import tailess` was "Identifier `tailess` has already been declared".
+      const { code, after } = await init(
+        "vite.config.ts",
+        `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\nimport { defineConfig } from "vite";\n\nexport default defineConfig({\n  plugins: [tailwindcss()],\n});\n`,
+      );
+      expect(code).toBe(0);
+      expect(imports(after)).toBe(1);
+      expect(after).toContain("plugins: [tailess(), tailwindcss()]");
+      expect(await parses("vite.config.ts", after)).toBe(true);
+    });
+
+    it("reuses it when the call was commented out rather than deleted", async () => {
+      const { after } = await init(
+        "vite.config.ts",
+        `import tailess from "tailess/vite";\nexport default {\n  plugins: [\n    // tailess(),\n  ],\n};\n`,
+      );
+      expect(imports(after)).toBe(1);
+      expect(wired(after)).toBe(true);
+      expect(await parses("vite.config.ts", after)).toBe(true);
+    });
+
+    it("calls the plugin by the name it was imported as", async () => {
+      const { after } = await init(
+        "vite.config.ts",
+        `import { default as tw } from "tailess/vite";\nexport default { plugins: [react()] };\n`,
+      );
+      expect(imports(after)).toBe(1);
+      expect(after).toContain("plugins: [tw(), react()]");
+      expect(wired(`import { default as tw } from "tailess/vite";\nplugins: [tw()]`)).toBe(true);
+    });
+
+    it("gives up rather than declare a name the file already uses", async () => {
+      const source = `import * as tailess from "tailess/vite";\nexport default { plugins: [] };\n`;
+      const { code, after } = await init("vite.config.ts", source);
+      expect(code).toBe(2);
+      expect(after).toBe(source);
+    });
+
+    it("requires the plugin in a CommonJS config", async () => {
+      // The README documents this shape; an `import` on line 1 of it is "Cannot use
+      // import statement outside a module", and the whole dev server is gone.
+      const { code, after } = await init(
+        "vite.config.cjs",
+        `const { defineConfig } = require("vite");\nconst tailwindcss = require("@tailwindcss/vite");\n\nmodule.exports = defineConfig({\n  plugins: [tailwindcss()],\n});\n`,
+      );
+      expect(code).toBe(0);
+      expect(after).not.toMatch(/^import /m);
+      expect(after).toContain(
+        `const tailwindcss = require("@tailwindcss/vite");\nconst tailess = require("tailess/vite");`,
+      );
+      expect(after).toContain("plugins: [tailess(), tailwindcss()]");
+      expect(wired(after)).toBe(true);
+    });
+
+    it("keeps a `use strict` directive first in a CommonJS config with no requires", async () => {
+      const { after } = await init(
+        "vite.config.cjs",
+        `"use strict";\nmodule.exports = { plugins: [] };\n`,
+      );
+      expect(after).toBe(
+        `"use strict";\nconst tailess = require("tailess/vite");\nmodule.exports = { plugins: [tailess()] };\n`,
+      );
+    });
+
+    it("reuses a require that is already there", async () => {
+      const { after } = await init(
+        "vite.config.cjs",
+        `const tailess = require("tailess/vite");\nmodule.exports = { plugins: [] };\n`,
+      );
+      expect(imports(after)).toBe(1);
+      expect(after).toContain("plugins: [tailess()]");
+    });
+
+    it("reads a `.js` config written in CommonJS as CommonJS", async () => {
+      const { after } = await init(
+        "vite.config.js",
+        `const react = require("@vitejs/plugin-react");\nmodule.exports = { plugins: [react()] };\n`,
+      );
+      expect(after).not.toMatch(/^import /m);
+      expect(after).toContain('const tailess = require("tailess/vite");');
+    });
+
+    it.each([
+      ["with", 'import pkg from "./package.json" with { type: "json" };'],
+      ["assert", 'import pkg from "./package.json" assert { type: "json" };'],
+    ])("puts the import after one carrying a `%s` clause, not inside it", async (_, statement) => {
+      // Reading the app's version from package.json is how an ESM config does it, and Node
+      // requires the attribute; the splice landed between the specifier and the clause.
+      const { code, after } = await init(
+        "vite.config.ts",
+        `import tailwindcss from "@tailwindcss/vite";\n${statement}\n\nexport default {\n  define: { version: JSON.stringify(pkg.version) },\n  plugins: [tailwindcss()],\n};\n`,
+      );
+      expect(code).toBe(0);
+      expect(after).toContain(`${statement}\nimport tailess from "tailess/vite";`);
+      expect(await parses("vite.config.ts", after)).toBe(true);
+    });
+
+    it("puts the import after a TypeScript `import x = require()`, not inside it", async () => {
+      const { after } = await init(
+        "vite.config.ts",
+        `import path = require("node:path");\nexport default { root: path.resolve("."), plugins: [] };\n`,
+      );
+      expect(after).toContain(
+        `import path = require("node:path");\nimport tailess from "tailess/vite";`,
+      );
+      expect(await parses("vite.config.ts", after)).toBe(true);
+    });
+  });
+
+  describe("parsing an edit before writing it", () => {
+    const edit = (before: string, after: string): Edit => ({
+      file: join(dir, "vite.config.ts"),
+      before,
+      after,
+    });
+
+    it("refuses an edit that breaks a config which parsed", async () => {
+      const reason = await checkEdit(
+        edit(`export default { plugins: [] };`, `export default { plugins: [tailess() };`),
+        dir,
+      );
+      expect(reason).toEqual(expect.any(String));
+    });
+
+    it("says nothing when the edit parses, or when the original did not either", async () => {
+      expect(
+        await checkEdit(edit(`export default {};`, `export default { a: 1 };`), dir),
+      ).toBeUndefined();
+      expect(await checkEdit(edit(`export default {`, `export default { a`), dir)).toBeUndefined();
     });
   });
 });
