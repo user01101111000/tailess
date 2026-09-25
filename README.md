@@ -1431,6 +1431,11 @@ an unstyled element that ships:
 tailess({ diagnostics: process.env.CI ? "error" : "warn" })
 ```
 
+The theme notes about CSS that *works* — a breakpoint or `@custom-variant` your CSS adds,
+a width it moves — are printed in every mode and fail nothing, so a project that
+[declared its own keys](#keys-your-own-css-adds) builds under `"error"` too. A removed
+breakpoint still fails it: that one leaves classes with no rule.
+
 The PostCSS plugin takes one more, `cacheDir`, since it has no host to borrow one
 from — on Vite it is not an option at all, and Vite's own `cacheDir` is used.
 

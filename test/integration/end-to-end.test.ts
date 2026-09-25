@@ -658,3 +658,41 @@ describe("Vite: content paths and server lifecycle", () => {
     expect(second.events).toEqual(["change", "add", "unlink"]);
   });
 });
+
+describe('diagnostics: "error" and a theme that adds rather than removes', () => {
+  // README "Keys your own CSS adds" declares `3xl` and a custom variant, and README
+  // "Plugin options" recommends `diagnostics: "error"` for CI. The two together failed
+  // the build on a note that itself said the class works.
+  async function build(theme: string): Promise<string> {
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-drift-"));
+    try {
+      await writeFile(join(project, "a.tsx"), `ss({ md: "p-4" })`);
+      const css = `@import "tailwindcss";\n${theme}\n`;
+      const result = await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache"), diagnostics: "error" }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(css, { from: join(project, "app.css") });
+      return result.css;
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }
+
+  it("builds a project that adds a breakpoint, a variant or moves a width", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(build(`@theme { --breakpoint-3xl: 120rem; }`)).resolves.toContain("--tailess");
+    await expect(
+      build(`@custom-variant sidebar-open (&:is(.sidebar-open *));`),
+    ).resolves.toBeTruthy();
+    await expect(build(`@theme { --breakpoint-md: 50rem; }`)).resolves.toBeTruthy();
+    warn.mockRestore();
+  });
+
+  it("still fails a project whose theme removes a breakpoint a key needs", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(build(`@theme { --breakpoint-md: initial; }`)).rejects.toThrow(
+      /build-time diagnostic/,
+    );
+    warn.mockRestore();
+  });
+});

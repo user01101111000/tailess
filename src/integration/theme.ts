@@ -354,13 +354,17 @@ export function themeDiagnostics(
     });
   }
 
+  // Adding a variant or a breakpoint, and moving a width, all leave CSS that works: they
+  // are notes, and `informational` keeps `diagnostics: "error"` from failing a project
+  // that declared its keys exactly as the README says to.
   for (const name of variants) {
     out.push({
       kind: "theme-drift",
+      informational: true,
       message:
-        `your CSS defines the "${name}" variant, which tailess has no key for, so ` +
-        `ss({ "${name}": … }) will not compile. The class itself works — reach it with ` +
-        `withPrefix("${name}", …).`,
+        `your CSS defines the "${name}" variant, which tailess has no built-in key for. ` +
+        `The class works — declare the key to write ss({ "${name}": … }) (see "Keys your ` +
+        `own CSS adds" in the README), or reach it with withPrefix("${name}", …).`,
     });
   }
 
@@ -382,6 +386,7 @@ export function themeDiagnostics(
     } else if (!sameWidth(value, screens[key])) {
       out.push({
         kind: "theme-drift",
+        informational: true,
         message:
           `your theme sets "${key}" to ${value}, but tailess exports screens.${key} as ` +
           `${screens[key]} — the classes are fine, but matching this breakpoint from JS ` +
@@ -394,10 +399,11 @@ export function themeDiagnostics(
     if (known.has(name)) continue;
     out.push({
       kind: "theme-drift",
+      informational: true,
       message:
-        `your theme adds the "${name}" breakpoint, which tailess has no key for, so ` +
-        `ss({ "${name}": … }) will not compile. The class itself works — reach it with ` +
-        `withPrefix("${name}", …).`,
+        `your theme adds the "${name}" breakpoint, which tailess has no built-in key for. ` +
+        `The class works — declare the key to write ss({ "${name}": … }) (see "Keys your ` +
+        `own CSS adds" in the README), or reach it with withPrefix("${name}", …).`,
     });
   }
 

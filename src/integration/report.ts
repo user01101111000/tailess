@@ -42,8 +42,10 @@ export function reportDiagnostics(
   // After the whole list rather than at the first finding, so one build shows
   // everything there is to fix. Keyed on what was *found*, not on what was printed: a
   // rebuild repeating a finding the dedupe swallowed still has an unstyled class in it.
-  if (mode === "error" && diagnostics.length > 0) {
-    const n = diagnostics.length;
+  // A note about CSS that works is printed with the rest and fails nothing.
+  const failing = diagnostics.filter((d) => d.informational !== true);
+  if (mode === "error" && failing.length > 0) {
+    const n = failing.length;
     throw new Error(
       `[tailess] ${n} build-time diagnostic${n === 1 ? "" : "s"}, listed above. ` +
         'Set diagnostics: "warn" to keep building through them.',

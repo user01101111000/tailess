@@ -45,6 +45,12 @@ export interface Diagnostic {
     | "dynamic-value";
   /** One line, written for whoever has to fix it. */
   message: string;
+  /**
+   * A note about CSS that works — a breakpoint or variant the theme adds, a width it
+   * moves — rather than a class that cannot. Printed like the rest, but it never fails a
+   * build under `diagnostics: "error"` or `check --strict`.
+   */
+  informational?: true;
 }
 
 const whitespace = /\s/;
