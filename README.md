@@ -1495,7 +1495,8 @@ tailess({
 ```
 
 `content` takes directories and files — **not globs**. `"src"` scans everything under
-it, linked folders included (symlinks and junctions, as Tailwind's own scanner follows them), so `"src/**/*.tsx"` is both unnecessary and inert. A `content` or `extensions` that
+it, linked folders included (symlinks and junctions, which Tailwind's own scanner follows
+too), so `"src/**/*.tsx"` is both unnecessary and inert. A `content` or `extensions` that
 matches no files warns rather than quietly producing a stylesheet with nothing in it —
 extensions are names (`"tsx"`), not globs (`"*.tsx"`).
 
