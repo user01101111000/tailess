@@ -326,6 +326,31 @@ async function loadModule(id: string, base: string) {
   return { path: resolved, base: dirname(resolved), module: mod.default ?? mod };
 }
 
+/**
+ * The version of the Tailwind whose entry file is at `from`, read off the nearest
+ * manifest that names it — `tailwindcss/package.json` is not reached through `exports`.
+ */
+async function tailwindVersion(from: string): Promise<string | undefined> {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const text = await readFile(join(dir, "package.json"), "utf8").catch(() => undefined);
+    if (text !== undefined) {
+      try {
+        const pkg = JSON.parse(text) as { name?: unknown; version?: unknown };
+        if (pkg.name === "tailwindcss" && typeof pkg.version === "string") return pkg.version;
+      } catch {
+        // Not a manifest worth reading; keep walking up.
+      }
+    }
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/** True for a v4 release before 4.1.0, the first to parse `@source inline(…)`. */
+function olderThanFloor(version: string): boolean {
+  const [major, minor] = version.split(".").map((part) => Number.parseInt(part, 10));
+  return major === 4 && minor === 0;
+}
+
 /** The slice of Tailwind's own API this needs, so no dependency on it is declared. */
 type Compile = (
   css: string,
@@ -349,6 +374,14 @@ async function loadCompiler(cwd: string): Promise<Compile> {
     entry = req.resolve("tailwindcss");
   } catch {
     throw new Error("tailwindcss is not installed here, so there is nothing to compile against");
+  }
+  const version = await tailwindVersion(dirname(entry));
+  if (version !== undefined && olderThanFloor(version)) {
+    throw new Error(
+      `tailess needs tailwindcss 4.1 or later, and this project has ${version}. The ` +
+        `plugins inject @source inline(…), which Tailwind parses from 4.1.0 — on ${version} ` +
+        "the build fails with Tailwind's own error, `@source` paths must be quoted.",
+    );
   }
   // `require.resolve` picks the `require` condition, so this is usually Tailwind's
   // CJS build — importing that puts its named exports under `default`.

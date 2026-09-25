@@ -425,6 +425,26 @@ describe("the check itself", () => {
   });
 });
 
+describe("a Tailwind older than the plugins can drive", () => {
+  it("says which version it needs, rather than blaming the stylesheet", async () => {
+    // `@source inline(…)` parses from 4.1.0. On 4.0.x the build died with Tailwind's
+    // "`@source` paths must be quoted." — naming neither tailess nor the version — and
+    // `check` put 29 missing keys down to a moved breakpoint.
+    const tw = join(dir, "node_modules", "tailwindcss");
+    await mkdir(tw, { recursive: true });
+    await writeFile(
+      join(tw, "package.json"),
+      JSON.stringify({ name: "tailwindcss", version: "4.0.17", main: "index.js" }),
+    );
+    await writeFile(join(tw, "index.js"), "exports.compile = async () => ({ build: () => '' });");
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    // Thrown, like every "nothing could be checked" failure: the binary turns it into
+    // exit 2 and prints the message.
+    await expect(check()).rejects.toThrow(/tailwindcss 4\.1 or later.*4\.0\.17/);
+  });
+});
+
 describe("code that only looks like a tailess call", () => {
   it("passes event handlers and inline lookups, which are healthy code", async () => {
     // Each of these failed the gate: `end:animate-spin` from an EventEmitter handler,
