@@ -732,6 +732,22 @@ export function isArrayLiteral(text: string): boolean {
 }
 
 /**
+ * The inside of the array literal `text` holds, or `text` itself if it holds none.
+ *
+ * A list is not only ever written `[ … ]`: `[ … ] as const`, `[ … ] satisfies
+ * ReadonlyArray<…>` and `([ … ])` are ordinary TypeScript, and testing for text that
+ * starts and ends with a bracket dropped every entry of all three.
+ */
+export function arrayBody(text: string): string {
+  const t = text.trim();
+  let open = 0;
+  while (t[open] === "(" || (t[open] !== undefined && /\s/.test(t[open] as string))) open += 1;
+  if (t[open] !== "[") return t;
+  const end = matchBrace(t, open);
+  return t.slice(open + 1, t[end - 1] === "]" ? end - 1 : end);
+}
+
+/**
  * Scan source code for tailess helper calls (bare or as a method, e.g. `st.ss`)
  * and return each with its raw top-level arguments. Nested calls are found too,
  * since the search covers the argument text as well.

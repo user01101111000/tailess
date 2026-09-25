@@ -1,5 +1,6 @@
 import { escapeCondition } from "../internal/condition.js";
 import {
+  arrayBody,
   declaresKey,
   dictionaryKeys,
   extractStrings,
@@ -553,9 +554,7 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
           // else here: inside an `ss` value an object is a `clsx` dictionary, so
           // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
           // the one level so the rules themselves are visible to it.
-          const list = value.trim();
-          const rules = list.startsWith("[") && list.endsWith("]") ? list.slice(1, -1) : list;
-          for (const rule of objectLiterals(rules)) {
+          for (const rule of objectLiterals(arrayBody(value))) {
             for (const field of parseObject(rule)) {
               // `className` is the `cva`/`tv` spelling, accepted so a ported recipe
               // does not lose its compound classes without a word.

@@ -282,3 +282,35 @@ describe("what the runtime builds, the scanner finds", () => {
     });
   }
 });
+
+/**
+ * TypeScript the runtime never sees. The scanner reads the source as written, types and
+ * all; the runtime runs what the compiler leaves. So these are transpiled first, and the
+ * scanner is handed the original.
+ */
+const typescriptCases: string[] = [
+  // A compound list is an ordinary place for a TypeScript assertion, and the scanner
+  // only unwrapped text that started with `[` and ended with `]`: every one of these
+  // lost all of its compound classes, with no diagnostic.
+  `variants({ variants: { t: { a: "p-1" } }, compound: [{ t: "a", class: { md: "p-4" } }] as const })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compound: [{ t: "a", class: { md: "p-4" } }] satisfies ReadonlyArray<object> })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compoundVariants: [{ t: "a", className: { dark: "ring-2" } }] as const })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compound: ([{ t: "a", class: { lg: "p-6" } }]) })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compound: ([{ t: "a", class: { xl: "p-8" } }] as const) })({ t: "a" })`,
+  `variants("flex", { variants: { t: { a: "p-1" } }, compoundVariants: [{ t: "a", class: { sm: "p-2" } }] as const })({ t: "a" })`,
+];
+
+describe("what the runtime builds from TypeScript, the scanner finds", () => {
+  for (const src of typescriptCases) {
+    it(src, async () => {
+      const { transformSync } = await import("esbuild");
+      const js = transformSync(`(${src})`, { loader: "ts" }).code.trim().replace(/;$/, "");
+      const candidates = new Set(extractClasses(src));
+      const emitted = evaluate(js, {})
+        .split(/\s+/)
+        .filter((cls) => cls !== "" && cls.includes(":"));
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(emitted.filter((cls) => !candidates.has(cls))).toEqual([]);
+    });
+  }
+});
