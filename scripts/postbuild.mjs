@@ -34,8 +34,9 @@ const cjsDefaultEntries = [
   {
     file: "postcss/index.d.cts",
     fn: "tailessPostcss",
-    expected: "export { type TailessPostcssOptions, tailessPostcss as default };",
-    types: ["TailessPostcssOptions"],
+    expected:
+      "export { type TailessPostcssOptions, type TailessPostcssPlugin, tailessPostcss as default };",
+    types: ["TailessPostcssOptions", "TailessPostcssPlugin"],
   },
   {
     file: "vite/index.d.cts",

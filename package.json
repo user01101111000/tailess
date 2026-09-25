@@ -83,13 +83,13 @@
   "typesVersions": {
     "*": {
       "postcss": [
-        "./dist/postcss/index.d.ts"
+        "./dist/postcss/index.d.cts"
       ],
       "vite": [
-        "./dist/vite/index.d.ts"
+        "./dist/vite/index.d.cts"
       ],
       "build": [
-        "./dist/build.d.ts"
+        "./dist/build.d.cts"
       ]
     }
   },

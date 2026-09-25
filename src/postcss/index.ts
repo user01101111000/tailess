@@ -85,7 +85,14 @@ interface Helpers {
     decl(defaults: { prop: string; value: string }): Declaration;
   };
 }
-interface Plugin {
+/**
+ * The plugin a call to `tailessPostcss()` returns.
+ *
+ * Exported so a consumer's declaration emit can name it: a typed `postcss.config.ts` in a
+ * `composite` project, or a shared config package exporting the plugin, failed with
+ * "Default export of the module has or is using private name 'Plugin'".
+ */
+export interface TailessPostcssPlugin {
   postcssPlugin: string;
   Once(root: Root, helpers: Helpers): Promise<void>;
 }
@@ -215,7 +222,7 @@ function sidecarScope(options: TailessPostcssOptions): string | undefined {
 let warnedAboutOrder = false;
 
 const tailessPostcss = Object.assign(
-  (given: TailessPostcssOptions = {}): Plugin => {
+  (given: TailessPostcssOptions = {}): TailessPostcssPlugin => {
     const options = readOptions<TailessPostcssOptions>(given, "tailess/postcss");
     const sidecar = createSidecar(
       options.cacheDir ?? join(process.cwd(), "node_modules", ".cache"),
