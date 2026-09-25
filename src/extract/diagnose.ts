@@ -1,6 +1,8 @@
 import { twMerge } from "tailwind-merge";
 import { maxScreenKeys, screenKeys, stateKeys } from "../constants.js";
 import {
+  arrayBody,
+  declaresKey,
   dictionaryKeys,
   extractStrings,
   helperNames,
@@ -188,17 +190,29 @@ const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '
  * Only a *prefixed* bucket is reported. `base` adds no prefix, so its value passes
  * through unchanged and Tailwind finds the literal wherever it really lives — which is
  * why the same shape there is fine, and reporting it would be a warning on working code.
+ * A `base` inside a prefixed map is prefixed all the same — `{ md: { base: size } }` is
+ * `md:<size>` — and a value that is itself a map is walked, since the bucket that cannot
+ * be read may be the one nested inside it.
  */
-function dynamicBuckets(text: string | undefined, report: (d: Diagnostic) => void): void {
+function dynamicBuckets(
+  text: string | undefined,
+  report: (d: Diagnostic) => void,
+  underPrefix = false,
+): void {
   if (!text) return;
   for (const map of objectLiterals(text)) {
     for (const { key, value } of parseObject(map)) {
-      if (key === "base") continue;
+      const prefixed = underPrefix || key !== "base";
+      if (objectLiterals(value).length > 0) {
+        dynamicBuckets(value, report, prefixed);
+        continue;
+      }
+      if (!prefixed) continue;
       const trimmed = value.trim();
       if (trimmed === "" || contributesNothing.has(trimmed)) continue;
       // A literal anywhere in the value is enough: the sweep reads both branches of a
       // ternary and both halves of `cond && "p-4"`, so those are not dynamic.
-      if (extractStrings(value).length > 0 || objectLiterals(value).length > 0) continue;
+      if (extractStrings(value).length > 0) continue;
       report({
         kind: "dynamic-value",
         message:
@@ -400,6 +414,53 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       for (const arg of args) {
         deadClasses(arg, report);
         dynamicBuckets(arg, report);
+      }
+      return;
+    }
+
+    // A recipe keeps its class values in four places — base, slots, each option, each
+    // compound rule — and each is an `ss` argument, or with slots a map of them. They
+    // were never looked at, so `{ lg: { md: size } }`, the shape a responsive option
+    // naturally takes, shipped `md:<size>` with no rule and no word.
+    case "variants": {
+      const first = objectLiterals(args[0] ?? "")[0];
+      const isConfig = first !== undefined && parseObject(first).some((f) => f.key === "variants");
+      const cva = args.length > 1 && !isConfig;
+      if (cva) dynamicBuckets(args[0], report);
+      const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
+      if (config === undefined) return;
+      // The same test the scanner uses for whether option values are one level deeper.
+      const slotted = declaresKey(config, "slots");
+      const classValue = (text: string): void => {
+        if (!slotted) {
+          dynamicBuckets(text, report);
+          return;
+        }
+        for (const parts of objectLiterals(text)) {
+          for (const part of parseObject(parts)) dynamicBuckets(part.value, report);
+        }
+      };
+      for (const { key, value } of parseObject(config)) {
+        if (key === "base") dynamicBuckets(value, report);
+        else if (key === "slots") {
+          for (const parts of objectLiterals(value)) {
+            for (const part of parseObject(parts)) dynamicBuckets(part.value, report);
+          }
+        } else if (key === "variants") {
+          for (const groups of objectLiterals(value)) {
+            for (const group of parseObject(groups)) {
+              for (const options of objectLiterals(group.value)) {
+                for (const option of parseObject(options)) classValue(option.value);
+              }
+            }
+          }
+        } else if (key === "compound" || key === "compoundVariants") {
+          for (const rule of objectLiterals(arrayBody(value))) {
+            for (const field of parseObject(rule)) {
+              if (field.key === "class" || field.key === "className") classValue(field.value);
+            }
+          }
+        }
       }
       return;
     }

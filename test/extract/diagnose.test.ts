@@ -462,6 +462,43 @@ describe("a bucket the scanner cannot read", () => {
     expect(kinds(`responsive("p-4", { md: size })`)).toEqual(["dynamic-value"]);
   });
 
+  it("reports one nested under another prefix, and a base under a prefix", () => {
+    // A value that was itself a map was skipped outright, so the stacked bucket inside
+    // it was never looked at — `dark:md:<size>` shipped with no rule and no word.
+    expect(kinds(`ss({ dark: { md: size } })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ md: { base: size } })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ base: { md: size } })`)).toEqual(["dynamic-value"]);
+  });
+
+  it("reports one inside a recipe, wherever the recipe keeps its classes", () => {
+    // The recipe helper had no case at all, so every one of these was silent.
+    for (const code of [
+      `variants({ variants: { s: { lg: { md: size } } } })`,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the fixture
+      "variants({ variants: { s: { lg: { md: `p-${n}` } } } })",
+      `variants({ base: { md: size }, variants: {} })`,
+      `variants({ variants: { s: { a: "p-1" } }, compound: [{ s: "a", class: { md: size } }] })`,
+      `variants({ slots: { root: { md: size } }, variants: {} })`,
+      `variants({ slots: { root: "p-1" }, variants: { s: { a: { root: { md: size } } } } })`,
+      `variants({ md: size }, { variants: { s: { a: "p-1" } } })`,
+    ]) {
+      expect(kinds(code), code).toEqual(["dynamic-value"]);
+    }
+  });
+
+  it("stays quiet about an unprefixed value in a recipe, which Tailwind finds itself", () => {
+    // The same rule as `base` in ss: no prefix, nothing for the scanner to add.
+    for (const code of [
+      `variants({ base: size, variants: { s: { a: tone } } })`,
+      `variants({ slots: { root: size }, variants: { s: { a: { root: tone } } } })`,
+      `variants({ variants: { s: { a: "p-1" } }, compound: [{ s: "a", class: extra }] })`,
+      `variants({ slots: { root: "p-1" }, variants: {}, compound: [{ class: { root: extra } }] })`,
+      `variants(size, { variants: { s: { a: "p-1" } } })`,
+    ]) {
+      expect(kinds(code), code).toEqual([]);
+    }
+  });
+
   it("names the value and the way out", () => {
     const [first] = diag(`ss({ md: size })`);
     expect(first?.message).toContain('"md" bucket is set to `size`');
