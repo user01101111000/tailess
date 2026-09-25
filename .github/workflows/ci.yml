@@ -239,8 +239,11 @@ jobs:
         run: npm run build
         working-directory: examples/vite-react
 
+      # The script the example README tells people to run, not a hand-written copy of it:
+      # CI proved `check --strict` while the README and the script said `check`, which
+      # stays green with the plugin removed.
       - name: Gate the example
-        run: npx tailess check --content src --strict
+        run: npm run check
         working-directory: examples/vite-react
 
       # The negative: with the plugin removed the build still succeeds and the page
@@ -256,7 +259,7 @@ jobs:
           # command line — and treating that as proof leaves the step green while the
           # negative it exists to demonstrate is no longer being demonstrated.
           set +e
-          npx tailess check --content src --strict
+          npm run check
           code=$?
           set -e
           if [ "$code" != "1" ]; then

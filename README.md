@@ -1257,8 +1257,16 @@ npx tailess check
 It exits `1` when something is wrong, so it can gate a build:
 
 ```yaml
-- run: npx tailess check
+- run: npx tailess check --strict
 ```
+
+Use `--strict` in CI. The check compiles your stylesheet with the candidates the plugin
+*would* inject, so on its own it proves the far end, not that the plugin is wired up:
+with `tailess()` deleted from the config it prints a "no build config here calls the
+plugin" warning and still exits `0`. `--strict` turns that warning — and the
+[build-time checks](#build-time-checks) — into exit `1`. It is what CI runs on
+[`examples/vite-react`](./examples/vite-react), which asserts the gate goes red with the
+plugin removed.
 
 | | |
 | --- | --- |
