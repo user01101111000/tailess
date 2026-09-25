@@ -154,20 +154,26 @@ describe("the browser bundle", () => {
     // everything; cva and tv never apply it), and `class`/`className` in the props (cva
     // and tv read them there; here they were dropped).
     //
-    // Raised again to 15,500 for four more `variants` defects from the same audit:
-    // 14,659 -> 15,192 chars, 6,141 -> 6,357 gzipped, and none of it in `ss` + `cn`, which
-    // stays 5,808. The snapshot was one level deep, so a write to a compound rule, a default
-    // or an `ss` map inside an option still changed a built recipe — the fix the 13,500 raise
-    // paid for, half done. `component.slots` handed out the arrays every call spreads, which
-    // read as clsx dictionaries through `ss` and which one write corrupted for good. And
-    // `extend` inherited nothing, silently, from a plain config object (typed as inheriting
-    // its variants) and from a flat recipe under a slotted one (whose `ss`-map options were
-    // spread by slot name). The last two are warning text.
+    // Raised again to 15,500 for five more defects from the same audit: 14,659 -> 15,392
+    // chars, 6,141 -> 6,420 gzipped. Four are in `variants` (+533). The snapshot was one
+    // level deep, so a write to a compound rule, a default or an `ss` map inside an option
+    // still changed a built recipe — the fix the 13,500 raise paid for, half done.
+    // `component.slots` handed out the arrays every call spreads, which read as clsx
+    // dictionaries through `ss` and which one write corrupted for good. And `extend`
+    // inherited nothing, silently, from a plain config object (typed as inheriting its
+    // variants) and from a flat recipe under a slotted one (whose `ss`-map options were
+    // spread by slot name).
+    //
+    // The fifth is the one that moves `ss` + `cn`, 5,808 -> 6,003 (2,752 -> 2,811 gzipped):
+    // the depth bound slowed a cycle rather than stopping it, so a map reaching itself from
+    // four keys walked 4¹⁰ paths — nine seconds for one call, in production too — and warned
+    // once per path on every call. It is cut where it closes now, and said once. The render
+    // path costs the same, measured over a million calls.
     //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 5,808 chars (2,752 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 4,388 (10,196). Measured with the
+    // 6,003 chars (2,811 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 4,393 (10,396). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
     expect(code.length).toBeLessThan(15_500);
   });

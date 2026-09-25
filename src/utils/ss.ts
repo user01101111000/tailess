@@ -9,12 +9,23 @@ import { withPrefix } from "./prefix.js";
 /**
  * How deep buckets may nest before we stop descending.
  *
- * Real code nests two or three deep (`md: { hover: … }`). The bound is here for the
- * object that reaches itself — `const a = {}; a.md = a`, one typo away in a
- * config-driven style map — which would otherwise recurse until the stack gives
- * out, taking the render down with it.
+ * Real code nests two or three deep (`md: { hover: … }`). An object that reaches itself —
+ * `const a = {}; a.md = a`, one typo away in a config-driven style map — is cut where it
+ * closes, by {@link path}; this bound is the backstop behind that.
  */
 const maxDepth = 10;
+
+/**
+ * The maps on the way down to the one being emitted.
+ *
+ * Bounding depth alone did not stop a cycle, only slowed it: a map reaching itself from
+ * two keys took 2¹⁰ walks, from four keys 4¹⁰ — seconds per call, in production too —
+ * and warned once per path. One array, reused across calls, because `ss` is on the render
+ * path and per-call garbage was most of its cost; `ss` clears it before each map, so a
+ * throwing `onWarn` cannot leave a stale entry behind.
+ */
+const path: object[] = [];
+const warnedCycles = new WeakSet<object>();
 
 /**
  * True for a value that is a nested bucket map rather than classes.
@@ -51,9 +62,12 @@ function warnUnknownKey(key: string): void {
 
 function warnTooDeep(scope: string): void {
   warn(
-    `[tailess] ss(): buckets under "${scope}:" nest more than ${maxDepth} deep and ` +
-      "were dropped. That is almost always an object that contains itself.",
+    `[tailess] ss(): buckets under "${scope}:" nest more than ${maxDepth} deep and were dropped.`,
   );
+}
+
+function warnCycle(scope: string): void {
+  warn(`[tailess] ss(): the map under "${scope}:" contains itself, so it was dropped there.`);
 }
 
 /**
@@ -66,9 +80,10 @@ function warnTooDeep(scope: string): void {
  * input always produces the same string and `tailwind-merge`'s "last one wins"
  * stays predictable.
  */
-function emitMap(map: SsInput, prefix: string, depth: number): string {
+function emitMap(map: SsInput, prefix: string): string {
   const source = map as Record<string, SsValue>;
   const names = Object.keys(source);
+  path.push(map);
 
   // Parallel arrays rather than one object per key: `ss` sits in the render path
   // of every component that uses it, and the per-call garbage was most of its cost.
@@ -130,11 +145,18 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
 
     let part: string;
     if (isMap(value)) {
-      if (depth >= maxDepth) {
+      if (path.includes(value)) {
+        if (isDev && !warnedCycles.has(value)) {
+          warnedCycles.add(value);
+          warnCycle(scope);
+        }
+        continue;
+      }
+      if (path.length > maxDepth) {
         if (isDev && firstTime(warnedScopes, scope)) warnTooDeep(scope);
         continue;
       }
-      part = emitMap(value, scope, depth + 1);
+      part = emitMap(value, scope);
     } else if (scope === "") {
       part = join(value as ClassValue);
     } else {
@@ -145,7 +167,15 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
     joined = joined === "" ? part : `${joined} ${part}`;
   }
 
+  path.pop();
   return joined;
+}
+
+/** Emit a top-level map, on a {@link path} cleared of anything a throw left behind. */
+function emitRoot(map: SsInput): string {
+  // A completed walk leaves it empty; only a throw leaves anything to clear.
+  if (path.length !== 0) path.length = 0;
+  return emitMap(map, "");
 }
 
 /**
@@ -186,14 +216,14 @@ export function ss(...args: SsArg[]): string {
     const only = args[0] as SsArg;
     if (only == null || only === false || only === "") return "";
     if (typeof only === "string") return cn(only);
-    return cn(isMap(only) ? emitMap(only, "", 0) : join(only as ClassValue));
+    return cn(isMap(only) ? emitRoot(only) : join(only as ClassValue));
   }
 
   let joined = "";
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i] as SsArg;
     if (arg == null || arg === false || arg === "") continue;
-    const part = isMap(arg) ? emitMap(arg, "", 0) : join(arg as ClassValue);
+    const part = isMap(arg) ? emitRoot(arg) : join(arg as ClassValue);
     if (part === "") continue;
     joined = joined === "" ? part : `${joined} ${part}`;
   }

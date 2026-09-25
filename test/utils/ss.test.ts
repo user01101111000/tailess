@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetWarnings } from "../../src/internal/settings.js";
+import { configure, resetWarnings } from "../../src/internal/settings.js";
 import { ss } from "../../src/utils/ss.js";
 
 // Every warning here is memoised, so one test tripping a key would leave the next one
@@ -226,5 +226,55 @@ describe("ss, nested buckets", () => {
     expect(ss(input)).toContain("flex");
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("cuts a cycle where it closes, however many keys reach it, and says so once", () => {
+    // Bounding the depth alone made a map reaching itself from four keys walk 4¹⁰ paths —
+    // seconds per call, in production too — and warn once per path on every call.
+    resetWarnings();
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      const a: Record<string, unknown> = { base: "p-4" };
+      a.md = a;
+      a.lg = a;
+      a.xl = a;
+      a.hover = a;
+      const input = a as unknown as Parameters<typeof ss>[0];
+      const started = performance.now();
+      expect(ss(input)).toBe("p-4");
+      expect(ss(input)).toBe("p-4");
+      expect(performance.now() - started).toBeLessThan(50);
+      expect(seen.filter((m) => m.includes("contains itself"))).toHaveLength(1);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  });
+
+  it("still emits one map shared by two keys, which is not a cycle", () => {
+    const states = { base: "p-2", hover: "underline" };
+    expect(ss({ md: states, lg: states })).toBe(
+      "md:p-2 md:hover:underline lg:p-2 lg:hover:underline",
+    );
+  });
+
+  it("is not left thinking a map is its own ancestor after onWarn throws", () => {
+    // The documented fatal `onWarn` throws out of the middle of a walk; the maps on the
+    // way down must not stay on the path, or a later call drops a map that is fine.
+    resetWarnings();
+    const shared = { hover: "underline" };
+    const a: Record<string, unknown> = { base: "p-4", md: shared };
+    a.lg = a;
+    configure({
+      onWarn: (message) => {
+        throw new Error(message);
+      },
+    });
+    try {
+      expect(() => ss(a as unknown as Parameters<typeof ss>[0])).toThrow(/contains itself/);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+    expect(ss({ sm: shared })).toBe("sm:hover:underline");
   });
 });
