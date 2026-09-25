@@ -1163,13 +1163,13 @@ The plugin reports what it can prove wrong from your source, while the project b
   it as a key — ss({ "sm": … }) compiles, emits "sm:", and no rule is generated for it.
 ```
 
-Ten things are checked: two conflicting utilities in **one** string, a `between` range
+Eleven things are checked: two conflicting utilities in **one** string, a `between` range
 no viewport can satisfy, an empty prefix, whitespace inside a variant, an arbitrary value
 no class name can carry — a `supports` query, a `has`/`inside` selector, an `nth`
 position — a helper imported under another name, an `ss` map handed to a helper
-that takes a flat class value, a prefixed bucket whose value the scanner cannot read, CSS
-that moves the variants out from under the keys, and CSS that imports Tailwind with a
-`prefix(…)`.
+that takes a flat class value, a prefixed bucket whose value the scanner cannot read, a
+prefixed class whose `{`, `}` or `\` cannot be handed to Tailwind, CSS that moves the
+variants out from under the keys, and CSS that imports Tailwind with a `prefix(…)`.
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.

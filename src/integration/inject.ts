@@ -18,19 +18,31 @@ export { markerProperty };
 export const markerRule = `:root{${markerProperty}:1}`;
 
 /**
- * Split candidates into the `inline("…")` payloads of one or more `@source`
- * directives.
+ * Split candidates into the quoted payloads of one or more `@source inline(…)`
+ * directives, each ready to write between the parentheses.
  *
  * `@source inline()` is Tailwind's own safelist directive, so these candidates go
  * through the exact same pipeline as classes found in source: unknown ones are
  * ignored rather than fatal, and variants/theme values resolve identically.
+ *
+ * Double-quoted, except for candidates that carry a double quote themselves —
+ * `after:content-["x"]` — which get single-quoted directives of their own. Tailwind
+ * reads neither `\"` nor `\22` inside the string, so the other quote is the only
+ * way to carry one; such a class used to be dropped, and was silently unstyled.
  */
-export function sourceChunks(classes: readonly string[]): string[] {
-  const chunks: string[] = [];
-  for (let i = 0; i < classes.length; i += chunkSize) {
-    chunks.push(classes.slice(i, i + chunkSize).join(" "));
+export function sourceLiterals(classes: readonly string[]): string[] {
+  const literals: string[] = [];
+  const plain = classes.filter((cls) => !cls.includes('"'));
+  const quoted = classes.filter((cls) => cls.includes('"'));
+  for (const [list, quote] of [
+    [plain, '"'],
+    [quoted, "'"],
+  ] as const) {
+    for (let i = 0; i < list.length; i += chunkSize) {
+      literals.push(`${quote}${list.slice(i, i + chunkSize).join(" ")}${quote}`);
+    }
   }
-  return chunks;
+  return literals;
 }
 
 /**
@@ -39,6 +51,6 @@ export function sourceChunks(classes: readonly string[]): string[] {
  */
 export function buildPrelude(classes: readonly string[]): string {
   let css = `${markerRule}\n`;
-  for (const chunk of sourceChunks(classes)) css += `@source inline("${chunk}");\n`;
+  for (const literal of sourceLiterals(classes)) css += `@source inline(${literal});\n`;
   return css;
 }

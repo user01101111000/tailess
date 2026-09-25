@@ -2,7 +2,7 @@
 import { join } from "node:path";
 import { collect } from "../extract/collect.js";
 import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
-import { sourceChunks } from "../integration/inject.js";
+import { sourceLiterals } from "../integration/inject.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
@@ -263,8 +263,8 @@ const tailessPostcss = Object.assign(
           marker.append(helpers.postcss.decl({ prop: "--tailess", value: "1" }));
           root.prepend(
             marker,
-            ...sourceChunks(classes).map((chunk) =>
-              helpers.postcss.atRule({ name: "source", params: `inline("${chunk}")` }),
+            ...sourceLiterals(classes).map((chunk) =>
+              helpers.postcss.atRule({ name: "source", params: `inline(${chunk})` }),
             ),
           );
         }

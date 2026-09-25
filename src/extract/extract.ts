@@ -18,19 +18,20 @@ import {
 
 /**
  * Characters that can't appear in a candidate we hand to Tailwind via
- * `@source inline("…")`:
+ * `@source inline(…)`:
  *
  * - whitespace would split one candidate into two (and a newline makes Tailwind
  *   throw `Unterminated string`),
- * - `"` would close the string,
  * - `{` / `}` would trigger Tailwind's brace expansion,
  * - `\` and `;` would break out of the declaration.
  *
- * Anything containing them is dropped rather than risking a broken stylesheet;
- * such class names are vanishingly rare and always statically visible to Tailwind
- * anyway when written as a literal.
+ * Anything containing them is dropped rather than risking a broken stylesheet — and
+ * the build check names a prefixed one, since its literal in the source is not the
+ * class the runtime builds and Tailwind never sees that class either. A `"` is carried:
+ * such a candidate goes in a single-quoted directive (see `sourceLiterals`), so only one
+ * holding both kinds of quote is dropped.
  */
-const unsafe = /[\s"{}\\;]/;
+const unsafe = /[\s{}\\;]/;
 
 /**
  * How deep nested buckets are followed. Real compound variants are two or three
@@ -171,6 +172,7 @@ function isBalanced(candidate: string): boolean {
   let round = 0;
   let square = 0;
   let quotes = 0;
+  let doubles = 0;
   for (let i = 0; i < candidate.length; i += 1) {
     const ch = candidate.charCodeAt(i);
     if (ch === 40) {
@@ -185,9 +187,11 @@ function isBalanced(candidate: string): boolean {
       if (square < 0) return false;
     } else if (ch === 39) {
       quotes += 1;
+    } else if (ch === 34) {
+      doubles += 1;
     }
   }
-  return round === 0 && square === 0 && quotes % 2 === 0;
+  return round === 0 && square === 0 && quotes % 2 === 0 && doubles % 2 === 0;
 }
 
 /** Guards against feeding junk (or a whole expression) to Tailwind as a candidate. */
@@ -196,6 +200,7 @@ function isSafeCandidate(candidate: string): boolean {
     candidate.length > 0 &&
     candidate.length <= 255 &&
     !unsafe.test(candidate) &&
+    !(candidate.includes('"') && candidate.includes("'")) &&
     isBalanced(candidate)
   );
 }
@@ -259,6 +264,29 @@ export function extractClasses(code: string): string[] {
 
   for (const call of scanCalls(code)) enumerate(call, add);
 
+  return [...found].sort();
+}
+
+/**
+ * The prefixed classes the runtime builds in `code` that cannot be handed to Tailwind:
+ * an arbitrary value holding a `{`, `}` or `\`, which `@source inline(…)` reads as brace
+ * expansion or an escape.
+ *
+ * {@link extractClasses} drops them, rightly — one would break the directive — but
+ * dropping one is a silent unstyled element, because the literal in the source is
+ * `after:content-['{']` and the class on the element is `md:after:content-['{']`. This
+ * is what lets the build check name them. Only a token with a `[` counts: that is the one
+ * place those characters belong in a class, so a stray `"{"` in a handler is not one.
+ */
+export function uncarriedClasses(code: string): string[] {
+  const found = new Set<string>();
+  const add: Add = (prefix, tokens) => {
+    if (prefix === "") return;
+    for (const token of tokens) {
+      if (token.includes("[") && /[{}\\]/.test(token)) found.add(`${prefix}:${token}`);
+    }
+  };
+  for (const call of scanCalls(code)) enumerate(call, add);
   return [...found].sort();
 }
 

@@ -563,3 +563,25 @@ describe("a file saved with a byte order mark", () => {
     ).toEqual(["empty-range"]);
   });
 });
+
+describe("a prefixed class the build cannot hand to Tailwind", () => {
+  it("names it, since the literal in the source is not the class on the element", () => {
+    // `{`, `}` and `\` break @source inline(…), so the scanner drops the class — and the
+    // runtime builds `md:after:content-['{']` while Tailwind only ever sees the unprefixed
+    // literal. Silent until this.
+    const [found] = diag(`ss({ md: "after:content-['{']" })`);
+    expect(found?.kind).toBe("uncarried-class");
+    expect(found?.message).toContain("md:after:content-['{']");
+    // Four backslashes in this template are two in the source, which is one in the value.
+    expect(kinds(`on("hover", "before:content-['\\\\']")`)).toEqual(["uncarried-class"]);
+    expect(kinds(`on("hover", "after:content-['}']")`)).toEqual(["uncarried-class"]);
+  });
+
+  it("stays quiet about the same class unprefixed, and about a brace that is not a class", () => {
+    expect(kinds(`ss({ base: "after:content-['{']" })`)).toEqual([]);
+    expect(kinds(`ss("after:content-['{']")`)).toEqual([]);
+    expect(kinds(`on("hover", fmt("{", x))`)).toEqual([]);
+    // And about a double quote, which is carried now.
+    expect(kinds(`ss({ md: 'after:content-["x"]' })`)).toEqual([]);
+  });
+});

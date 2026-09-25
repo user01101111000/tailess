@@ -751,3 +751,22 @@ describe("a Tailwind prefix written in the entry stylesheet, through PostCSS", (
     warn.mockRestore();
   });
 });
+
+describe("a runtime-built class with a double quote in it", () => {
+  it("reaches the stylesheet through the PostCSS plugin", async () => {
+    // `@source inline("…")` cannot carry a `"`, so the class used to be dropped from the
+    // candidate list — unstyled, with `check` passing. It goes in a single-quoted
+    // directive now.
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-dq-"));
+    try {
+      await writeFile(join(project, "a.tsx"), `ss({ md: 'after:content-["x"]', lg: "p-4" })`);
+      const result = await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache") }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(`@import "tailwindcss";`, { from: join(project, "app.css") });
+      expect(missingRules(result.css, ['md:after:content-["x"]', "lg:p-4"])).toEqual([]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+});

@@ -21,8 +21,8 @@ describe("escapes", () => {
     expect(scanCalls(`on("hover", "a\\"b")`)).toEqual([
       { name: "on", args: ['"hover"', '"a\\"b"'], receiver: "" },
     ]);
-    // ...so a following key is still seen. (The `"` class itself can't travel
-    // through `@source inline("…")`, so it is dropped — deliberately.)
+    // ...so a following key is still seen. (The lone `"` is not a class — it does not
+    // close — so it is dropped as unbalanced, deliberately.)
     expect(extractClasses(`ss({ md: "a\\"b", lg: "grid" })`)).toEqual(["lg:grid"]);
   });
 

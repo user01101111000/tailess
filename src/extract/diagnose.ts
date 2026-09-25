@@ -1,5 +1,6 @@
 import { twMerge } from "tailwind-merge";
 import { maxScreenKeys, screenKeys, stateKeys } from "../constants.js";
+import { uncarriedClasses } from "./extract.js";
 import {
   arrayBody,
   declaresKey,
@@ -45,7 +46,9 @@ export interface Diagnostic {
     /** An `ss` map handed to a helper whose class argument is a clsx value. */
     | "bucket-as-dictionary"
     /** A prefixed bucket whose value the scanner cannot read. */
-    | "dynamic-value";
+    | "dynamic-value"
+    /** A prefixed class with a `{`, `}` or `\` in it, which cannot reach Tailwind. */
+    | "uncarried-class";
   /** One line, written for whoever has to fix it. */
   message: string;
   /**
@@ -677,6 +680,16 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
       if (call.receiver === "" ? bare.has(call.name) : receivers.has(call.receiver)) {
         check(call, report);
       }
+    }
+    for (const cls of uncarriedClasses(code)) {
+      report({
+        kind: "uncarried-class",
+        message:
+          `"${cls}" is built at runtime, but its "{", "}" or "\\" cannot be handed to ` +
+          "Tailwind — @source inline(…) reads them as brace expansion or an escape — so it " +
+          "has no rule. Write the class out as a literal somewhere in your source, where " +
+          "Tailwind's own scan finds it, or use a value without the character.",
+      });
     }
   }
 
