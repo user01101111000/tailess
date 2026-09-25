@@ -328,6 +328,26 @@ async function loadModule(id: string, base: string) {
 }
 
 /**
+ * Run `task` with `console.log`, `console.info` and `console.debug` writing to stderr,
+ * then put them back — so code this process runs on the project's behalf cannot put a
+ * second thing on a stdout that promised one JSON object.
+ */
+async function toStderr<T>(task: () => Promise<T>): Promise<T> {
+  const { log, info, debug } = console;
+  const redirect = (...args: unknown[]) => console.error(...args);
+  console.log = redirect;
+  console.info = redirect;
+  console.debug = redirect;
+  try {
+    return await task();
+  } finally {
+    console.log = log;
+    console.info = info;
+    console.debug = debug;
+  }
+}
+
+/**
  * The version of the Tailwind whose entry file is at `from`, read off the nearest
  * manifest that names it — `tailwindcss/package.json` is not reached through `exports`.
  */
@@ -687,13 +707,18 @@ async function runCheck(options: Options): Promise<number> {
   // no entry has its rule — and only an entry that generates utilities at all has a say.
   const sheets: string[] = [];
   const silent: string[] = [];
-  for (const entry of entries) {
-    const source = await readFile(entry, "utf8");
-    const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
-    const css = compiler.build([...probe, utilitySentinel]);
-    if (hasRule(css, utilitySentinel)) sheets.push(css);
-    else silent.push(entry);
-  }
+  // Compiling runs the project's `@plugin`s in this process, and some print — daisyUI's
+  // banner goes through console.log. Under --json stdout is the one JSON object, so
+  // anything they say goes to stderr for as long as they run.
+  await (quiet ? toStderr : (task: () => Promise<void>) => task())(async () => {
+    for (const entry of entries) {
+      const source = await readFile(entry, "utf8");
+      const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
+      const css = compiler.build([...probe, utilitySentinel]);
+      if (hasRule(css, utilitySentinel)) sheets.push(css);
+      else silent.push(entry);
+    }
+  });
   if (sheets.length === 0) {
     complain(
       `[tailess] ${shown(silent, options.cwd).join(", ")} ` +

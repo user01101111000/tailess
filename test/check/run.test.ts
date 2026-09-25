@@ -425,6 +425,30 @@ describe("the check itself", () => {
   });
 });
 
+describe("--json while a Tailwind plugin prints", () => {
+  it("keeps stdout to the one JSON object, and sends the plugin's output to stderr", async () => {
+    // daisyUI prints a banner with console.log while it loads; inside the CLI that is
+    // stdout, so `tailess check --json | jq -e .ok` failed to parse on a passing run.
+    await writeFile(
+      join(dir, "noisy.mjs"),
+      `console.log("/*! banner at import */");\nexport default function () { console.log("banner at run"); }\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "./noisy.mjs";`);
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void stdout.push(String(m)));
+    vi.spyOn(console, "info").mockImplementation((m) => void stdout.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void stderr.push(String(m)));
+    vi.spyOn(console, "warn").mockImplementation((m) => void stderr.push(String(m)));
+    const code = await run({ ...base(dir), json: true });
+    expect(code).toBe(0);
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0] as string)).toMatchObject({ ok: true, code: 0 });
+    expect(stderr.join("\n")).toContain("banner at import");
+  });
+});
+
 describe("a stylesheet that generates no utilities", () => {
   // The app's own entry removes `md`, so `md:p-4` has no rule in the real build. Each of
   // the stylesheets below generated no utilities at all, and a class counted as broken
