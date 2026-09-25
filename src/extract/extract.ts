@@ -52,15 +52,16 @@ const maxNesting = 10;
  * to {@link enumerate} — so without a bound a chain of nested calls is re-walked
  * once per ancestor, which is quadratic in how deep the chain runs.
  *
- * Two hops covers what people write. One is the ordinary case —
- * `until("md", on("hover", …))`, `ss({ md: withPrefix(…) })` — and the second is
- * there because these compose: `on("hover", until("md", withPrefix(…)))` is three
- * prefixes deep and each one has to reach the innermost classes. Beyond that the
- * spelling is unreadable long before it is unsupported. A nested `ss` or
+ * A bound is what keeps that linear: each call is followed at most this many hops,
+ * however long the chain. It was two, on the argument that nothing deeper is written —
+ * but `ss({ dark: on("hover", data("state", "open", aria("selected", …))) })` is, and
+ * the third helper was where following stopped, so the one class the runtime builds,
+ * the innermost stack, had no rule and nothing said so. Six covers any composition of
+ * the helpers a person would type, at a constant cost per call. A nested `ss` or
  * `responsive` needs no hop at all: its map is an object literal, so
  * {@link objectLiterals} already finds it right there in the value.
  */
-const maxFollow = 2;
+const maxFollow = 6;
 
 /**
  * A JavaScript numeric literal, minus any sign: decimal with an optional leading or

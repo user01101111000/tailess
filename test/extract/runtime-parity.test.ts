@@ -282,6 +282,16 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   // Through a namespace import, a method call is still ours.
   { src: `t.on("hover", "underline")`, env: { t: { on } } },
   { src: `t.on(["dark", "hover"], "underline")`, env: { t: { on } } },
+  // Composition four and five deep. Following stopped at the third helper, so the
+  // innermost stacked class — the only one the runtime builds — was never enumerated.
+  { src: `ss({ dark: on("hover", data("state", "open", aria("selected", "bg-blue-50"))) })` },
+  { src: `on("focus", on("hover", until("md", withPrefix("[&>li]", "p-2"))))` },
+  {
+    src: `variants({ variants: { s: { a: { md: on("hover", until("xl", aria("selected", "p-2"))) } } } })({ s: "a" })`,
+  },
+  {
+    src: `ss({ md: on("hover", on("focus", on("active", until("xl", aria("selected", "p-3"))))) })`,
+  },
 ];
 
 describe("what the runtime builds, the scanner finds", () => {
