@@ -506,6 +506,60 @@ describe("extend — building on another recipe", () => {
   });
 });
 
+describe("extend given something it cannot build on", () => {
+  /** Run `fn`, returning what it warned. */
+  function warned(fn: () => void): string[] {
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      fn();
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+    return seen;
+  }
+
+  it("refuses a plain config object, and says so when one gets through", () => {
+    // Sharing a base config between recipes is a plausible pattern: the prop types said
+    // `tone` was inherited, and the built component had no base, no tone and no default.
+    const shared = {
+      base: "rounded",
+      variants: { tone: { danger: "bg-red-600" } },
+      defaults: { tone: "danger" },
+    } as const;
+    // @ts-expect-error `extend` takes a built recipe, not its config.
+    variants({ extend: shared, variants: { size: { lg: "text-lg" } } });
+
+    type Built = (props?: object) => string;
+    const seen = warned(() => {
+      const b = variants({ extend: shared, variants: { size: { lg: "text-lg" } } } as never);
+      expect((b as unknown as Built)({ size: "lg" })).toBe("text-lg");
+    });
+    expect(seen.some((m) => m.includes("not a config object"))).toBe(true);
+    expect(variants({ extend: variants(shared), variants: {} })()).toBe("rounded bg-red-600");
+  });
+
+  it("warns when a slotted recipe extends a flat one, and inherits none of it", () => {
+    // The mirror of the flat-on-slotted case, and as silent: the parent's ss-map option
+    // was spread by slot name, so the `base` part picked up `p-2` and `md:p-4` was lost.
+    const flat = variants({
+      base: { base: "rounded", md: "rounded-lg" },
+      variants: { tone: { a: "bg-red-500", b: { base: "p-2", md: "p-4" } } },
+      compound: [{ tone: "a", class: "ring" }],
+      defaults: { tone: "a" },
+    });
+    type Parts = ((props?: object) => Record<string, string>) & { variants: object };
+    let slotted: Parts | undefined;
+    const seen = warned(() => {
+      const config = { extend: flat, slots: { base: "block", root: "r" }, variants: {} };
+      slotted = variants(config as never) as unknown as Parts;
+    });
+    expect(seen.some((m) => m.includes("names a recipe without slots"))).toBe(true);
+    expect(slotted?.({ tone: "b" })).toEqual({ base: "block", root: "r" });
+    expect(Object.keys(slotted?.variants ?? { x: 1 })).toEqual([]);
+  });
+});
+
 describe("a recipe's definition, once it is built", () => {
   it("is a snapshot, so writing to config or variants cannot change it", () => {
     // Both are declared `readonly` and were the caller's own objects. Writing to `config`

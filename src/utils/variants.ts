@@ -39,9 +39,11 @@ type AnyGroups = Record<string, Record<string, unknown>>;
  * Any built recipe, loose enough that a concrete one is assignable.
  *
  * `VariantComponent<VariantGroups>` is not that: its `config` makes the type invariant,
- * so a real component would not fit where a parent is asked for.
+ * so a real component would not fit where a parent is asked for. `config` is still
+ * required, as `unknown`: without it a plain config object — a shared `{ base, variants }`
+ * — fit too, and its variants were typed as inherited while the runtime inherited nothing.
  */
-type AnyRecipe = { readonly variants: AnyGroups };
+type AnyRecipe = { readonly variants: AnyGroups; readonly config: unknown };
 /** Any built recipe with parts. The `slots` key is what keeps the two overloads apart. */
 type AnySlottedRecipe = AnyRecipe & { readonly slots: SlotDefaults };
 /**
@@ -242,6 +244,14 @@ const warnedExtraMap = new Set<string>();
 const warnedStaleCompound = new Set<string>();
 const warnedClassProp = new Set<string>();
 
+const warnedExtend = new Set<string>();
+
+/** Say so, once, when `extend` names something this recipe cannot build on. */
+function warnExtend(what: string): void {
+  if (firstTime(warnedExtend, what))
+    warn(`variants(): \`extend\` ${what}, so it inherits nothing.`);
+}
+
 /** Say so, once, when extra classes arrive in the props rather than after them. */
 function warnClassProp(name: string): void {
   if (!firstTime(warnedClassProp, name)) return;
@@ -375,8 +385,20 @@ function resolve(
   if (seen.has(config)) throw new Error("variants(): `extend` chain is a cycle.");
   seen.add(config);
   const parent = config.extend as { config?: Record<string, unknown> } | undefined;
-  const parentConfig = parent?.config;
+  let parentConfig = parent?.config;
+  // A shared config object, not a built recipe: the types said its variants were
+  // inherited, and the runtime inherited nothing and said nothing.
+  if (isDev && parent !== undefined && !parentConfig) {
+    warnExtend("takes a recipe built with variants(), not a config object");
+  }
   const parentSlots = parentConfig?.slots as Record<string, SsArg> | undefined;
+  // The mirror of a flat recipe on a slotted parent, and as silent: a flat option has no
+  // part to go to, so an `ss` map in one was spread by *slot name* — its `base` landing on
+  // a `base` part, the rest nowhere — while the parent's groups stayed props.
+  if (wantSlots && parentConfig && !parentSlots) {
+    if (isDev) warnExtend("names a recipe without slots, and this one has them");
+    parentConfig = undefined;
+  }
   const skipped = !wantSlots && parentSlots !== undefined ? Object.keys(parentSlots) : undefined;
   const from: Resolved =
     parentConfig && !skipped

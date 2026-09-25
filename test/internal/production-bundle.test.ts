@@ -44,6 +44,8 @@ const warnings = [
   "was given an empty",
   "positions count from 1",
   "cannot appear in a class name",
+  "not a config object",
+  "names a recipe without slots",
 ];
 
 describe("the browser bundle", () => {
@@ -152,12 +154,22 @@ describe("the browser bundle", () => {
     // everything; cva and tv never apply it), and `class`/`className` in the props (cva
     // and tv read them there; here they were dropped).
     //
+    // Raised again to 15,500 for four more `variants` defects from the same audit:
+    // 14,659 -> 15,192 chars, 6,141 -> 6,357 gzipped, and none of it in `ss` + `cn`, which
+    // stays 5,808. The snapshot was one level deep, so a write to a compound rule, a default
+    // or an `ss` map inside an option still changed a built recipe — the fix the 13,500 raise
+    // paid for, half done. `component.slots` handed out the arrays every call spreads, which
+    // read as clsx dictionaries through `ss` and which one write corrupted for good. And
+    // `extend` inherited nothing, silently, from a plain config object (typed as inheriting
+    // its variants) and from a flat recipe under a slotted one (whose `ss`-map options were
+    // spread by slot name). The last two are warning text.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
     // 5,808 chars (2,752 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 3,853 (9,661). Measured with the
+    // most projects actually pay; `variants` on top costs 4,388 (10,196). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
-    expect(code.length).toBeLessThan(15_000);
+    expect(code.length).toBeLessThan(15_500);
   });
 
   it("pulls in no Node builtins", async () => {
