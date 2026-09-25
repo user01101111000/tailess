@@ -402,10 +402,25 @@ function mergeSlots(
  * the default — so `V & VariantGroups` leaked a string index signature into the props
  * of every recipe that did not extend anything. Reading it back out of the component
  * type keeps the "no parent" case exactly `V`.
+ *
+ * The "no parent" case is tested first, and wrapped so it does not distribute. With
+ * `strictNullChecks` off — TypeScript's default — `undefined` is assignable to every
+ * object type, so `undefined extends { variants: infer P }` succeeded, `P` fell back to
+ * its constraint, and every recipe in such a project inherited `Record<string, …>` as its
+ * variants: boolean props refused, typos accepted, `ComponentProps & VariantProps`
+ * rejecting `onClick`.
  */
-type Inherited<E> = E extends { variants: infer P extends AnyGroups } ? P : Empty;
+type Inherited<E> = [E] extends [undefined]
+  ? Empty
+  : E extends { variants: infer P extends AnyGroups }
+    ? P
+    : Empty;
 /** The parent's slots, read the same way. */
-type InheritedSlots<E> = E extends { slots: infer P extends SlotDefaults } ? P : Empty;
+type InheritedSlots<E> = [E] extends [undefined]
+  ? Empty
+  : E extends { slots: infer P extends SlotDefaults }
+    ? P
+    : Empty;
 
 /**
  * Every slot name from both recipes.
