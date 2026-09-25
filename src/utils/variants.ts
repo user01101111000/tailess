@@ -484,12 +484,28 @@ type MergedSlots<A extends SlotDefaults, B extends SlotDefaults> = {
   readonly [K in keyof A | keyof B]: SsArg;
 };
 
+/**
+ * Every part an option names, required to be a part.
+ *
+ * `V` is inferred `const` from the literal, so no excess-property check runs against
+ * {@link SlotValue}; and since every part in it is optional, TypeScript's weak-type check
+ * fires only when an option shares *no* key with the slots. `{ root: "p-2", titel: "…" }`
+ * shares `root`, so the typo compiled, and its classes reached no part at runtime.
+ */
+type KnownParts<V, S> = {
+  [G in keyof V]: {
+    [O in keyof V[G]]: { [K in keyof V[G][O]]: K extends keyof S ? unknown : never };
+  };
+};
+
 export function variants<
   const S extends SlotDefaults,
   const V extends SlottedGroups<S>,
   const E extends AnySlottedRecipe | undefined = undefined,
 >(
-  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E },
+  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E } & {
+    variants: KnownParts<V, MergedSlots<S, InheritedSlots<E>>>;
+  },
 ): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
 export function variants<
   const V extends VariantGroups,

@@ -355,6 +355,24 @@ describe("slots — a component with named parts", () => {
     }
   });
 
+  it("refuses an option naming a part that does not exist, even beside one that does", () => {
+    // Only an option whose every key was unknown failed; one typo next to a real part
+    // compiled, and its classes reached no part at all.
+    // @ts-expect-error `titel` is not a part.
+    variants({
+      slots: { root: "r", title: "t" },
+      variants: { s: { a: { root: "p-2", titel: "text-xl" } } },
+    });
+    const parent = variants({ slots: { root: "r" }, variants: {} });
+    // An inherited part is a part.
+    const child = variants({
+      slots: { icon: "size-4" },
+      variants: { s: { a: { root: "p-2", icon: "text-red-500" } } },
+      extend: parent,
+    });
+    expect(child({ s: "a" })).toEqual({ root: "r p-2", icon: "size-4 text-red-500" });
+  });
+
   it("ignores a slot name off the prototype", () => {
     const t = variants({ slots: { root: "p-1" }, variants: { s: { a: { root: "p-2" } } } });
     expect(t({ s: "toString" } as never).root).toBe("p-1");
