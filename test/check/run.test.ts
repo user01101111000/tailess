@@ -921,7 +921,88 @@ describe("tailess emit --json", () => {
   });
 });
 
+describe("the stylesheet's own build-time checks", () => {
+  it("fails --strict on a @theme that removes a breakpoint, as the build does", async () => {
+    // Both plugins run this check and fail a `diagnostics: "error"` build on it; the gate
+    // documented as covering both never ran it, and exited 0 with `diagnostics: []`.
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-2xl: initial; }`,
+    );
+    const lax = await check({ json: true });
+    expect(lax.code).toBe(0);
+    expect(JSON.parse(lax.output).diagnostics).toEqual([
+      expect.objectContaining({ kind: "theme-drift", file: "a.css" }),
+    ]);
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(1);
+    expect(output).toContain('removes the "2xl" breakpoint');
+  });
+
+  it("does not fail --strict on a note: a variant the project adds works", async () => {
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@custom-variant midnight (&:where(.midnight, .midnight *));`,
+    );
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(0);
+    expect(output).toContain('"midnight" variant');
+  });
+});
+
+describe("which stylesheets vouch for a class", () => {
+  it("leaves out a stylesheet under an --ignore'd directory", async () => {
+    // A stale entry anywhere under --content vouched for the app's broken classes, since
+    // a class only has to work in one stylesheet — and --ignore did not reach the search.
+    await mkdir(join(dir, "legacy"));
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(
+      join(dir, "app.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    await writeFile(join(dir, "legacy", "old.css"), `@import "tailwindcss";`);
+    expect((await check({ json: true })).code).toBe(0);
+    const { code, output } = await check({ json: true, ignore: ["legacy"] });
+    expect(code).toBe(1);
+    expect(JSON.parse(output).stylesheets).toEqual(["app.css"]);
+  });
+});
+
 describe("the unwired-plugin guess", () => {
+  it("counts only build configs, not every *rc and *.config.* file", async () => {
+    // A monorepo root has an .npmrc and an eslint config and no build config: that "had a
+    // config" which wired nothing, and --strict failed a correctly wired app.
+    await writeFile(join(dir, ".npmrc"), "save-exact=true\n");
+    await writeFile(join(dir, "eslint.config.js"), "export default [];\n");
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(0);
+    expect(output).not.toContain("may not be running");
+  });
+
+  it("reads the app's config from a monorepo root, above each --content root", async () => {
+    const app = join(dir, "apps", "web");
+    await mkdir(join(app, "src"), { recursive: true });
+    await writeFile(join(dir, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+    await writeFile(join(app, "src", "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(app, "src", "a.css"), `@import "tailwindcss";`);
+    const config = (plugins: string) =>
+      `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\nexport default { plugins: [${plugins}] };\n`;
+
+    await writeFile(join(app, "vite.config.ts"), config("tailwindcss(), tailess()"));
+    const wired = await check({ strict: true, content: [join(app, "src")] });
+    expect(wired.code).toBe(0);
+    expect(wired.output).not.toContain("may not be running");
+
+    await writeFile(join(app, "vite.config.ts"), config("tailwindcss()"));
+    const unwired = await check({ strict: true, content: [join(app, "src")] });
+    expect(unwired.code).toBe(1);
+    expect(unwired.output).toContain("may not be running");
+  });
+
   it("abstains when the config builds its plugin list somewhere it cannot follow", async () => {
     // `vite.base.js` is not a `*.config.*`, so the heuristic could not see the wiring and
     // concluded there was none — failing a correctly wired monorepo or preset under

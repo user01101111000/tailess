@@ -1301,10 +1301,18 @@ plugin removed.
 | `--version` | |
 
 > [!IMPORTANT]
-> Give `--extensions` and `--ignore` the same values as the [plugin](#plugin-options), or
-> the gate reads a different set of files than your build does — a project scanning
-> `["tsx", "vue"]` has a build enumerating two extensions and a gate reading thirteen.
-> Wrong in both directions, and silently.
+> Give `--content`, `--extensions` and `--ignore` the same values as the
+> [plugin](#plugin-options), or the gate reads a different set of files than your build
+> does — a project scanning `["tsx", "vue"]` has a build enumerating two extensions and a
+> gate reading thirteen, and a plugin narrowed to `content: ["src/pages"]` builds nothing
+> for `src/components` while a gate reading all of `src` passes it. Wrong in both
+> directions, and silently.
+
+A class passes when **any** Tailwind entry stylesheet the check finds has a rule for it,
+since a component is styled by whichever one its page loads. A stale or unrelated entry
+under `--content` — a storybook, an email template, `legacy/` — can therefore vouch for a
+class the app's own stylesheet cannot build: leave it out with `--ignore`, or name the
+app's entry with `--css`.
 
 Every finding names the file it came from, and `--json` gives a CI job something to read:
 

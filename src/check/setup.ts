@@ -891,7 +891,7 @@ export async function runDoctor(cwd: string, json = false): Promise<number> {
 }
 
 /** What {@link readWiring} found, and — when it followed an import — where. */
-interface Reading {
+export interface Reading {
   state: Wiring | "unknown";
   /** The local module the plugin was found in, when not the config itself. */
   via?: string;
@@ -938,7 +938,7 @@ async function resolveLocal(from: string, specifier: string): Promise<string | u
  * module that does not wire it either leaves the answer "unwired"; one that cannot be
  * found or read leaves it "unknown", which `doctor` says rather than guessing at.
  */
-async function readWiring(host: Exclude<Host, { kind: "unknown" }>): Promise<Reading> {
+export async function readWiring(host: Exclude<Host, { kind: "unknown" }>): Promise<Reading> {
   const kind = pluginFor(basename(host.file), host.source);
   const seen = new Set<string>();
   const read = async (file: string, source: string, depth: number): Promise<Reading> => {

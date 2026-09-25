@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,9 +8,10 @@ import { maskLiterals } from "../extract/scan.js";
 import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
+import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 import { hasRule } from "../internal/selector.js";
 import { type Command, commands, jsonResult } from "./result.js";
-import { pluginFor, runDoctor, runInit, wired } from "./setup.js";
+import { findHost, readWiring, runDoctor, runInit } from "./setup.js";
 import { findBrokenAcross, probeList, utilitySentinel } from "./verify.js";
 
 /**
@@ -212,8 +213,8 @@ export const help = `tailess — prove every class tailess builds has CSS behind
   --version, -v         print the version and exit.
   --help, -h            print this and exit.
 
-Give --extensions and --ignore the same values as the plugin, or the gate checks a
-different set of files than your build does.
+Give --content, --extensions and --ignore the same values as the plugin, or the gate
+checks a different set of files than your build does.
 
 Exit codes:
   0  every runtime-built class has a rule (or the scan found no tailess calls)
@@ -490,10 +491,14 @@ async function loadCompiler(cwd: string): Promise<Compile> {
   return compile as Compile;
 }
 
-/** A config file a build tool would read from the project root. */
-const configFile = /^(?:\..*rc(?:\..*)?|.*\.config\.[cm]?[jt]sx?|.*\.config\.json|package\.json)$/;
-/** A local module a config pulls its plugin list from, which this cannot follow. */
+/** A local module a config pulls its plugin list from, which this cannot always follow. */
 const localImport = /^[ \t]*import\b[^;]*?["']\.[^"'\n]*["']|\brequire\(\s*["']\.[^"'\n]*["']/m;
+
+/** True when `dir` is `root` or inside it. */
+function inside(root: string, dir: string): boolean {
+  const rel = relative(root, dir);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
 
 /**
  * True when nothing in the project's root config mentions tailess.
@@ -509,48 +514,57 @@ const localImport = /^[ \t]*import\b[^;]*?["']\.[^"'\n]*["']|\brequire\(\s*["']\
  * time, so neither reaches the stylesheet on disk. What is left is the config, which
  * is where a reader would look too. Heuristic, so it warns rather than failing unless
  * asked — a gate that fails on a guess is a gate teams delete.
+ *
+ * Read the way `doctor` reads it — the file the build loads, followed into a local
+ * preset, a PostCSS entry counted only when listed ahead of Tailwind's — and only a
+ * real build config counts. Any `*rc` and `*.config.*` did before, so a monorepo root
+ * with an `.npmrc` "had a config" that wired nothing, and `--strict` failed a correctly
+ * wired app. With no build config in the working directory, the nearest one above each
+ * `--content` root inside it answers instead, which is where a monorepo keeps them.
  */
-async function pluginLooksUnwired(cwd: string): Promise<boolean> {
-  const entries = await readdir(cwd, { withFileTypes: true }).catch(() => []);
-  let sawConfig = false;
-  for (const entry of entries) {
-    if (!entry.isFile() || !configFile.test(entry.name)) continue;
-    const text = await readFile(join(cwd, entry.name), "utf8").catch(() => "");
-
-    // `package.json` names tailess in `dependencies` for every consumer, which proves
-    // installation and nothing about wiring. Only its `postcss` key — the one place a
-    // build config can actually live in there — counts as evidence.
-    if (entry.name === "package.json") {
-      let postcss: unknown;
-      try {
-        postcss = (JSON.parse(text) as { postcss?: unknown }).postcss;
-      } catch {
-        continue;
+async function pluginLooksUnwired(cwd: string, roots: readonly string[]): Promise<boolean> {
+  const dirs = new Set<string>();
+  if ((await findHost(cwd)).kind !== "unknown") dirs.add(cwd);
+  else {
+    for (const root of roots) {
+      for (let dir = root; inside(cwd, dir) && dir !== cwd; dir = dirname(dir)) {
+        if ((await findHost(dir)).kind === "unknown") continue;
+        dirs.add(dir);
+        break;
       }
-      if (postcss === undefined) continue;
-      sawConfig = true;
-      if (wired(JSON.stringify(postcss), "postcss")) return false;
-      continue;
     }
-
-    sawConfig = true;
-    // Read as the plugin this file has to wire: a `tailess/postcss` beside
-    // `@tailwindcss/vite`, an import whose call was deleted, and a PostCSS entry after
-    // Tailwind's all passed as "mentions tailess" while nothing had CSS.
-    if (wired(text, pluginFor(entry.name, text))) return false;
-    // A config that builds its plugin list somewhere else — `import base from
-    // "./vite.base.js"`, the shape every monorepo and shared preset has — is one this
-    // cannot see through, and concluding "unwired" there failed a correctly wired project
-    // under `--strict`. A guess that cannot see the whole config has to abstain.
-    if (localImport.test(maskLiterals(text))) return false;
   }
   // No config at all means this is not a project root worth guessing about.
-  return sawConfig;
+  if (dirs.size === 0) return false;
+
+  for (const dir of dirs) {
+    const host = await findHost(dir);
+    if (host.kind === "unknown") continue;
+    const { state } = await readWiring(host);
+    if (state === "wired" || state === "unknown") return false;
+    // A config that builds its plugin list somewhere else — `import base from
+    // "./vite.base.js"`, the shape every monorepo and shared preset has — may do it
+    // through a package this cannot read, and concluding "unwired" there failed a
+    // correctly wired project under `--strict`. A guess that cannot see the whole config
+    // has to abstain.
+    if (localImport.test(maskLiterals(host.source))) return false;
+  }
+  return true;
 }
 
-/** Every Tailwind entry stylesheet under `roots`. */
-async function findEntries(roots: string[]): Promise<string[]> {
-  const { files } = await collect({ roots, extensions: ["css"] });
+/**
+ * Every Tailwind entry stylesheet under `roots`, skipping what `ignore` names.
+ *
+ * `--ignore` did not reach this search, so a stale `legacy/old-admin.css` anywhere under
+ * `--content` stayed an entry — and since a class only has to work in one entry, it
+ * vouched for the app's broken ones, with no way to leave it out short of `--css`.
+ */
+async function findEntries(roots: string[], ignore: readonly string[] = []): Promise<string[]> {
+  const { files } = await collect({
+    roots,
+    extensions: ["css"],
+    ...(ignore.length ? { ignore: [...ignore] } : {}),
+  });
   const entries: string[] = [];
   for (const file of files) {
     const css = await readFile(file, "utf8").catch(() => undefined);
@@ -686,7 +700,7 @@ async function runCheck(options: Options): Promise<number> {
 
   const entries = options.css
     ? [isAbsolute(options.css) ? options.css : resolve(options.cwd, options.css)]
-    : await findEntries(roots);
+    : await findEntries(roots, options.ignore);
 
   if (entries.length === 0) {
     complain(
@@ -696,10 +710,26 @@ async function runCheck(options: Options): Promise<number> {
     return finish(2, { error: "no-stylesheet", roots: shown(roots, options.cwd) });
   }
 
-  const { classes, files, diagnostics, sources } = await collect({
+  const scanned = await collect({
     ...scanOptions(options, roots),
     provenance: true,
   });
+  const { classes, files, sources } = scanned;
+  // The checks both plugins run over the stylesheet itself — a `@theme` that removes a
+  // breakpoint, a `@custom-variant` — which a build under `diagnostics: "error"` fails
+  // on. `--strict` is documented as the one gate covering both, and never ran them.
+  const diagnostics = [...scanned.diagnostics];
+  for (const entry of entries) {
+    const css = await readFile(entry, "utf8").catch(() => undefined);
+    if (css === undefined) continue;
+    const theme = await collectTheme(css, entry);
+    for (const found of themeDiagnostics(theme.breakpoints, theme.variants)) {
+      diagnostics.push({ ...found, file: entry });
+    }
+  }
+  // A note — a variant or breakpoint the project added, a width moved — describes CSS
+  // that works, and fails nothing here any more than it does in the build.
+  const failing = diagnostics.filter((d) => d.informational !== true).length;
   const asJson = diagnostics.map((d) => ({
     kind: d.kind,
     file: relative(options.cwd, d.file) || d.file,
@@ -731,11 +761,11 @@ async function runCheck(options: Options): Promise<number> {
       `[tailess] scanned ${files.length} file${files.length === 1 ? "" : "s"} and found ` +
         "no runtime-built classes — nothing to check.",
     );
-    const failed = options.strict && diagnostics.length > 0;
+    const failed = options.strict && failing > 0;
     return finish(failed ? 1 : 0, { checked: 0, files: files.length, diagnostics: asJson });
   }
 
-  const unwired = await pluginLooksUnwired(options.cwd);
+  const unwired = await pluginLooksUnwired(options.cwd, roots);
   if (unwired) {
     complain(
       "[tailess] no build config here calls the plugin, so it may not be running at " +
@@ -826,10 +856,10 @@ async function runCheck(options: Options): Promise<number> {
       `[tailess] ${classes.length} runtime-built classes checked against ` +
         `${entries.length} stylesheet${entries.length === 1 ? "" : "s"} — every one has CSS.`,
     );
-    if (options.strict && diagnostics.length > 0) {
+    if (options.strict && failing > 0) {
       complain(
-        `\n[tailess] --strict: ${diagnostics.length} build-time ` +
-          `diagnostic${diagnostics.length === 1 ? "" : "s"} above.`,
+        `\n[tailess] --strict: ${failing} build-time ` +
+          `diagnostic${failing === 1 ? "" : "s"} above.`,
       );
       return finish(1, summary);
     }
