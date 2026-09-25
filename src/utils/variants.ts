@@ -327,19 +327,27 @@ interface Resolved {
  * enumerate, which is the invariant this package is written around.
  *
  * A copy rather than freezing what was passed in, because freezing someone else's object
- * as a side effect of reading it is its own surprise. One level per group is enough: an
- * option's *value* is a class value, and nothing reads through it again.
+ * as a side effect of reading it is its own surprise. All the way down: one level per
+ * group left compound rules, defaults and every `ss` map inside an option the caller's
+ * live objects, so a write to any of them still changed the parent after the fact — and
+ * built classes the scanner never saw. `extend` is a built component, with its own.
  */
 function snapshot(config: Record<string, unknown>): Record<string, unknown> {
-  const groups = (config.variants ?? {}) as Record<string, Record<string, unknown>>;
-  const copied: Record<string, Record<string, unknown>> = {};
-  for (const name of Object.keys(groups)) own(copied, name, Object.freeze({ ...groups[name] }));
-  const slots = config.slots as Record<string, unknown> | undefined;
-  return Object.freeze({
-    ...config,
-    variants: Object.freeze(copied),
-    ...(slots ? { slots: Object.freeze({ ...slots }) } : {}),
-  });
+  const { extend, ...rest } = config;
+  const copy = frozen(rest) as Record<string, unknown>;
+  return extend === undefined ? copy : Object.freeze({ ...copy, extend });
+}
+
+/** `value` copied, with every plain object and array in it frozen. */
+function frozen(value: unknown): unknown {
+  if (Array.isArray(value)) return Object.freeze(value.map(frozen));
+  if (value === null || typeof value !== "object") return value;
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value))
+    own(out, key, frozen((value as Record<string, unknown>)[key]));
+  return Object.freeze(out);
 }
 
 /**
@@ -451,7 +459,7 @@ type InheritedSlots<E> = [E] extends [undefined]
  * Only the *names* matter downstream, so the values are widened.
  */
 type MergedSlots<A extends SlotDefaults, B extends SlotDefaults> = {
-  [K in keyof A | keyof B]: SsArg;
+  readonly [K in keyof A | keyof B]: SsArg;
 };
 
 export function variants<
@@ -643,7 +651,19 @@ export function variants(first: any, second?: any): any {
       for (const slot of slotNames) own(out, slot, ss(...(parts[slot] as SsArg[])));
       return out;
     };
-    return Object.assign(component, { variants: groups, slots, config });
+    // Each part's own classes, frozen — not the arrays the component spreads on every
+    // call, which read as clsx dictionaries through `ss` and which a write corrupted for
+    // every later render. Built on first read: at creation, `configure()` may not have
+    // run yet, and a declared key would warn as unknown.
+    // `fromEntries` defines each key as its own, so a `__proto__` part stays a part.
+    let declared: Readonly<Record<string, string>> | undefined;
+    return Object.defineProperty(Object.assign(component, { variants: groups, config }), "slots", {
+      enumerable: true,
+      get: () =>
+        (declared ??= Object.freeze(
+          Object.fromEntries(slotNames.map((slot) => [slot, ss(...(slots[slot] as SsArg[]))])),
+        )),
+    });
   }
 
   const component = (props?: Record<string, unknown>, ...rest: SsArg[]): string => {

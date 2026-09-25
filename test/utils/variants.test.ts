@@ -359,6 +359,36 @@ describe("slots — a component with named parts", () => {
     const t = variants({ slots: { root: "p-1" }, variants: { s: { a: { root: "p-2" } } } });
     expect(t({ s: "toString" } as never).root).toBe("p-1");
   });
+
+  it("exposes each part's own classes, frozen, rather than its internal arrays", () => {
+    // `slots` was the list the component spreads on every call: through `ss` a map inside
+    // it read as a clsx dictionary ("base dark"), and a write the types allowed corrupted
+    // every later render.
+    expect(card.slots).toEqual({
+      root: "rounded-lg border dark:border-neutral-800",
+      title: "font-semibold",
+      body: "text-sm",
+    });
+    expect(ss(card.slots.root)).toBe("rounded-lg border dark:border-neutral-800");
+    expect(Object.isFrozen(card.slots)).toBe(true);
+    try {
+      // @ts-expect-error a recipe's parts are read-only.
+      card.slots.root = "SMUGGLED";
+    } catch {
+      /* strict mode */
+    }
+    expect(card().root).toBe("rounded-lg border dark:border-neutral-800 p-3");
+  });
+
+  it("gives an inherited part both recipes' classes", () => {
+    const parent = variants({ slots: { root: "rounded" }, variants: {} });
+    const child = variants({
+      slots: { root: "border", icon: "size-4" },
+      variants: {},
+      extend: parent,
+    });
+    expect(child.slots).toEqual({ root: "rounded border", icon: "size-4" });
+  });
 });
 
 describe("extend — building on another recipe", () => {
@@ -510,6 +540,32 @@ describe("a recipe's definition, once it is built", () => {
     expect(Object.isFrozen(cfg)).toBe(false);
     cfg.base = "changed";
     expect(cfg.base).toBe("changed");
+  });
+
+  it("is a snapshot all the way down: compounds, defaults and nested maps", () => {
+    // One level per group left these as the caller's live objects, so a write after
+    // building still changed the parent, a child built later disagreed with it, and
+    // `md:bg-green-500` — never in the source — was a class the component built.
+    const cfg = {
+      base: { base: "rounded", md: "rounded-lg" },
+      variants: { tone: { a: "bg-red-500", b: { base: "bg-blue-500", md: "bg-blue-700" } } },
+      compound: [{ tone: "a", class: "ring-1" }],
+      defaults: { tone: "a" },
+    };
+    type Built = ((props?: object) => string) & { config: unknown };
+    const parent = variants(cfg as never) as unknown as Built;
+    const before = [parent(), parent({ tone: "b" })];
+
+    cfg.base.md = "rounded-SMUGGLED";
+    cfg.compound.push({ tone: "b", class: "ring-SMUGGLED" });
+    cfg.compound[0] = { tone: "a", class: "ring-SMUGGLED" };
+    cfg.defaults.tone = "b";
+    cfg.variants.tone.b.md = "bg-SMUGGLED";
+
+    expect([parent(), parent({ tone: "b" })]).toEqual(before);
+    const child = variants({ variants: {}, extend: parent } as never) as unknown as Built;
+    expect([child(), child({ tone: "b" })]).toEqual(before);
+    expect(JSON.stringify(parent.config)).not.toContain("SMUGGLED");
   });
 
   it("names an extend cycle instead of overflowing the stack", () => {
