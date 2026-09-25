@@ -194,7 +194,8 @@ function emitRoot(map: SsInput): string {
  * Keys inside a map are emitted in canonical order (`base`, breakpoints
  * mobile-first, `max-*` largest-first, then states) no matter how you wrote them.
  * The arguments themselves are never reordered, so a trailing `className` wins,
- * exactly as it does in {@link cn} — of which this is a strict superset. The whole
+ * exactly as it does in {@link cn} — of which this is a superset for strings and arrays;
+ * a bare `clsx` dictionary is a bucket map here, so it goes in an array. The whole
  * result runs through `cn`, so conflicting utilities merge.
  *
  * @example

@@ -4,9 +4,14 @@ A real app, not a snippet. Every class on the page is built at runtime, so Tailw
 sees one of them in the source; the plugin in [`vite.config.ts`](./vite.config.ts) is what
 puts them in the stylesheet.
 
+The example installs tailess from `../..`, and `dist/` is not committed, so build the
+package at the repository root first — then install here:
+
 ```bash
+npm ci && npm run build                  # at the repository root
+cd examples/vite-react
 npm install
-npm run verify   # vite build, then tailess check
+npm run verify                           # vite build, then tailess check
 ```
 
 `npm run dev` for the page itself.

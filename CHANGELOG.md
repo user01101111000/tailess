@@ -31,6 +31,19 @@
 
 ## 0.12.0
 
+### Type changes
+
+Three changes to the `variants` types in this release are breaking for code that reads
+the types back rather than calling the API. They were not called out when it shipped:
+
+- `VariantProps<typeof recipe>` of a `{ true, false }` group is `boolean | "true" | "false"`,
+  not `"true" | "false"` — the boolean-variant change below. Code that returns such a prop
+  as the string union needs `String(…)` or a narrower annotation.
+- `VariantsConfig["compound"]` (and `compoundVariants`) is a `ReadonlyArray`, so a
+  `compound: [...] as const` is accepted — and `config.compound.push(…)` is not.
+- `VariantComponent<V>` has a required `readonly config: unknown`, which is what `extend`
+  reads. A hand-built component or a test double typed as one needs it too.
+
 ### Minor Changes
 
 - [#56](https://github.com/user01101111000/tailess/pull/56) [`24a7d88`](https://github.com/user01101111000/tailess/commit/24a7d88ddd1e76075a3d422f497a3062687520ba) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess emit`, a gate you can point at your build, and an app that proves both.

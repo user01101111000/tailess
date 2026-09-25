@@ -65,7 +65,9 @@ className={ss(
 )}
 ```
 
-`ss` is a strict superset of a `cn()` helper: hand it plain strings and it *is* `cn`.
+`ss` is a superset of a `cn()` helper for strings and arrays: hand it those and it *is*
+`cn`. A bare `clsx` dictionary is the one exception — to `ss` an object is a bucket map —
+so wrap one in an array: `ss([{ "font-bold": isActive }])`.
 
 ## Contents
 
@@ -192,8 +194,10 @@ class built at runtime, with `npm run verify` wired to the gate. CI builds it on
 push, and asserts the gate goes red when the plugin is removed.
 
 > [!TIP]
-> Already have a `cn()` helper? `ss` is a strict superset of it — the same call with plain
-> strings behaves identically, so you can swap one file at a time.
+> Already have a `cn()` helper? `ss` is a superset of it — the same call with strings and
+> arrays behaves identically, so you can swap one file at a time. A bare `clsx` dictionary
+> is the exception: `ss` reads an object as a bucket map, so `cn({ "font-bold": on })`
+> becomes `ss([{ "font-bold": on }])`.
 
 ## Setup
 
@@ -456,7 +460,7 @@ ss({ base: "p-4" }, { base: "p-8" });        // → "p-8"
 Sorting a bare string into the `base` bucket instead would put a caller's
 `className="md:p-10"` *ahead* of your own `md:p-6` and quietly lose to it. It doesn't.
 
-Given only class values, `ss` is `cn`:
+Given only strings and arrays, `ss` is `cn`:
 
 ```ts
 ss("px-2 py-1", isActive && "bg-blue-500", "px-4");  // → "py-1 bg-blue-500 px-4"
@@ -494,8 +498,8 @@ start nesting. A falsy nested bucket drops, prefix included, like any other.
 ### `cn` — compose and merge
 
 `clsx`-style conditional joining, then `tailwind-merge` for conflict resolution. `ss` is
-a strict superset of it, so reach for `cn` when there are no breakpoints or states in
-sight and you'd rather say so.
+a superset of it for strings and arrays (a bare dictionary goes in an array there), so
+reach for `cn` when there are no breakpoints or states in sight and you'd rather say so.
 
 ```ts
 cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
