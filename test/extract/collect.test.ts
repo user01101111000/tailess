@@ -231,3 +231,19 @@ describe("normalizeExtensions", () => {
     expect(isScannable(join(dir, "a.tsx"), normalizeExtensions([".tsx"]))).toBe(true);
   });
 });
+
+describe("overlapping roots", () => {
+  it("read each file once", async () => {
+    // `src` and `src/ui` both reach src/ui/b.tsx; it counted twice and its diagnostics
+    // were reported twice.
+    await mkdir(join(dir, "src", "ui"), { recursive: true });
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "text-2xl" })`);
+    await writeFile(
+      join(dir, "src", "ui", "b.tsx"),
+      `import { between } from "tailess";\nbetween("lg", "sm", "block");`,
+    );
+    const result = await collect({ roots: [join(dir, "src"), join(dir, "src", "ui"), dir] });
+    expect(result.files).toHaveLength(2);
+    expect(result.diagnostics.filter((d) => d.kind === "empty-range")).toHaveLength(1);
+  });
+});

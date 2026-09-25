@@ -284,9 +284,12 @@ async function run(options: CollectOptions): Promise<CollectResult> {
   for (const dir of options.ignore ?? []) ignore.add(dir);
 
   const roots = [...new Set(options.roots.map((p) => resolve(p)))];
-  const files: string[] = [];
-  await Promise.all(roots.map((root) => walk(root, extensions, ignore, files, outputDirs, true)));
-  files.sort();
+  const walked: string[] = [];
+  await Promise.all(roots.map((root) => walk(root, extensions, ignore, walked, outputDirs, true)));
+  // Overlapping roots — `src` and `src/components`, the whole project and one of its
+  // folders — reach the same file twice. Read twice, it counted twice and reported every
+  // diagnostic in it twice, which is what `check --json` then handed CI.
+  const files = [...new Set(walked)].sort();
 
   const classes = new Set<string>();
   const diagnostics: FileDiagnostic[] = [];
