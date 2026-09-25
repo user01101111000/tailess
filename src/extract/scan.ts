@@ -72,6 +72,17 @@ const outerCallPattern = new RegExp(callPattern.source, "g");
  */
 const maxArgsLength = 20_000;
 
+/**
+ * The same, for an argument list that plainly starts as code — an object, an array or
+ * a string, which prose after "on (" does not.
+ *
+ * A design system's recipe is one `variants({ … })` call, and one the size of a
+ * tailwind-variants port passes 20k characters. Under the prose cap its every prefixed
+ * class was dropped, silently: `check` saw "nothing to check" and the build shipped the
+ * lot unstyled.
+ */
+const maxCodeArgsLength = 1_000_000;
+
 /** How deep a template may nest inside its own interpolations. See {@link skipTemplate}. */
 const maxTemplateNesting = 64;
 
@@ -244,12 +255,16 @@ export function maskLiterals(code: string, alsoStrings = false): string {
  * dev server caught mid-keystroke, and its finished calls should keep their
  * styles. Running past {@link maxArgsLength} yields nothing instead — that much
  * text is not an argument list, so the `(` belonged to something else and
- * whatever follows would only add noise.
+ * whatever follows would only add noise. An argument list that starts as code gets
+ * {@link maxCodeArgsLength} instead, since a large one is a real recipe.
  */
 function readParen(code: string, open: number): string {
-  const capped = open + 1 + maxArgsLength;
-  const limit = Math.min(code.length, capped);
   const start = open + 1;
+  let first = start;
+  while (first < code.length && /\s/.test(code[first] as string)) first += 1;
+  const startsAsCode = "{['\"".includes(code[first] ?? " ");
+  const capped = start + (startsAsCode ? maxCodeArgsLength : maxArgsLength);
+  const limit = Math.min(code.length, capped);
   let i = start;
   let depth = 1;
   while (i < limit) {
@@ -277,7 +292,9 @@ function readParen(code: string, open: number): string {
     }
     i += 1;
   }
-  return i === capped ? "" : code.slice(start, i);
+  // `>=`, not `===`: a template skipped as a whole can jump past the cap, and an
+  // unterminated one used to carry the rest of the file into a single call.
+  return i >= capped ? "" : code.slice(start, i);
 }
 
 /**

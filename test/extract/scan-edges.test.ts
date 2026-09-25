@@ -110,6 +110,28 @@ describe("malformed input stays contained", () => {
     expect(extractClasses(code)).toEqual([]);
   });
 
+  it("reads a real call over the cap in full, which a design system's recipe can be", () => {
+    // The cap is for prose, whose `(` never opened a call. A recipe is one call whose
+    // config is plainly code, and one of tailwind-variants' size passed 20k characters:
+    // every prefixed class in it was dropped, `check` found "nothing to check", and the
+    // build shipped them all unstyled.
+    const options = Array.from(
+      { length: 400 },
+      (_, i) =>
+        `o${i}: { base: "p-${i % 12}", md: "px-${i % 9}", hover: "bg-neutral-${(i % 9) + 1}00" }`,
+    ).join(",\n");
+    const code = `variants({ variants: { size: {\n${options}\n} } })`;
+    expect(code.length).toBeGreaterThan(20_000);
+    const classes = extractClasses(code);
+    expect(classes).toContain("md:px-0");
+    expect(classes).toContain("hover:bg-neutral-900");
+
+    const entries = Array.from({ length: 1300 }, (_, i) => `"max-md": "gap-${i % 12}"`);
+    const map = `ss({ ${entries.join(", ")}, lg: "grid" })`;
+    expect(map.length).toBeGreaterThan(20_000);
+    expect(extractClasses(map)).toContain("lg:grid");
+  });
+
   it("still emits what a call held when the file simply ends mid-edit", () => {
     // A dev server reads files while they are being typed.
     expect(extractClasses(`ss({ md: "text-lg"`)).toEqual(["md:text-lg"]);
