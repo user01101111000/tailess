@@ -1,7 +1,7 @@
 import { isDev } from "../internal/env.js";
 import { own, ownOr } from "../internal/lookup.js";
 import { firstTime, warn } from "../internal/settings.js";
-import type { SsArg } from "../types.js";
+import type { ClassArg, SsArg } from "../types.js";
 import { ss } from "./ss.js";
 
 /** The options one variant offers, e.g. `{ sm: "text-sm", lg: "text-lg" }`. */
@@ -189,7 +189,12 @@ export interface SlottedConfig<
 
 /** A component built by {@link variants}. */
 export interface VariantComponent<V extends VariantGroups> {
-  (props?: PropsOf<V>, ...rest: SsArg[]): string;
+  /**
+   * The class string for these props, with the caller's extra classes last. An extra is
+   * a {@link ClassArg} — not an `ss` map, which the build could never see here; wrap
+   * one in `ss()`.
+   */
+  (props?: PropsOf<V>, ...rest: ClassArg[]): string;
   /**
    * The variants it was built from, kept so `VariantProps<typeof button>` has
    * something to read the option names back out of — and useful in its own right for
@@ -202,7 +207,14 @@ export interface VariantComponent<V extends VariantGroups> {
 
 /** A multi-part component built by {@link variants}: one class string per slot. */
 export interface SlottedComponent<V extends AnyGroups, S extends SlotDefaults> {
-  (props?: PropsOf<V>, extra?: SlotValue<S>): { -readonly [K in keyof S]: string };
+  /**
+   * One class string per part. Extra classes are keyed by part, each a
+   * {@link ClassArg} — an `ss` map there is never seen by the build; wrap it in `ss()`.
+   */
+  (
+    props?: PropsOf<V>,
+    extra?: { -readonly [K in keyof S]?: ClassArg | undefined },
+  ): { -readonly [K in keyof S]: string };
   readonly variants: V;
   readonly slots: S;
   readonly config: unknown;
@@ -226,6 +238,24 @@ function optionKey(value: unknown): string | undefined {
 
 /** Slot sets already reported, so a recipe built in a render loop warns once. */
 const warnedFlatExtends = new Set<string>();
+const warnedExtraMap = new Set<string>();
+
+/**
+ * Say so when a caller hands a component an `ss` map as an extra class value.
+ *
+ * The types refuse it; this is for plain JavaScript and casts. The runtime builds the
+ * prefixed classes happily, but the build reads the recipe and never the calls of the
+ * component, so every one of them lands on the element with no rule behind it.
+ */
+function warnExtraMap(value: unknown, where: string): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return;
+  const keys = Object.keys(value).join(", ");
+  if (!firstTime(warnedExtraMap, `${where}:${keys}`)) return;
+  warn(
+    `variants(): ${where} got an ss map ({ ${keys} }). The build never reads a ` +
+      `component's call, so those classes get no CSS. Wrap the map in ss().`,
+  );
+}
 
 /**
  * Warn that a flat recipe extended a slotted one, and what was dropped.
@@ -546,7 +576,12 @@ export function variants(first: any, second?: any): any {
         spread(ownOr<unknown>(groups[name] as Record<string, unknown>, value, undefined));
       }
       for (const rule of matching(chosen)) spread(rule);
-      if (extra) spread(extra);
+      if (extra) {
+        if (isDev)
+          for (const slot of slotNames)
+            warnExtraMap(ownOr(extra, slot, undefined), `the "${slot}" extra`);
+        spread(extra);
+      }
 
       const out: Record<string, string> = {};
       for (const slot of slotNames) own(out, slot, ss(...(parts[slot] as SsArg[])));
@@ -564,6 +599,7 @@ export function variants(first: any, second?: any): any {
       parts.push(ownOr<SsArg>(groups[name] as Record<string, SsArg>, value, undefined));
     }
     for (const rule of matching(chosen)) parts.push(rule as SsArg);
+    if (isDev) for (const extra of rest) warnExtraMap(extra, "an extra argument");
     return ss(...parts, ...rest);
   };
 

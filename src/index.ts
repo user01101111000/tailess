@@ -25,7 +25,7 @@ export {
 } from "./constants.js";
 export type { ConfigureOptions, TailessSettings } from "./internal/settings.js";
 export { configure } from "./internal/settings.js";
-export type { ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
+export type { ClassArg, ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";
 export { has, inside, notHas } from "./utils/has.js";

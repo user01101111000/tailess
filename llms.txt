@@ -29,6 +29,7 @@ import { ss as tw } from "tailess";   // a renamed import — kills the whole fi
 ss({ md: "p-4" });
 match(size, { sm: "p-2", lg: "p-8" });          // a lookup, all branches literal
 ss({ md: cond ? "p-4" : "p-2" });               // both branches are read
+button(props, ss({ md: "w-auto" }));            // a component's override goes through ss()
 ss({ base: "w-[var(--w)]" });                   // a value from data goes in a CSS var
 style={vars({ "--w": `${percent}%` })}
 ```

@@ -698,6 +698,16 @@ merge once, across all of it.
 `{ size: undefined }` leaves the default in place, which is what a component writes when
 it forwards an optional prop it did not receive.
 
+An extra argument is a `ClassArg` — a class string, an array, a falsy value — **not an
+`ss` map**. The build reads your recipe and your `ss(…)` calls, never the calls of the
+component the recipe builds, so a map there would put `md:w-auto` on the element with no
+rule behind it. Wrap it instead; the `ss` call is literal, so the build reads it where
+it is written:
+
+```tsx
+button({ tone: "danger" }, ss({ md: "w-auto" }));  // not button({…}, { md: "w-auto" })
+```
+
 `VariantProps` reads the prop type back off the component, so a component declares its
 own props against the recipe rather than restating it:
 
@@ -740,8 +750,11 @@ Each part merges **on its own**, so an override on `root` cannot disturb `title`
 classes come in as a second argument, keyed by part:
 
 ```tsx
-card({ size: "lg" }, { root: className })
+card({ size: "lg" }, { root: className, title: ss({ lg: "text-2xl" }) })
 ```
+
+Each part's extra is a `ClassArg` for the same reason as above: a responsive override
+from the call site goes through `ss()`.
 
 #### `extend` — building on another recipe
 
@@ -924,7 +937,7 @@ Every exported type, grouped by what it is for. A test holds this list to what
 
 | | |
 | --- | --- |
-| **`ss` itself** | `SsInput` `SsValue` `SsArg` `SsKey` `ClassValue` `ResponsiveMap` |
+| **`ss` itself** | `SsInput` `SsValue` `SsArg` `ClassArg` `SsKey` `ClassValue` `ResponsiveMap` |
 | **Key families** — for a `Record<…>` keyed by one | `ScreenKey` `MaxScreenKey` `ContainerKey` `MaxContainerKey` `AnyContainerKey` `StateKey` `ElementStateKey` `StandaloneStateKey` `GroupStateKey` `PeerStateKey` `HasStateKey` `InStateKey` `NotStateKey` `NegatableStateKey` |
 | **Recipes** | `VariantProps` `VariantsConfig` `VariantComponent` `VariantGroups` `VariantOptions` `CompoundRule` `SlotDefaults` `SlotValue` `SlottedConfig` `SlottedComponent` `SlottedGroups` |
 | **The rest** | `NthValue` `CssVars` `CssVarInput` `CssVarName` `CustomKeys` `TailessSettings` `ConfigureOptions` |

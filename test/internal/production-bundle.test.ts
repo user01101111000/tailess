@@ -140,6 +140,14 @@ describe("the browser bundle", () => {
     // pass vacuously. And a custom `merge` returning a non-string put that value straight
     // into the class attribute.
     //
+    // Raised again to 14,500 for the release audit's `variants` guard: 13,645 -> 14,028,
+    // all of it inside that helper and none of it in `ss` + `cn`. A component's extra
+    // argument accepted an `ss` map, which the runtime expanded into prefixed classes the
+    // build could never see — the scanner reads the recipe, not the component's calls —
+    // so `button({}, { md: "w-auto" })` put `md:w-auto` on the element with no rule and
+    // no warning, and `check --strict` passed. The types refuse it now; the characters are
+    // the warning for the JavaScript and cast paths the types cannot reach.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
     // 5,683 chars, which is the number worth watching, since it is what most projects
@@ -147,7 +155,7 @@ describe("the browser bundle", () => {
     // several of the raises above; it was neither — nothing re-measured it. It is
     // measured here now, along with the rest: `vars` on top costs 411 (6,094), and
     // `variants` on top costs 2,908 (8,591).
-    expect(code.length).toBeLessThan(14_000);
+    expect(code.length).toBeLessThan(14_500);
   });
 
   it("pulls in no Node builtins", async () => {

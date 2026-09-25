@@ -78,5 +78,16 @@ export type SsInput = { base?: SsValue } & { [K in SsKey]?: SsValue };
  */
 export type SsArg = SsValue;
 
+/**
+ * A class value that stacks no prefix: every {@link SsArg} except a map.
+ *
+ * What a component built by `variants` takes from its caller. The build reads the
+ * recipe, never the call sites of the component it builds, so an `ss` map passed there
+ * would build prefixed classes that nothing generates CSS for. `ss({ md: "p-4" })` is
+ * the spelling that works: that call is literal, so the build reads it where it is
+ * written.
+ */
+export type ClassArg = Exclude<SsArg, SsInput>;
+
 /** Breakpoint -> classes that apply at that breakpoint and up. */
 export type ResponsiveMap = { [K in ScreenKey]?: ClassValue };

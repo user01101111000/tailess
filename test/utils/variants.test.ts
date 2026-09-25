@@ -1,4 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { configure } from "../../src/internal/settings.js";
+import { ss } from "../../src/utils/ss.js";
 import { type VariantComponent, type VariantProps, variants } from "../../src/utils/variants.js";
 
 /**
@@ -52,6 +54,32 @@ describe("variants", () => {
 
   it("drops a falsy extra argument", () => {
     expect(button({}, false)).toBe(button());
+  });
+
+  it("refuses an ss map as an extra argument, which the build could never see", () => {
+    // The scanner reads the recipe and `ss(...)` calls, never `button(...)`: a map here
+    // built `md:w-auto` on the element with no rule behind it, and nothing said so. The
+    // literal `ss()` call is what the build reads, so that is the spelling to reach for.
+    // @ts-expect-error an ss map is not a class value.
+    const quiet = button({}, { md: "w-auto" });
+    expect(typeof quiet).toBe("string");
+    expect(button({}, ss({ md: "w-auto" }))).toContain("md:w-auto");
+    expect(button({}, ["mt-2", { underline: true }], "p-1")).toContain("underline");
+  });
+
+  it("says so at runtime when an ss map reaches it anyway", () => {
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      button({}, { md: "w-auto-js" } as never);
+      expect(seen.some((m) => m.includes("got an ss map") && m.includes("md"))).toBe(true);
+      seen.length = 0;
+      // Arrays hold clsx dictionaries, and a class string is just classes: both quiet.
+      button({}, [{ "w-auto": true }], "w-full");
+      expect(seen).toEqual([]);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
   });
 
   it("works with no defaults and no compounds", () => {
@@ -271,6 +299,21 @@ describe("slots — a component with named parts", () => {
     }>();
     // @ts-expect-error "footer" is not a slot.
     card({}, { footer: "p-2" });
+  });
+
+  it("refuses an ss map as a part's extra, and warns when one gets through", () => {
+    // @ts-expect-error a part's extra is a class value; wrap a map in ss().
+    card({}, { root: { md: "p-10" } });
+    expect(card({}, { root: ss({ md: "p-10" }) }).root).toContain("md:p-10");
+
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      card({}, { title: { lg: "text-2xl-js" } } as never);
+      expect(seen.some((m) => m.includes('"title" extra') && m.includes("lg"))).toBe(true);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
   });
 
   it("ignores a slot name off the prototype", () => {

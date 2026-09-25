@@ -23,6 +23,8 @@ Do these instead:
 - `match(value, { a: "p-2", b: "p-8" })` for a lookup — every branch stays literal
 - `ss({ md: cond ? "p-4" : "p-2" })` — both branches are read
 - `vars({ "--w": `${n}%` })` with `w-[var(--w)]` for a value that comes from data
+- `button(props, ss({ md: "w-auto" }))` for a responsive override at a component's call
+  site — the build reads `ss(…)` calls, never `button(…)`, so a bare map there is unstyled
 
 `base` is exempt: it adds no prefix, so Tailwind finds the literal wherever it lives.
 
