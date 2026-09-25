@@ -382,11 +382,53 @@ type Compile = (
   },
 ) => Promise<{ build(candidates: string[]): string }>;
 
+/** `compile()` from `@tailwindcss/node`, the host `@tailwindcss/postcss` and `/vite` run. */
+type NodeHostCompile = (
+  css: string,
+  options: { base: string; onDependency: (path: string) => void },
+) => Promise<{ build(candidates: string[]): string }>;
+
+/**
+ * Tailwind's own Node host, when the project has one — directly, or as the dependency of
+ * the PostCSS or Vite plugin, which is where a strict package manager keeps it.
+ *
+ * It resolves `@import`, `@plugin` and `@config` exactly as the build does: `import`
+ * conditions for an ESM-only plugin, `style` conditions for a stylesheet, and TypeScript
+ * through its own loader rather than whatever the running Node happens to strip. The
+ * gate answering for a different resolver than the build is how it came to exit 2 on an
+ * ESM-only plugin the build loaded fine.
+ */
+async function loadNodeHost(cwd: string): Promise<NodeHostCompile | undefined> {
+  const from = createRequire(join(cwd, "_"));
+  const places = [
+    () => from.resolve("@tailwindcss/node"),
+    () => createRequire(from.resolve("@tailwindcss/postcss")).resolve("@tailwindcss/node"),
+    () => createRequire(from.resolve("@tailwindcss/vite")).resolve("@tailwindcss/node"),
+  ];
+  for (const place of places) {
+    let entry: string;
+    try {
+      entry = place();
+    } catch {
+      continue;
+    }
+    const mod = (await import(pathToFileURL(entry).href)) as {
+      compile?: unknown;
+      default?: { compile?: unknown };
+    };
+    const compile = mod.compile ?? mod.default?.compile;
+    if (typeof compile === "function") return compile as NodeHostCompile;
+  }
+  return undefined;
+}
+
 /**
  * Load Tailwind from the project being checked, not from tailess' own tree.
  *
  * `tailwindcss` is the host's, exactly as it is for the plugins — resolving it from
- * here would check tailess' devDependency against the consumer's source.
+ * here would check tailess' devDependency against the consumer's source. Tailwind's own
+ * Node host is preferred when it is there; the bare compiler, with the loaders in this
+ * file, is what is left for a project that has none.
  */
 async function loadCompiler(cwd: string): Promise<Compile> {
   const req = createRequire(join(cwd, "_"));
@@ -404,6 +446,8 @@ async function loadCompiler(cwd: string): Promise<Compile> {
         "the build fails with Tailwind's own error, `@source` paths must be quoted.",
     );
   }
+  const host = await loadNodeHost(cwd);
+  if (host) return (css, { base }) => host(css, { base, onDependency: () => {} });
   // `require.resolve` picks the `require` condition, so this is usually Tailwind's
   // CJS build — importing that puts its named exports under `default`.
   const mod = (await import(pathToFileURL(entry).href)) as {

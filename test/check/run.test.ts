@@ -405,10 +405,14 @@ describe("the check itself", () => {
     expect(output).toContain("sidebar-open:p-4");
   });
 
-  it("says which module it could not resolve, rather than Tailwind's own error", async () => {
+  it("says which module it could not resolve", async () => {
+    // Through Tailwind's Node host this is its resolver's message, which is the one the
+    // build itself prints; through the bare compiler it is this file's. Both name it.
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "./missing.cjs";`);
-    await expect(check()).rejects.toThrow(/could not resolve "\.\/missing\.cjs"/);
+    await expect(check()).rejects.toThrow(
+      /could not resolve "\.\/missing\.cjs"|Can't resolve '\.\/missing\.cjs'/,
+    );
   });
 
   it("passes a class that works in one of several stylesheets", async () => {
@@ -420,6 +424,44 @@ describe("the check itself", () => {
       `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
     );
     await writeFile(join(dir, "b.css"), `@import "tailwindcss";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+});
+
+describe("plugins and configs the real build loads", () => {
+  it("loads an ESM-only @plugin package", async () => {
+    // An exports map with only an `import` condition: resolved with `require`
+    // conditions, the gate exited 2 with "could not resolve" while the build worked.
+    const pkg = join(dir, "node_modules", "esm-only-plugin");
+    await mkdir(pkg, { recursive: true });
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "esm-only-plugin",
+        type: "module",
+        exports: { ".": { import: "./index.js" } },
+      }),
+    );
+    await writeFile(
+      join(pkg, "index.js"),
+      `export default function ({ addUtilities }) { addUtilities({ ".esm-util": { color: "red" } }); }\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "esm-util" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "esm-only-plugin";`);
+    const { code, output } = await check();
+    expect(output).not.toContain("could not resolve");
+    expect(code).toBe(0);
+  });
+
+  it("loads a TypeScript @config the way Tailwind does, not only where Node strips types", async () => {
+    await writeFile(
+      join(dir, "tailwind.config.ts"),
+      `const config: { theme: { extend: { screens: Record<string, string> } } } = {\n` +
+        `  theme: { extend: { screens: { tablet: "40rem" } } },\n};\nexport default config;\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" }, withPrefix("tablet", "p-6"))`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@config "./tailwind.config.ts";`);
     const { code } = await check();
     expect(code).toBe(0);
   });
