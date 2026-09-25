@@ -275,7 +275,7 @@ import { ss } from "tailess";
 
 ## Sorting classes
 
-tailess sorts your *keys* — `base`, then breakpoints, then `max-*`, then states — but not
+tailess sorts your *keys* — `base`, breakpoints, `max-*`, containers, states — but not
 the classes inside them. For that, point Tailwind's own formatter at the helpers — in
 `.prettierrc.json`:
 
@@ -406,8 +406,10 @@ ss({ base: "opacity-100", "not-hover": "opacity-70", "not-dark": "text-black" })
 // → "opacity-100 not-hover:opacity-70 not-dark:text-black"
 ```
 
-Keys are emitted `base` → breakpoints mobile-first → `max-*` largest-first → states,
-**whatever order you wrote them in**, and the result runs through
+Keys are emitted `base` → breakpoints mobile-first → `max-*` largest-first → `@` containers
+smallest-first → `@max-*` largest-first → states → the keys you declared in
+[`configure({ keys })`](#keys-your-own-css-adds), in the order given → anything
+undeclared, **whatever order you wrote them in**, and the result runs through
 [`cn`](#cn--compose-and-merge). Stable order is what keeps `tailwind-merge`'s
 "last one wins" predictable.
 

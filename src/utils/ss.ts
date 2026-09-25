@@ -60,7 +60,9 @@ function warnTooDeep(scope: string): void {
  * Emit one bucket map, with every class it produces carrying `prefix`.
  *
  * Keys are emitted in canonical order — `base`, breakpoints mobile-first, `max-*`
- * largest-first, then states — whatever order they were written in, so the same
+ * largest-first, `@` containers smallest-first, `@max-*` largest-first, states, the
+ * keys `configure({ keys })` declares in the order given, then any undeclared key —
+ * whatever order they were written in, so the same
  * input always produces the same string and `tailwind-merge`'s "last one wins"
  * stays predictable.
  */
@@ -86,8 +88,10 @@ function emitMap(map: SsInput, prefix: string, depth: number): string {
       // by its position in `configure({ keys })`, which is what makes the documented
       // "emitted after the built-in keys, in the order given" true: sharing one rank left
       // the emitted order at the mercy of how the object literal happened to be written.
+      // An undeclared key goes after all of them: sharing the first declared key's rank
+      // tied the two, and the written order decided which one a merge kept.
       const declared = customRank(key);
-      rank = declared === undefined ? unknownRank : unknownRank + declared;
+      rank = declared === undefined ? Number.POSITIVE_INFINITY : unknownRank + declared;
       if (isDev && declared === undefined && firstTime(warnedKeys, key)) warnUnknownKey(key);
     }
     keys.push(key);
