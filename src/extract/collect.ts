@@ -2,7 +2,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
-import { type Diagnostic, diagnose } from "./diagnose.js";
+import { configuresMerge, type Diagnostic, diagnose } from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
 /** File extensions scanned by default. */
@@ -132,6 +132,8 @@ interface CacheEntry {
   size: number;
   /** When the file was read, which decides whether its mtime can be trusted. */
   readAt: number;
+  /** Whether the file configures a merge of its own; see `configuresMerge`. */
+  merge: boolean;
   classes: string[];
   diagnostics: Diagnostic[];
 }
@@ -278,7 +280,14 @@ async function follow(
 
 /** Read one file, reusing the cached extraction when it hasn't changed. */
 async function scanFile(file: string): Promise<CacheEntry> {
-  const empty: CacheEntry = { mtimeMs: 0, size: -1, readAt: 0, classes: [], diagnostics: [] };
+  const empty: CacheEntry = {
+    mtimeMs: 0,
+    size: -1,
+    readAt: 0,
+    merge: false,
+    classes: [],
+    diagnostics: [],
+  };
   let mtimeMs = 0;
   let size = -1;
   try {
@@ -308,6 +317,7 @@ async function scanFile(file: string): Promise<CacheEntry> {
     mtimeMs,
     size,
     readAt,
+    merge: configuresMerge(code),
     classes: extractClasses(code),
     diagnostics: diagnose(code, file),
   };
@@ -357,6 +367,8 @@ async function run(options: CollectOptions): Promise<CollectResult> {
   const diagnostics: FileDiagnostic[] = [];
   const sources = options.provenance ? new Map<string, string[]>() : undefined;
   const perFile = await Promise.all(files.map(scanFile));
+  // The dead-class check assumes the default merge; a project with its own gets none.
+  const ownMerge = perFile.some((entry) => entry.merge);
   perFile.forEach((entry, index) => {
     const file = files[index] as string;
     for (const cls of entry.classes) {
@@ -366,7 +378,9 @@ async function run(options: CollectOptions): Promise<CollectResult> {
       if (seen) seen.push(file);
       else sources.set(cls, [file]);
     }
-    for (const d of entry.diagnostics) diagnostics.push({ ...d, file });
+    for (const d of entry.diagnostics) {
+      if (!(ownMerge && d.kind === "dead-class")) diagnostics.push({ ...d, file });
+    }
   });
 
   return {

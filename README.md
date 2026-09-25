@@ -1184,8 +1184,16 @@ Each is a class that cannot work — nothing is reported for code that merely lo
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
 The source checks speak only about calls that are really tailess's: a bare call under a
-name the file imports from `"tailess"`, or a member of `import * as tl from "tailess"`.
-Solid's `on`, `emitter.on(…)` and `$(el).on(…)` are left alone.
+name the file imports from `"tailess"` — by `import`, `require` or `await import()` — or
+a member of a name the whole package is bound to (`import * as tl`, `const tl =
+require("tailess")`). Solid's `on`, `emitter.on(…)` and `$(el).on(…)` are left alone.
+So is a file that reaches the helpers through a local re-export — a `@/lib/utils` barrel —
+which keeps full class enumeration but not these checks; import from `"tailess"` in the
+files you want checked.
+
+Two conflicting utilities are judged with the default `tailwind-merge`, because the build
+cannot run yours. A project that calls `configure({ merge })` gets no reports of that
+kind rather than wrong ones.
 
 **A renamed import** is the widest of them. The scanner finds calls by identifier, so
 `import { ss as tw } from "tailess"` is one line that removes every class in that file

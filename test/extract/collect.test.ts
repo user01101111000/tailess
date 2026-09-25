@@ -298,6 +298,38 @@ describe("linked folders and files", () => {
   });
 });
 
+describe("dead-class under a merge the project configures", () => {
+  const hero = `import { ss } from "tailess";\nexport const h = ss({ md: "text-hero text-white" });\n`;
+
+  it("is reported with the default merge", async () => {
+    await writeFile(join(dir, "Hero.tsx"), hero);
+    const { diagnostics } = await collect({ roots: [dir] });
+    expect(diagnostics.map((d) => d.kind)).toEqual(["dead-class"]);
+  });
+
+  it("is not reported when any file configures its own", async () => {
+    // The README's own extendTailwindMerge recipe keeps both classes at runtime, and the
+    // check — which can only run the default merge — called one dead and failed --strict.
+    await writeFile(join(dir, "Hero.tsx"), hero);
+    await writeFile(
+      join(dir, "main.ts"),
+      `import { configure } from "tailess";\nimport { extendTailwindMerge } from "tailwind-merge";\nconfigure({\n  merge: extendTailwindMerge({ extend: { classGroups: { "font-size": ["text-hero"] } } }),\n});\n`,
+    );
+    const { diagnostics } = await collect({ roots: [dir] });
+    expect(diagnostics.filter((d) => d.kind === "dead-class")).toEqual([]);
+  });
+
+  it("still is when configure() sets something else", async () => {
+    await writeFile(join(dir, "Hero.tsx"), hero);
+    await writeFile(
+      join(dir, "main.ts"),
+      `import { configure } from "tailess";\nconfigure({ keys: ["hocus"] });\n// merge: someday\n`,
+    );
+    const { diagnostics } = await collect({ roots: [dir] });
+    expect(diagnostics.map((d) => d.kind)).toEqual(["dead-class"]);
+  });
+});
+
 describe("the per-file cache", () => {
   it("rereads a same-size edit that kept its mtime", async () => {
     // NTFS left most back-to-back rewrites with the same mtime, and FAT's is 2 s: a

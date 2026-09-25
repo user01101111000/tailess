@@ -652,10 +652,31 @@ const maxPerFile = 20;
  */
 const proseFile = /\.(?:md|markdown|html?)$/i;
 
-/** A named import from tailess, with the whole specifier list in hand. */
-const tailessImport = /^[ \t]*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/gm;
-/** One `original as local` specifier inside it. */
-const renamedSpecifier = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g;
+/**
+ * Each way a file can bind a tailess helper under a name of its own: the statement, how
+ * one specifier in its list renames, and what the message calls it.
+ *
+ * A statement starts a line or follows a `;` — `"use client"; import { ss as tw } …` and
+ * a minified `import{ss as t}from"tailess"` are both imports. `import type` binds nothing
+ * callable, so it is not one of these.
+ */
+const renamings: [statement: RegExp, specifier: RegExp, verb: string][] = [
+  [
+    /(?:^|;)[ \t]*(import)\s*\{([^}]*)\}\s*from\s*["']tailess["']/gm,
+    /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+    "imported",
+  ],
+  [
+    /(?:^|;)[ \t]*(export)\s*\{([^}]*)\}\s*from\s*["']tailess["']/gm,
+    /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+    "re-exported",
+  ],
+  [
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(require)\(\s*["']tailess["']\s*\)/g,
+    /^([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)$/,
+    "required",
+  ],
+];
 const scannedHelpers = new Set<string>(helperNames);
 
 /**
@@ -667,42 +688,68 @@ const scannedHelpers = new Set<string>(helperNames);
  * every variant on it is unstyled. It is the largest silent failure the package has and
  * the only one provable from the import statement alone.
  *
- * `code` here is the masked source and the match is anchored to the start of a line, so a
- * commented-out import and one quoted inside a docs sample are both what they are: text
- * about code. This check asserts the strongest failure the package reports, and asserting
- * it about a line that does not run — in the same output that says every class has CSS —
- * is how a build gate teaches people to stop reading it.
+ * `code` here is the masked source, and `blank` the same with strings blanked too: a
+ * commented-out import, one quoted inside a docs sample and one inside a string are all
+ * what they are — text about code. This check asserts the strongest failure the package
+ * reports, and asserting it about a line that does not run — in the same output that says
+ * every class has CSS — is how a build gate teaches people to stop reading it.
+ *
+ * A re-export is the form the old message recommended, and renaming there is worse, not
+ * better: every file that imports the new name loses its classes, and none of them has a
+ * rename in it to be reported.
  */
-function renamedImports(code: string, report: (d: Diagnostic) => void): void {
-  tailessImport.lastIndex = 0;
-  for (let m = tailessImport.exec(code); m !== null; m = tailessImport.exec(code)) {
-    const list = m[1] as string;
-    renamedSpecifier.lastIndex = 0;
-    for (let s = renamedSpecifier.exec(list); s !== null; s = renamedSpecifier.exec(list)) {
-      const original = s[1] as string;
-      const local = s[2] as string;
-      if (!scannedHelpers.has(original) || original === local) continue;
-      report({
-        kind: "renamed-import",
-        message:
-          `${original}() is imported as "${local}", and the scanner finds calls by name — ` +
-          `so every class ${local}() builds in this file reaches the element with no rule ` +
-          `behind it. Import it under its own name, or re-export a wrapper the scanner ` +
-          `also knows.`,
-      });
+function renamedImports(code: string, blank: string, report: (d: Diagnostic) => void): void {
+  for (const [statement, specifier, verb] of renamings) {
+    statement.lastIndex = 0;
+    for (let m = statement.exec(code); m !== null; m = statement.exec(code)) {
+      const keyword = m[1] === "import" || m[1] === "export" ? m[1] : "const";
+      const list = (keyword === "const" ? m[1] : m[2]) as string;
+      // Inside a string, the keyword is blanked: `"…; import { ss as tw } from …"` is data.
+      const at = m.index + m[0].indexOf(keyword === "const" ? "{" : keyword);
+      if (blank[at] !== code[at]) continue;
+      for (const entry of list.split(",")) {
+        const found = specifier.exec(entry.trim());
+        if (!found) continue;
+        const original = found[1] as string;
+        const local = found[2] as string;
+        if (!scannedHelpers.has(original) || original === local) continue;
+        report({
+          kind: "renamed-import",
+          message:
+            verb === "re-exported"
+              ? `${original}() is re-exported as "${local}", and the scanner finds calls by ` +
+                `name — so every class ${local}() builds, in every file that imports it from ` +
+                `here, reaches the element with no rule behind it. Re-export it under its ` +
+                `own name.`
+              : `${original}() is ${verb} as "${local}", and the scanner finds calls by name ` +
+                `— so every class ${local}() builds in this file reaches the element with no ` +
+                `rule behind it. Import it under its own name, or re-export a wrapper the ` +
+                `scanner also knows.`,
+        });
+      }
     }
   }
 }
 
-/** Any import of the package itself, in either module system. */
-const anyTailessImport = /^[ \t]*import\b[^;]*?["']tailess["']|\brequire\(\s*["']tailess["']\s*\)/m;
-/** `import * as tl from "tailess"`, whose members are helper calls. */
-const namespaceImport = /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm;
+/** Any import of the package itself: ESM, CommonJS, or a dynamic `import()`. */
+const anyTailessImport =
+  /(?:^|;)[ \t]*import\b[^;]*?["']tailess["']|\b(?:require|import)\(\s*["']tailess["']\s*\)/m;
+/**
+ * A name the whole package is bound to, whose members are helper calls:
+ * `import * as tl from "tailess"`, `const tl = require("tailess")`, and
+ * `const tl = await import("tailess")`. The last two were never read, so every check in a
+ * CommonJS file that used one was off.
+ */
+const namespaceImports = [
+  /(?:^|;)[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm,
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:require|await\s+import)\(\s*["']tailess["']\s*\)/g,
+];
 /** `import { ss, on } from "tailess"`, the names a bare call has to be. */
 const namedImport =
-  /\bimport\s+(?:type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
-/** `const { ss, on } = require("tailess")`, the same in CommonJS. */
-const namedRequire = /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*["']tailess["']\s*\)/g;
+  /\bimport\s*(?:type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
+/** `const { ss, on } = require("tailess")` or `= await import("tailess")`: the same. */
+const namedRequire =
+  /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:require|await\s+import)\(\s*["']tailess["']\s*\)/g;
 
 /**
  * The local names an import or a destructuring `require` of tailess binds.
@@ -754,11 +801,31 @@ function importedNames(masked: string): Set<string> {
 function callableHere(masked: string): Set<string> | null {
   if (!anyTailessImport.test(masked)) return null;
   const receivers = new Set<string>([""]);
-  namespaceImport.lastIndex = 0;
-  for (let m = namespaceImport.exec(masked); m !== null; m = namespaceImport.exec(masked)) {
-    receivers.add(m[1] as string);
+  for (const pattern of namespaceImports) {
+    pattern.lastIndex = 0;
+    for (let m = pattern.exec(masked); m !== null; m = pattern.exec(masked)) {
+      receivers.add(m[1] as string);
+    }
   }
   return receivers;
+}
+
+/** `configure({ …, merge: … })`, within reach of the call's opening brace. */
+const configureMerge = /\bconfigure\s*\(\s*\{[\s\S]{0,2000}?\bmerge\s*:/;
+
+/**
+ * True when `source` hands tailess a merge of its own.
+ *
+ * The dead-class check runs the default `tailwind-merge`, because the build cannot run
+ * the project's. With `configure({ merge: extendTailwindMerge(…) })` — the README's own
+ * recipe for a custom `@utility` font size — the runtime keeps `text-hero text-white` and
+ * the check called one of them dead, failing `check --strict` on working code. A project
+ * that configures its merge gets no dead-class reports rather than wrong ones.
+ */
+export function configuresMerge(source: string): boolean {
+  const code = source.startsWith("﻿") ? source.slice(1) : source;
+  const masked = maskLiterals(code);
+  return anyTailessImport.test(masked) && configureMerge.test(masked);
 }
 
 /**
@@ -790,7 +857,9 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
   };
 
   const masked = maskLiterals(code);
-  if (file === undefined || !proseFile.test(file)) renamedImports(masked, report);
+  if (file === undefined || !proseFile.test(file)) {
+    renamedImports(masked, maskLiterals(code, true), report);
+  }
 
   const receivers = callableHere(masked);
   if (receivers) {

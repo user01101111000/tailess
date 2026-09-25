@@ -346,6 +346,51 @@ describe("a helper imported under another name", () => {
     expect(kinds(`import { ss as tw } from "other-lib";`)).toEqual([]);
     expect(kinds(`import { ss as tw } from "tailess/vite";`)).toEqual([]);
   });
+
+  it("reports the spellings a line-start import pattern missed", () => {
+    // Each of these renames a helper and unstyles every class it builds; none was seen.
+    const cases: [string, string][] = [
+      [`export { ss as tw } from "tailess";`, "re-exported"],
+      [`const { ss: tw } = require("tailess");`, "required"],
+      [`"use client"; import { ss as tw } from "tailess";`, "imported"],
+      [`import{ss as t}from"tailess";`, "imported"],
+    ];
+    for (const [code, verb] of cases) {
+      const found = diagnose(code, "src/a.ts");
+      expect(
+        found.map((d) => d.kind),
+        code,
+      ).toEqual(["renamed-import"]);
+      expect(found[0]?.message).toContain(`is ${verb} as`);
+    }
+    // A re-export takes its classes from every file that imports it, not this one.
+    expect(diagnose(`export { on as when } from "tailess";`)[0]?.message).toContain(
+      "in every file that imports it from here",
+    );
+  });
+
+  it("says nothing about a type-only rename, which binds nothing callable", () => {
+    expect(diagnose(`import type { ss as tw } from "tailess";`)).toEqual([]);
+    expect(diagnose(`import { type ss as tw, cn } from "tailess";`)).toEqual([]);
+    expect(diagnose(`const s = 'x; import { ss as tw } from "tailess"';`)).toEqual([]);
+  });
+});
+
+describe("files that reach tailess other than through a named import", () => {
+  it("checks a CommonJS namespace and a dynamic import like any other", () => {
+    // The checks were silently off in each: only `import * as` counted as a receiver,
+    // and `import("tailess")` did not count as importing the package at all.
+    for (const code of [
+      `const t = require("tailess");\nt.ss({ md: size });`,
+      `const t = await import("tailess");\nt.ss({ md: size });`,
+      `const { ss } = await import("tailess");\nss({ md: size });`,
+    ]) {
+      expect(
+        diagnose(code, "src/a.ts").map((d) => d.kind),
+        code,
+      ).toEqual(["dynamic-value"]);
+    }
+  });
 });
 
 describe("where an import statement is prose rather than code", () => {
