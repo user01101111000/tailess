@@ -1,10 +1,10 @@
 import { escapeCondition } from "../internal/condition.js";
 import {
   arrayBody,
+  arrayLiterals,
   declaresKey,
   dictionaryKeys,
   extractStrings,
-  isArrayLiteral,
   isObjectLiteral,
   maskLiterals,
   objectLiterals,
@@ -12,6 +12,7 @@ import {
   parseObject,
   type RawCall,
   scanCalls,
+  splitArgs,
 } from "./scan.js";
 
 /**
@@ -116,6 +117,20 @@ function staticValues(text: string): string[] {
   }
   return out;
 }
+
+/**
+ * True if `word` (`true`, `null`, …) appears as a bare keyword in `text`, not as part of
+ * an identifier or a property access (`isTrue`, `x.null`).
+ */
+function literalWord(text: string, word: string): boolean {
+  return new RegExp(`(?<![\\w$.])${word}(?![\\w$])`).test(text);
+}
+
+/**
+ * How many stacks one `on([…])` list may enumerate. Each conditional element doubles
+ * them; a real one has one or two, and this only keeps generated code from exploding.
+ */
+const maxStacks = 256;
 
 /** Helper name to the variant it builds, for the four `nth-*` families. */
 const nthVariants: Record<string, string> = {
@@ -360,8 +375,29 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     case "on": {
       if (args.length < 2) return;
       const stateArg = args[0] ?? "";
-      const states = extractStrings(stateArg);
-      const prefixes = isArrayLiteral(stateArg) ? [states.join(":")] : states;
+      const prefixes: string[] = [];
+      const push = (prefix: string) => {
+        if (prefix !== "" && !prefixes.includes(prefix)) prefixes.push(prefix);
+      };
+      // Each list is one stack, and each of its elements is a *position* that may hold
+      // alternatives — `["dark", c ? "hover" : "focus"]` is two stacks, not the one
+      // `dark:hover:focus` that joining every string in it produced.
+      const lists = arrayLiterals(stateArg);
+      let rest = stateArg;
+      for (const list of lists) {
+        let stacks = [""];
+        for (const element of splitArgs(arrayBody(list))) {
+          const options = extractStrings(element);
+          if (options.length === 0) continue;
+          stacks = stacks
+            .flatMap((stack) => options.map((state) => (stack ? `${stack}:${state}` : state)))
+            .slice(0, maxStacks);
+        }
+        for (const stack of stacks) push(stack);
+        rest = rest.replace(list, " ");
+      }
+      // A state outside any list stands alone: `c ? ["dark", "hover"] : "focus"`.
+      for (const state of extractStrings(rest)) push(state);
       emitValue(args[1] ?? "", prefixes, add, follow);
       return;
     }
@@ -392,7 +428,6 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       if (args.length < 3) return;
       const valueArg = args[1] ?? "";
       const values = extractStrings(valueArg);
-      const literal = valueArg.trim();
       // `data` takes `string | number | boolean | null | undefined`. A number or a
       // boolean is every bit as static as a string — it just isn't a string
       // *literal*, so the sweep above finds nothing and the presence form would be
@@ -400,12 +435,28 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       // twice: `data-[checked=true]:` never gets CSS, and the `data-[checked]:` that
       // does is a selector matching whenever the attribute is merely present.
       // `data-checked={true}` is what React writes, so this is a mainstream path.
-      if (values.length === 0) {
-        const resolved = staticValue(literal);
-        if (resolved !== null) values.push(resolved);
+      //
+      // And not only when it is the whole argument: `open ? 1 : 2`, `on ? true : false`
+      // and `state ? "open" : null` are each two values, and reading only the strings
+      // left one branch — or both — with no rule. So the non-string literals are swept
+      // for with the strings blanked, which is how `nth` reads the same shape.
+      // A whole-argument literal first, since only it resolves a sign and an exponent
+      // (`-1.5`, `2e-2`) — the sweep reads unsigned tokens, which is what a ternary's
+      // branches almost always are.
+      const masked = maskLiterals(valueArg, true);
+      const whole = staticValue(valueArg.trim());
+      if (whole !== null) {
+        if (!values.includes(whole)) values.push(whole);
+      } else {
+        for (const value of staticValues(masked)) if (!values.includes(value)) values.push(value);
       }
-      // `null`/`undefined` (or a non-literal value) means the presence form.
-      const presence = values.length === 0 || literal === "null" || literal === "undefined";
+      for (const word of ["true", "false"]) {
+        if (literalWord(masked, word) && !values.includes(word)) values.push(word);
+      }
+      // `null`/`undefined` (or a non-literal value) means the presence form — in any
+      // branch, not only as the whole argument.
+      const presence =
+        values.length === 0 || literalWord(masked, "null") || literalWord(masked, "undefined");
       const prefixes: string[] = [];
       for (const name of extractStrings(args[0] ?? "")) {
         if (presence) prefixes.push(`data-[${name}]`);

@@ -262,6 +262,21 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `data("count", 2e-2, "opacity-100")` },
   { src: `data("count", -0, "opacity-100")` },
   { src: `data("checked", false, "opacity-100")` },
+  // A ternary over values that are not strings. The string sweep finds no literal in
+  // `c ? 1 : 2`, and the number was read only when it was the whole argument, so the
+  // presence form was the only candidate — and `data-[level=1]:` never got a rule.
+  ...[true, false].flatMap((c) => [
+    { src: `data("level", c ? 1 : 2, "p-2")`, env: { c } },
+    { src: `data("active", c ? true : false, "p-2")`, env: { c } },
+    { src: `data("state", c ? "open" : null, "p-2")`, env: { c } },
+    { src: `data("state", c ? "open" : undefined, "p-2")`, env: { c } },
+    { src: `data("level", c ? 2 : "max", "p-2")`, env: { c } },
+    // A state stack with a conditional element is a product, not one long stack; and a
+    // ternary between a stack and a single state is two alternatives, not three states.
+    { src: `on(["dark", c ? "hover" : "focus"], "underline")`, env: { c } },
+    { src: `on(c ? ["dark", "hover"] : "focus", "underline")`, env: { c } },
+    { src: `on([c ? "md" : "lg", "dark", c ? "hover" : "focus"], "underline")`, env: { c } },
+  ]),
 ];
 
 describe("what the runtime builds, the scanner finds", () => {

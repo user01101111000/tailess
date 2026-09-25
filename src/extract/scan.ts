@@ -749,6 +749,44 @@ export function isArrayLiteral(text: string): boolean {
 }
 
 /**
+ * Every `[ … ]` group in `text` outside strings and comments, in source order.
+ *
+ * What `on(cond ? ["dark", "hover"] : "focus", …)` needs: each list is one stack of
+ * states, and each string outside a list is a state of its own.
+ */
+export function arrayLiterals(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const end = skipString(text, i, c);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    } else if (c === "`") {
+      i = skipTemplate(text, i);
+      continue;
+    } else {
+      const j = skipComment(text, i);
+      if (j !== i) {
+        i = j;
+        continue;
+      }
+    }
+    if (c === "[") {
+      const end = matchBrace(text, i);
+      out.push(text.slice(i, end));
+      i = end;
+      continue;
+    }
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * The inside of the array literal `text` holds, or `text` itself if it holds none.
  *
  * A list is not only ever written `[ … ]`: `[ … ] as const`, `[ … ] satisfies
