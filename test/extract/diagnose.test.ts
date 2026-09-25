@@ -547,3 +547,19 @@ describe("a bucket the scanner cannot read", () => {
     expect(kinds(`ss(base, cond && { md: "p-4" })`)).toEqual([]);
   });
 });
+
+describe("a file saved with a byte order mark", () => {
+  it("is checked like any other", () => {
+    // Common on Windows. The BOM sat in front of the first-line import, which the
+    // import patterns are anchored to, and every check in the file went quiet.
+    const bom = "﻿";
+    expect(
+      diagnose(`${bom}import { ss as tw } from "tailess";\ntw({ md: "p-1" });`).map((d) => d.kind),
+    ).toEqual(["renamed-import"]);
+    expect(
+      diagnose(`${bom}import { between } from "tailess";\nbetween("lg", "sm", "block");`).map(
+        (d) => d.kind,
+      ),
+    ).toEqual(["empty-range"]);
+  });
+});

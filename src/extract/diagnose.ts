@@ -642,7 +642,12 @@ function callableHere(masked: string): Set<string> | null {
  * `file` is only ever read to decide whether an import statement in it is code, so a
  * caller with no path in hand loses nothing else by omitting it.
  */
-export function diagnose(code: string, file?: string): Diagnostic[] {
+export function diagnose(source: string, file?: string): Diagnostic[] {
+  // A UTF-8 byte order mark survives `readFile(…, "utf8")`, and the import patterns are
+  // anchored at the start of a line — so on a file saved with one, the first-line
+  // import matched nothing and every check in the file went quiet, the renamed-import
+  // one included.
+  const code = source.startsWith("﻿") ? source.slice(1) : source;
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;
