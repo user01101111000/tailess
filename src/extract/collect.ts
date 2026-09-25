@@ -26,6 +26,9 @@ export const defaultExtensions = [
 /**
  * Directory names skipped by default: dependencies, build output, caches and VCS
  * metadata. Everything else is scanned, including dot-directories — see {@link walk}.
+ *
+ * The plain-word build outputs in {@link outputDirs} are skipped only where a build
+ * writes them; the rest wherever they are.
  */
 export const defaultIgnore = [
   "node_modules",
@@ -57,6 +60,17 @@ export const defaultIgnore = [
   ".idea",
   ".vscode",
 ] as const;
+
+/**
+ * The build outputs whose names are ordinary words, skipped only where a build writes
+ * them: at the top of a content root, or beside a `package.json`.
+ *
+ * Anywhere else they are source. `app/build/page.tsx` is a Next.js route and
+ * `src/coverage/` an insurance dashboard; skipping every directory with one of these
+ * names dropped their runtime-built classes while Tailwind still styled the literals —
+ * half a page, and a `check` that passed because it read the same walk.
+ */
+const outputDirs = new Set(["dist", "build", "out", "coverage"]);
 
 /**
  * Both optional fields are spelled `| undefined` because that is what the callers
@@ -174,6 +188,8 @@ async function walk(
   extensions: Set<string>,
   ignore: Set<string>,
   found: string[],
+  outputs: ReadonlySet<string> = outputDirs,
+  top = true,
 ): Promise<void> {
   let entries: Dirent[];
   try {
@@ -191,6 +207,8 @@ async function walk(
     return;
   }
 
+  // Where a build writes its output: the top of a root, or a package's own directory.
+  const writesOutput = top || entries.some((e) => e.isFile() && e.name === "package.json");
   const nested: Array<Promise<void>> = [];
   for (const entry of entries) {
     const full = join(root, entry.name);
@@ -199,7 +217,8 @@ async function walk(
       // Real source lives in some of them (`.storybook/preview.tsx`), and silently
       // dropping those classes is the exact failure this package exists to prevent.
       if (ignore.has(entry.name)) continue;
-      nested.push(walk(full, extensions, ignore, found));
+      if (writesOutput && outputs.has(entry.name)) continue;
+      nested.push(walk(full, extensions, ignore, found, outputs, false));
     } else if (entry.isFile() && isScannable(entry.name, extensions)) {
       found.push(full);
     }
@@ -259,12 +278,14 @@ export async function collect(options: CollectOptions): Promise<CollectResult> {
 
 async function run(options: CollectOptions): Promise<CollectResult> {
   const extensions = normalizeExtensions(options.extensions);
-  const ignore = new Set<string>(defaultIgnore);
+  // The output names are position-sensitive, unless the project names one itself — then
+  // it is skipped wherever it is, like every other entry it lists.
+  const ignore = new Set<string>(defaultIgnore.filter((name) => !outputDirs.has(name)));
   for (const dir of options.ignore ?? []) ignore.add(dir);
 
   const roots = [...new Set(options.roots.map((p) => resolve(p)))];
   const files: string[] = [];
-  await Promise.all(roots.map((root) => walk(root, extensions, ignore, files)));
+  await Promise.all(roots.map((root) => walk(root, extensions, ignore, files, outputDirs, true)));
   files.sort();
 
   const classes = new Set<string>();

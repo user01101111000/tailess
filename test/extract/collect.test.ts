@@ -44,6 +44,32 @@ describe("collect", () => {
     expect((await collect({ roots: [dir] })).classes).toEqual(["md:kept"]);
   });
 
+  it("skips build output only where a build writes it, not a route that shares its name", async () => {
+    // `app/build/page.tsx` is a Next.js route and `app/coverage` an insurance dashboard;
+    // skipping every directory with an output's name dropped their classes while
+    // Tailwind still styled the page's literals — half a page, and a green `check`.
+    for (const name of ["build", "out", "coverage", "dist"]) {
+      await mkdir(join(dir, "app", name), { recursive: true });
+      await writeFile(join(dir, "app", name, "page.tsx"), `ss({ md: "route-${name}" })`);
+    }
+    // Next to a package manifest, it is a build's output again — a workspace's package.
+    await mkdir(join(dir, "packages", "ui", "dist"), { recursive: true });
+    await writeFile(join(dir, "packages", "ui", "package.json"), "{}");
+    await writeFile(join(dir, "packages", "ui", "dist", "x.js"), `ss({ md: "from-ui-dist" })`);
+    await mkdir(join(dir, "build"), { recursive: true });
+    await writeFile(join(dir, "build", "x.js"), `ss({ md: "from-root-build" })`);
+
+    expect((await collect({ roots: [dir] })).classes).toEqual([
+      "md:route-build",
+      "md:route-coverage",
+      "md:route-dist",
+      "md:route-out",
+    ]);
+    // Named by the project, a directory is skipped wherever it is.
+    const named = await collect({ roots: [dir], ignore: ["coverage"] });
+    expect(named.classes).not.toContain("md:route-coverage");
+  });
+
   it("still scans dot-directories that hold real source", async () => {
     // `.storybook/preview.tsx` is the canonical case: a blanket dot-directory rule
     // would drop its classes silently, which is the failure mode to avoid.

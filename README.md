@@ -1449,7 +1449,10 @@ warns rather than quietly producing a stylesheet with nothing in it.
 
 By default the whole project is scanned, skipping dependencies, build output (`dist`,
 `build`, `.next`, `.output`, …) and caches. Dot-directories are *not* skipped wholesale,
-so `.storybook/preview.tsx` is still found.
+so `.storybook/preview.tsx` is still found. `dist`, `build`, `out` and `coverage` are
+skipped only where a build writes them — at the top of a scanned directory or beside a
+`package.json` — so a route at `app/build/page.tsx` is read like any other source. Name
+one in `ignore` to skip it everywhere.
 
 ---
 
