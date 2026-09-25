@@ -2,6 +2,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
+import { shared } from "../internal/shared.js";
 import { configuresMerge, type Diagnostic, diagnose } from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
@@ -154,10 +155,12 @@ const mtimeTick = 2000;
  * mtime + size. A dev server re-scans on every stylesheet rebuild, so without
  * this we'd re-read and re-parse the whole project on every keystroke.
  *
- * Module-level on purpose: the Vite and PostCSS integrations share it when they
- * run in the same process.
+ * Process-level on purpose: the Vite and PostCSS integrations share it when they run in
+ * the same process — and so do the CommonJS entries, which each bundle their own copy of
+ * this module, so a module-level map left `clearCache()` from `tailess/build` unable to
+ * reach the plugin's. The key names this entry shape.
  */
-const cache = new Map<string, CacheEntry>();
+const cache = shared("tailess.scan-cache.2", () => new Map<string, CacheEntry>());
 
 /**
  * Scans already running, keyed by their options. A build with many stylesheets asks

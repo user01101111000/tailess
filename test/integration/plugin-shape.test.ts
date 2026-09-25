@@ -103,6 +103,56 @@ describe.runIf(built)("built plugin entry points", () => {
     });
   });
 
+  it("shares configure() between the ES module and CommonJS builds", async () => {
+    // An ESM app rendering a CommonJS component library loads both copies. Each kept its
+    // own settings, so the app's merge never reached the library's cn(): the default one
+    // ran there, silently, and the declared keys and onWarn did not reach it either.
+    const esm = await import(pathToFileURL(dist("index.js")).href);
+    const cjs = require(dist("index.cjs"));
+    esm.configure({ merge: (classes: string) => classes });
+    try {
+      expect(cjs.cn("p-2", "p-4")).toBe("p-2 p-4");
+    } finally {
+      const { twMerge } = await import("tailwind-merge");
+      esm.configure({ merge: twMerge });
+    }
+    expect(cjs.cn("p-2", "p-4")).toBe("p-4");
+  });
+
+  it("shares the scanner cache between the CommonJS entries", async () => {
+    // Each CommonJS entry bundles its own copy of the scanner, so clearCache() from
+    // tailess/build did not reach the PostCSS plugin's cache.
+    const { mkdtemp, readFile, rm, utimes, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(
+      join(fileURLToPath(new URL("../../node_modules/", import.meta.url)), ".tailess-shape-"),
+    );
+    try {
+      const file = join(dir, "a.tsx");
+      const old = new Date(Date.now() - 60_000);
+      const plugin = require(dist("postcss/index.cjs"));
+      const build = require(dist("build.cjs"));
+      /** The candidate list the plugin wrote, read from the sidecar the entry imports. */
+      const run = async () => {
+        const { css } = await postcss([
+          plugin({ content: [dir], cacheDir: join(dir, ".cache") }),
+        ]).process(`@import "tailwindcss";`, { from: join(dir, "app.css") });
+        const sidecar = /@import "(\.[^"]+tailess\.css)"/.exec(css)?.[1] ?? "";
+        return readFile(join(dir, sidecar), "utf8");
+      };
+      // Same size and an old, identical mtime: nothing but clearing the cache can tell.
+      await writeFile(file, `ss({ md: "p-6" })`);
+      await utimes(file, old, old);
+      expect(await run()).toContain("md:p-6");
+      await writeFile(file, `ss({ md: "p-8" })`);
+      await utimes(file, old, old);
+      build.clearCache();
+      expect(await run()).toContain("md:p-8");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Node built-ins out of the browser entry", async () => {
     const { readFile } = await import("node:fs/promises");
     for (const entry of ["index.js", "index.cjs"]) {

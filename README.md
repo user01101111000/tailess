@@ -905,9 +905,10 @@ clears it on its own, for a test that asserts on the same warning twice.
 
 **`keys`** is the runtime half of the next section.
 
-The settings are **process-global**: one of each per module instance, and the last call
-wins for every render already in flight. That is why it belongs at module scope of your
-entry. Calling it per request — or per tenant in a shared SSR process — is not supported;
+The settings are **process-global** — one set, shared by the ES module and CommonJS
+builds when a process loads both — and the last call wins for every render already in
+flight. That is why it belongs at module scope of your entry. Calling it per request —
+or per tenant in a shared SSR process — is not supported;
 two requests configuring different `merge` functions produce wrong output for one of
 them, with no error.
 

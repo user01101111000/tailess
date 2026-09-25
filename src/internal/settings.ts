@@ -59,13 +59,31 @@ export function customRank(key: string): number | undefined {
   return at === -1 ? undefined : at;
 }
 
-const settings: TailessSettings = {
-  merge: twMerge,
-  keys: [],
-  onWarn: (message) => {
-    console.warn(message);
-  },
-};
+/**
+ * The one settings object in the process, shared by every copy of this module.
+ *
+ * The package ships an ES module build and a CommonJS one, and a process or a bundle that
+ * reaches it both ways — an ESM app rendering a CommonJS component library — loads both.
+ * Each kept its own settings, so the app's `configure()` never reached the library's
+ * copy: its `merge` ran the default, a declared key warned as unknown, and warnings went
+ * to `console.warn` rather than the `onWarn` configured. The key names this shape, so a
+ * copy of a version whose settings differ keeps its own instead of reading fields it
+ * does not have.
+ */
+const store = globalThis as { [key: symbol]: TailessSettings | undefined };
+const slot = Symbol.for("tailess.settings.1");
+// Inline rather than through `shared()`: this is in every consumer's bundle, and `ss` +
+// `cn` is the number to keep small.
+if (!store[slot]) {
+  store[slot] = {
+    merge: twMerge,
+    keys: [],
+    onWarn: (message) => {
+      console.warn(message);
+    },
+  };
+}
+const settings = store[slot] as TailessSettings;
 
 /**
  * What {@link configure} accepts.
@@ -85,8 +103,8 @@ export type ConfigureOptions = {
  * Call it once, before anything renders — module scope of your entry file. Only the
  * keys given are changed.
  *
- * The settings are process-global: there is one of each per module instance, and the
- * last call wins for every render already in flight. Calling it per request, or per
+ * The settings are process-global — one set, shared by the ES module and CommonJS builds
+ * when both are loaded — and the last call wins for every render already in flight. Calling it per request, or per
  * tenant in a shared SSR process, is not supported — two requests configuring different
  * `merge` functions produce wrong output for one of them, with no error.
  *

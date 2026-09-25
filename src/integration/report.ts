@@ -1,15 +1,16 @@
 /// <reference types="node" />
 import { relative } from "node:path";
 import type { FileDiagnostic } from "../extract/collect.js";
+import { shared } from "../internal/shared.js";
 
 /**
  * Problems already printed, so a dev server that rescans on every keystroke reports
  * each one once rather than on every rebuild.
  *
- * Module-level, like the extraction cache, so the two integrations share it when they
- * run in the same process.
+ * Process-level, like the extraction cache, so the two integrations — and each CommonJS
+ * entry's own copy of this module — share it when they run in the same process.
  */
-const reported = new Set<string>();
+const reported = shared("tailess.reported.1", () => new Set<string>());
 
 /** Forget what has been printed. Exposed for tests. */
 export function clearReported(): void {
