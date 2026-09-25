@@ -57,27 +57,51 @@ export interface BrokenClass {
  * something between the two is broken.
  */
 export function findBroken(candidates: readonly string[], css: string): BrokenClass[] {
+  return findBrokenAcross(candidates, [css]);
+}
+
+/**
+ * {@link findBroken} over several stylesheets: a class is broken when at least one of
+ * them resolves its utility and none of them has its rule.
+ *
+ * A stylesheet vouches for a class only by *containing its rule*. Counting a class as
+ * broken only when every stylesheet failed it let one that generates nothing — a reset
+ * file, a theme-only partial, a v3 `@tailwind` leftover — clear every broken class in
+ * the project, since a candidate whose utility does not resolve is never "failed".
+ */
+export function findBrokenAcross(
+  candidates: readonly string[],
+  sheets: readonly string[],
+): BrokenClass[] {
   const broken: BrokenClass[] = [];
-  const resolves = new Map<string, boolean>();
-  const check = (cls: string): boolean => {
-    let known = resolves.get(cls);
-    if (known === undefined) {
-      known = hasRule(css, cls);
-      resolves.set(cls, known);
-    }
-    return known;
-  };
+  const memo = sheets.map(() => new Map<string, boolean>());
+  const inAny = (cls: string): boolean =>
+    sheets.some((css, i) => {
+      const seen = memo[i] as Map<string, boolean>;
+      let known = seen.get(cls);
+      if (known === undefined) {
+        known = hasRule(css, cls);
+        seen.set(cls, known);
+      }
+      return known;
+    });
 
   for (const candidate of candidates) {
     const split = splitCandidate(candidate);
     if (split === null) continue;
-    if (!check(split.utility)) continue;
-    if (check(candidate)) continue;
+    if (!inAny(split.utility)) continue;
+    if (inAny(candidate)) continue;
     broken.push({ candidate, utility: split.utility });
   }
 
   return broken;
 }
+
+/**
+ * A class every stylesheet that generates utilities at all has a rule for — the test
+ * for a stylesheet that generates none, and so can say nothing about any class.
+ */
+export const utilitySentinel = "flex";
 
 /**
  * The class list to compile so {@link findBroken} can ask both questions.

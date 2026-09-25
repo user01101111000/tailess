@@ -8,9 +8,10 @@ import { maskLiterals } from "../extract/scan.js";
 import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
+import { hasRule } from "../internal/selector.js";
 import { type Command, commands, jsonResult } from "./result.js";
 import { runDoctor, runInit, wired } from "./setup.js";
-import { type BrokenClass, findBroken, probeList } from "./verify.js";
+import { findBrokenAcross, probeList, utilitySentinel } from "./verify.js";
 
 /**
  * `tailess check` — compile the project for real and prove every class the runtime
@@ -683,17 +684,27 @@ async function runCheck(options: Options): Promise<number> {
 
   // A class only has to work in *one* stylesheet — a project can have several, and a
   // component is styled by whichever one its page loads. So a class is broken only if
-  // every entry fails it.
-  const perEntry: Array<Map<string, BrokenClass>> = [];
+  // no entry has its rule — and only an entry that generates utilities at all has a say.
+  const sheets: string[] = [];
+  const silent: string[] = [];
   for (const entry of entries) {
     const source = await readFile(entry, "utf8");
     const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
-    const css = compiler.build(probe);
-    perEntry.push(new Map(findBroken(classes, css).map((b) => [b.candidate, b])));
+    const css = compiler.build([...probe, utilitySentinel]);
+    if (hasRule(css, utilitySentinel)) sheets.push(css);
+    else silent.push(entry);
   }
-  const broken = [...(perEntry[0]?.values() ?? [])].filter((b) =>
-    perEntry.every((entry) => entry.has(b.candidate)),
-  );
+  if (sheets.length === 0) {
+    complain(
+      `[tailess] ${shown(silent, options.cwd).join(", ")} ` +
+        `${silent.length === 1 ? "generates" : "generate"} no Tailwind utilities — not even ` +
+        `"${utilitySentinel}" — so there is nothing to check against. Point --css at the ` +
+        "stylesheet that imports Tailwind for the app; if it does, look for a prefix(…) in " +
+        "one of the files it imports.",
+    );
+    return finish(2, { error: "no-utilities", stylesheets: shown(silent, options.cwd) });
+  }
+  const broken = findBrokenAcross(classes, sheets);
 
   const brokenJson = broken.map((b) => ({
     class: b.candidate,

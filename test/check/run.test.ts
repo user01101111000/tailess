@@ -425,6 +425,70 @@ describe("the check itself", () => {
   });
 });
 
+describe("a stylesheet that generates no utilities", () => {
+  // The app's own entry removes `md`, so `md:p-4` has no rule in the real build. Each of
+  // the stylesheets below generated no utilities at all, and a class counted as broken
+  // only when *every* stylesheet failed it — so one of them next to the app's entry, or
+  // passed as --css, vouched for everything and the gate went green.
+  async function app() {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "p-4", hover: "underline" })`);
+    await writeFile(
+      join(dir, "src", "app.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+  }
+
+  it("cannot vouch for a class when it sits beside the real entry", async () => {
+    for (const [name, css] of [
+      ["tokens.css", `@import "tailwindcss/theme";`],
+      ["legacy.css", `@tailwind utilities;`],
+    ]) {
+      await rm(join(dir, "src"), { recursive: true, force: true });
+      await app();
+      await writeFile(join(dir, "src", name as string), css as string);
+      clearCache();
+      const { code, output } = await check();
+      expect(code, name).toBe(1);
+      expect(output).toContain("md:p-4");
+    }
+  });
+
+  it("is nothing to check when it is the only stylesheet", async () => {
+    await app();
+    await writeFile(
+      join(dir, "src", "reset.css"),
+      `html { margin: 0; }\n@import "tailwindcss/theme";`,
+    );
+    const { code, output } = await check({ css: join(dir, "src", "reset.css"), json: true });
+    expect(code).toBe(2);
+    expect(JSON.parse(output)).toMatchObject({ ok: false, code: 2, error: "no-utilities" });
+  });
+
+  it("is nothing to check when its prefix hides in an import", async () => {
+    // prefix() read off the entry alone missed this one, which the plugin itself warns
+    // about: `hover:underline` has no rule either, only `tw:hover:underline` would.
+    await app();
+    await writeFile(join(dir, "src", "tw.css"), `@import "tailwindcss" prefix(tw);`);
+    await writeFile(join(dir, "src", "main.css"), `@import "./tw.css";`);
+    const { code } = await check({ css: join(dir, "src", "main.css") });
+    expect(code).toBe(2);
+  });
+
+  it("still passes a split entry whose partials generate the utilities", async () => {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "src", "theme.css"), `@import "tailwindcss/theme.css";`);
+    await writeFile(join(dir, "src", "utilities.css"), `@import "tailwindcss/utilities.css";`);
+    await writeFile(
+      join(dir, "src", "app.css"),
+      `@import "./theme.css";\n@import "./utilities.css";`,
+    );
+    const { code } = await check({ css: join(dir, "src", "app.css") });
+    expect(code).toBe(0);
+  });
+});
+
 describe("a Tailwind older than the plugins can drive", () => {
   it("says which version it needs, rather than blaming the stylesheet", async () => {
     // `@source inline(…)` parses from 4.1.0. On 4.0.x the build died with Tailwind's
