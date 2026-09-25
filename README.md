@@ -176,7 +176,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 | | |
 | --- | --- |
 | **Tailwind CSS** | v4 — v3 is not supported |
-| **Node** | 18+ (build plugin only; the runtime has no Node dependency) |
+| **Node** | 20.19+ for the build plugins and the CLI (what `engines` enforces, and what Vite 8 needs); the runtime has no Node dependency |
 | **Bundler** | anything using `@tailwindcss/vite` or `@tailwindcss/postcss` — anything else via [`tailess emit`](#tailess-emit--the-stylesheet-as-a-file) |
 | **Dependencies** | one — `tailwind-merge` |
 
