@@ -38,10 +38,30 @@ async function actionInputs(uses) {
   return null;
 }
 
+/** True when `permissions` grants a write — the jobs that can publish or push. */
+function writes(permissions) {
+  if (permissions === "write-all") return true;
+  return Object.values(permissions ?? {}).some((level) => level === "write");
+}
+
 for (const file of await readdir(dir)) {
   if (!/\.ya?ml$/.test(file)) continue;
   const doc = load(await readFile(join(dir, file), "utf8"));
   for (const [job, config] of Object.entries(doc?.jobs ?? {})) {
+    // A job that can publish or push runs every action and install script with that
+    // reach, so a tag someone can move and a dependency's install script are both code
+    // that could publish as this package. The release job had both.
+    if (writes(config.permissions ?? doc.permissions) && !config.uses) {
+      for (const step of config.steps ?? []) {
+        const ref = step.uses?.slice(step.uses.lastIndexOf("@") + 1);
+        if (step.uses && !step.uses.startsWith("./") && !/^[0-9a-f]{40}$/.test(ref ?? "")) {
+          problems.push(`${file} / ${job}: ${step.uses} is not pinned to a commit`);
+        }
+        if (/\bnpm (?:ci|install)\b/.test(step.run ?? "") && !/--ignore-scripts/.test(step.run)) {
+          problems.push(`${file} / ${job}: "${step.run.trim()}" runs install scripts`);
+        }
+      }
+    }
     for (const step of config.steps ?? []) {
       // A local reusable workflow has no inputs of this kind, and no URL to fetch.
       if (!step.uses || step.uses.startsWith("./")) continue;

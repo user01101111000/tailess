@@ -29,14 +29,17 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Both pinned to a commit, like the publish step below and for its reason: this job
+      # holds `id-token: write`, `contents: write` and the npm token, and a moved tag runs
+      # whatever it points at inside it. setup-node's post step even runs after the publish.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # 22, not 20: `@changesets/cli` v3 declares `node: "^22.11 || ^24 || >=26"` and its
       # `bin.js` calls `module.enableCompileCache()`, which Node 20 does not have — so the
       # publish step died with `TypeError: enableCompileCache is not a function` before it
       # could do anything. This is the *development* floor moving, not the package's:
       # `engines` still promises consumers Node >= 20.19, and the CI matrix still proves it.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -47,13 +50,21 @@ jobs:
       # stayed invisible until the one job that runs it — the release — reached the step
       # that cannot be retried by rerunning a green CI. Failing the install instead makes
       # the next one of these loud, and early.
+      #
+      # `--ignore-scripts` because nothing in this tree needs an install script to build —
+      # the output is byte-identical without them — and every one is code a dependency
+      # runs in the job that can publish. esbuild finds its platform binary through its
+      # optional dependency either way.
       - name: Install dependencies
-        run: npm ci --engine-strict
+        run: npm ci --engine-strict --ignore-scripts
 
       # `needs: ci` above is the verification now — the whole matrix, on the same
       # commit, finished before this job starts. What is left here is the build the
-      # publish itself needs: `prepublishOnly` runs it again, and running it once here
-      # means a build failure stops the job before the npm token is ever in scope.
+      # publish itself needs, and running it here means a build failure stops the job
+      # before the publish step starts. That step still runs `prepublishOnly` — the build
+      # and both package checks — with the npm token in its environment, so the toolchain
+      # is inside the token's reach there; building and packing in a job with no secrets,
+      # then publishing the tarball, is what would take it out.
       - name: Build
         run: npm run build
 
