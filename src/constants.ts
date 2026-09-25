@@ -4,7 +4,7 @@
  * `sm` 40rem/640px, `md` 48rem/768px, `lg` 64rem/1024px, `xl` 80rem/1280px,
  * `2xl` 96rem/1536px.
  */
-export const screenKeys = ["sm", "md", "lg", "xl", "2xl"] as const;
+export const screenKeys = Object.freeze(["sm", "md", "lg", "xl", "2xl"] as const);
 
 /** A built-in Tailwind breakpoint key. */
 export type ScreenKey = (typeof screenKeys)[number];
@@ -15,19 +15,25 @@ export type ScreenKey = (typeof screenKeys)[number];
  * @example
  * window.matchMedia(`(min-width: ${screens.md})`).matches;
  */
-export const screens: Readonly<Record<ScreenKey, string>> = {
+export const screens: Readonly<Record<ScreenKey, string>> = Object.freeze({
   sm: "40rem",
   md: "48rem",
   lg: "64rem",
   xl: "80rem",
   "2xl": "96rem",
-};
+});
 
 /**
  * `max-*` breakpoint keys, largest first — the order Tailwind itself emits
  * max-width variants in, so a narrower range wins over a wider one.
  */
-export const maxScreenKeys = ["max-2xl", "max-xl", "max-lg", "max-md", "max-sm"] as const;
+export const maxScreenKeys = Object.freeze([
+  "max-2xl",
+  "max-xl",
+  "max-lg",
+  "max-md",
+  "max-sm",
+] as const);
 
 /** A `max-*` breakpoint key, e.g. `max-md` (below the `md` breakpoint). */
 export type MaxScreenKey = (typeof maxScreenKeys)[number];
@@ -62,17 +68,17 @@ export type ContainerKey = `@${(typeof containerSizes)[number]}`;
 /** A `@max-*` container key, e.g. `@max-md` (below the `md` container width). */
 export type MaxContainerKey = `@max-${(typeof containerSizes)[number]}`;
 
-export const containerKeys: readonly ContainerKey[] = containerSizes.map(
-  (size): ContainerKey => `@${size}`,
+export const containerKeys: readonly ContainerKey[] = Object.freeze(
+  containerSizes.map((size): ContainerKey => `@${size}`),
 );
 
 /**
  * `@max-*` container keys, largest first — the same ordering rule as
  * {@link maxScreenKeys}, so a narrower range wins over a wider one.
  */
-export const maxContainerKeys: readonly MaxContainerKey[] = [...containerSizes]
-  .reverse()
-  .map((size): MaxContainerKey => `@max-${size}`);
+export const maxContainerKeys: readonly MaxContainerKey[] = Object.freeze(
+  [...containerSizes].reverse().map((size): MaxContainerKey => `@max-${size}`),
+);
 
 /**
  * Variants describing the state of the element itself — the ones Tailwind also
@@ -238,7 +244,7 @@ export type StateKey =
  * resolves to a real variant, and a real variant is never missing from
  * autocomplete.
  */
-export const stateKeys: readonly StateKey[] = [
+export const stateKeys: readonly StateKey[] = Object.freeze([
   ...elementStates,
   ...standaloneStates,
   ...elementStates.map((state): GroupStateKey => `group-${state}`),
@@ -246,7 +252,7 @@ export const stateKeys: readonly StateKey[] = [
   ...elementStates.map((state): HasStateKey => `has-${state}`),
   ...elementStates.map((state): InStateKey => `in-${state}`),
   ...negatableStates.map((state): NotStateKey => `not-${state}`),
-];
+]);
 
 /**
  * Keys your own CSS adds, declared by you.
