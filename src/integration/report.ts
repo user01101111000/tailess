@@ -17,6 +17,34 @@ export function clearReported(): void {
 }
 
 /**
+ * Say so when an explicit `content` option matched no files — once per list of roots.
+ *
+ * Always a mistake: a wrong path, an extension list that excludes the project's own
+ * files, or a glob. Left quiet it looks exactly like a project that uses no tailess at
+ * all, right up until the page renders unstyled — with the marker present, so the
+ * runtime's own "plugin not wired" check stays quiet too. Shared by both plugins, which
+ * the README promises behave the same.
+ *
+ * `against` names what relative paths were resolved from: Vite's root, or the
+ * working directory a PostCSS host runs in.
+ */
+export function reportEmptyScan(scanned: readonly string[], against: string): void {
+  const key = `empty\0${scanned.join("\0")}`;
+  if (reported.has(key)) return;
+  reported.add(key);
+  // Naming the glob case explicitly: `content` was glob-shaped in Tailwind v3, so it is
+  // the first thing a reader reaches for, and "matched no files" on its own reads like a
+  // wrong path rather than a wrong kind of path.
+  const glob = scanned.some((path) => path.includes("*"))
+    ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
+    : "";
+  console.warn(
+    `[tailess] the "content" option matched no files, so no variant class will have ` +
+      `CSS. Scanned: ${scanned.join(", ")}. Paths are resolved against ${against}.${glob}`,
+  );
+}
+
+/**
  * Print what the scanner proved wrong, once each.
  *
  * Written to `console.warn` rather than thrown: every one of these is a mistake in a

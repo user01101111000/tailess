@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
-import { type DiagnosticMode, reportDiagnostics } from "../integration/report.js";
+import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
@@ -138,7 +138,6 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
   const roots = (): string[] => contentRoots ?? [root];
 
   let warnedAboutSidecar = false;
-  let warnedAboutEmptyScan = false;
 
   /**
    * Re-scan and refresh the sidecar, returning the files that were read and
@@ -166,23 +165,10 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
     // runtime equivalents only fire once the offending line renders in a browser.
     reportDiagnostics(diagnostics, root, options.diagnostics);
 
-    // An explicit `content` that matches nothing is always a mistake — a wrong path,
-    // or an extension list that excludes the project's own files. Left quiet it looks
-    // exactly like a project that uses no tailess at all, right up until the page
-    // renders unstyled.
-    if (files.length === 0 && options.content?.length && !warnedAboutEmptyScan) {
-      warnedAboutEmptyScan = true;
-      // Naming the glob case explicitly: `content` was glob-shaped in Tailwind v3,
-      // so it is the first thing a reader reaches for, and "matched no files" on its
-      // own reads like a wrong path rather than a wrong kind of path.
-      const glob = scanned.some((path) => path.includes("*"))
-        ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
-        : "";
-      console.warn(
-        `[tailess] the "content" option matched no files, so no variant class will ` +
-          `have CSS. Scanned: ${scanned.join(", ")}. Paths are resolved against Vite's ` +
-          `root (${root}).${glob}`,
-      );
+    // An explicit `content` that matches nothing is always a mistake; see
+    // `reportEmptyScan`, which the PostCSS plugin shares.
+    if (files.length === 0 && options.content?.length) {
+      reportEmptyScan(scanned, `Vite's root (${root})`);
     }
 
     try {

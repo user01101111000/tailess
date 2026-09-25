@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { collect } from "../extract/collect.js";
 import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceChunks } from "../integration/inject.js";
-import { type DiagnosticMode, reportDiagnostics } from "../integration/report.js";
+import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
@@ -221,6 +221,9 @@ const tailessPostcss = Object.assign(
         });
 
         reportDiagnostics(diagnostics, process.cwd(), options.diagnostics);
+        if (files.length === 0 && options.content?.length) {
+          reportEmptyScan(options.content, `the working directory (${process.cwd()})`);
+        }
 
         // The breakpoint keys are compiled in, so a `@theme` that moves them is
         // invisible to the source scan — and three of the four ways it can are

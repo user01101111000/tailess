@@ -629,6 +629,28 @@ describe("Vite: content paths and server lifecycle", () => {
     warn.mockRestore();
   });
 
+  it("warns the same way through the PostCSS plugin, naming the glob case", async () => {
+    // Only the Vite plugin had the warning, while the README promised both did — and a
+    // v3-style glob is what a Next.js or PostCSS CLI user reaches for first. Every
+    // prefixed class went unstyled with the marker present and nothing said.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeFile(join(dir, "app.css"), `@import "tailwindcss";`);
+    for (const content of [[join(dir, "src", "**", "*.tsx")], [join(dir, "nope")]]) {
+      clearReported();
+      warn.mockClear();
+      await postcss([
+        tailess({ content, cacheDir: join(dir, ".cache") }),
+        tailwindcss({ base: dir, optimize: false }),
+      ]).process(`@import "tailwindcss";`, { from: join(dir, "app.css") });
+      const said = warn.mock.calls.map((call) => String(call[0]));
+      expect(said.filter((m) => m.includes("matched no files"))).toHaveLength(1);
+      expect(said.some((m) => m.includes("Wildcards are not expanded"))).toBe(
+        content[0]?.includes("*") === true,
+      );
+    }
+    warn.mockRestore();
+  });
+
   it("registers listeners again on a restarted server", async () => {
     // Vite calls configureServer once per server, and reuses a plugin instance
     // supplied through inlineConfig across a restart. A latch on the instance would
