@@ -239,6 +239,17 @@ function optionKey(value: unknown): string | undefined {
 /** Slot sets already reported, so a recipe built in a render loop warns once. */
 const warnedFlatExtends = new Set<string>();
 const warnedExtraMap = new Set<string>();
+const warnedStaleCompound = new Set<string>();
+
+/** Say so, once, when a compound rule names a group the recipe does not declare. */
+function warnStaleCompound(keys: string[]): void {
+  const named = keys.join(", ");
+  if (!firstTime(warnedStaleCompound, named)) return;
+  warn(
+    `variants(): a compound rule names ${keys.map((k) => `"${k}"`).join(", ")}, which ` +
+      `the recipe does not declare, so the rule never applies.`,
+  );
+}
 
 /**
  * Say so when a caller hands a component an `ss` map as an extra class value.
@@ -550,10 +561,21 @@ export function variants(first: any, second?: any): any {
     return chosen;
   };
 
+  // A rule that names a group this recipe does not have can never be satisfied — cva
+  // and tailwind-variants never apply one — but only the declared groups were checked,
+  // so a typo or a since-renamed group counted as met and the rule applied everywhere.
+  const live = resolved.compound.filter((rule) => {
+    const stale = Object.keys(rule).filter(
+      (key) => key !== "class" && key !== "className" && !names.includes(key),
+    );
+    if (stale.length > 0 && isDev) warnStaleCompound(stale);
+    return stale.length === 0;
+  });
+
   /** Every compound rule this call satisfies, in declaration order. */
   const matching = (chosen: Record<string, string | undefined>): unknown[] => {
     const out: unknown[] = [];
-    for (const rule of resolved.compound) {
+    for (const rule of live) {
       let matched = true;
       for (const name of names) {
         const wanted = rule[name];

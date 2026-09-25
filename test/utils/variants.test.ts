@@ -178,6 +178,28 @@ describe("a boolean variant", () => {
   });
 });
 
+describe("a compound rule naming a variant the recipe does not have", () => {
+  it("never applies, as in cva and tailwind-variants, and says so once", () => {
+    // Only the declared groups were checked, so a typo or a since-renamed group counted
+    // as matched and the rule applied to every instance meeting its other conditions.
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      const config = {
+        base: "btn",
+        variants: { tone: { danger: "bg-red-600" } },
+        compoundVariants: [{ tone: "danger", sizee: "lg", class: "ring-4" }],
+        defaultVariants: { tone: "danger" },
+      };
+      const t = variants(config as never) as unknown as (props?: object) => string;
+      expect(t()).toBe("btn bg-red-600");
+      expect(seen.some((m) => m.includes('"sizee"'))).toBe(true);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  });
+});
+
 describe("a compound rule matching a list", () => {
   const button = variants({
     base: "rounded",
