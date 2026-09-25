@@ -467,9 +467,14 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
     // naturally takes, shipped `md:<size>` with no rule and no word.
     case "variants": {
       const first = objectLiterals(args[0] ?? "")[0];
-      const isConfig = first !== undefined && parseObject(first).some((f) => f.key === "variants");
+      const isConfig = first !== undefined && declaresKey(first, "variants");
       const cva = args.length > 1 && !isConfig;
       if (cva) dynamicBuckets(args[0], report);
+      // A lone argument with no `variants` key is a base, as the scanner reads it.
+      if (args.length === 1 && !isConfig) {
+        dynamicBuckets(args[0], report);
+        return;
+      }
       const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
       if (config === undefined) return;
       // The same test the scanner uses for whether option values are one level deeper.

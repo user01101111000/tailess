@@ -282,6 +282,9 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   // Through a namespace import, a method call is still ours.
   { src: `t.on("hover", "underline")`, env: { t: { on } } },
   { src: `t.on(["dark", "hover"], "underline")`, env: { t: { on } } },
+  // cva's one-argument call with an ss map: no `variants` key, so the runtime reads the
+  // whole object as the base — and the scanner read it as a config and kept only `base`.
+  { src: `variants({ base: "flex", md: "p-4", lg: { hover: "p-6" } })()` },
   // Composition four and five deep. Following stopped at the third helper, so the
   // innermost stacked class — the only one the runtime builds — was never enumerated.
   { src: `ss({ dark: on("hover", data("state", "open", aria("selected", "bg-blue-50"))) })` },

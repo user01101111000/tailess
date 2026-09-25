@@ -722,6 +722,7 @@ const leadingTrivia = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 const declaredKey = {
   slots: /^(?:slots|["']slots["'])\s*(?::|$)/,
   extend: /^(?:extend|["']extend["'])\s*(?::|$)/,
+  variants: /^(?:variants|["']variants["'])\s*(?::|$)/,
 } as const;
 
 /**
