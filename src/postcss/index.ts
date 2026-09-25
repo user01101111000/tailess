@@ -1,6 +1,7 @@
 /// <reference types="node" />
-import { join } from "node:path";
-import { collect } from "../extract/collect.js";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
+import { collect, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceLiterals } from "../integration/inject.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
@@ -190,12 +191,33 @@ function themeSource(root: Root): string {
   return parts.join("\n");
 }
 
+/**
+ * The sidecar's scope for these options: none for the defaults, and one keyed on what the
+ * instance scans otherwise.
+ *
+ * Every instance used to write one file in the working directory's cache, so two
+ * configured differently — a monorepo root running two apps' pipelines, a multi-compiler
+ * build with per-entry options — each got the other's list, with the marker present and
+ * nothing printed. Instances that scan the same thing still share a file, which is right.
+ */
+function sidecarScope(options: TailessPostcssOptions): string | undefined {
+  const { content, extensions, ignore } = options;
+  if (!content?.length && extensions === undefined && ignore === undefined) return undefined;
+  const key = JSON.stringify([
+    (content ?? []).map((path) => resolve(path)),
+    extensions === undefined ? null : [...normalizeExtensions(extensions)].sort(),
+    ignore === undefined ? null : [...ignore].sort(),
+  ]);
+  return createHash("sha256").update(key).digest("hex").slice(0, 10);
+}
+
 let warnedAboutOrder = false;
 
 const tailessPostcss = Object.assign(
   (options: TailessPostcssOptions = {}): Plugin => {
     const sidecar = createSidecar(
       options.cacheDir ?? join(process.cwd(), "node_modules", ".cache"),
+      sidecarScope(options),
     );
 
     return {

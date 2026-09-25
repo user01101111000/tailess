@@ -44,6 +44,22 @@ describe("sidecar", () => {
     expect(await readFile(sidecar.path, "utf8")).toContain("md:flex");
   });
 
+  it("rewrites when another writer replaced the file", async () => {
+    // Two instances pointed at one cache: the second's list stood, and the first's
+    // rebuild trusted its own memory of having written, so its classes never came back.
+    const first = createSidecar(dir);
+    const second = createSidecar(dir);
+    await first.refresh(["md:flex"]);
+    await second.refresh(["lg:grid"]);
+    expect((await first.refresh(["md:flex"])).changed).toBe(true);
+    expect(await readFile(first.path, "utf8")).toContain("md:flex");
+  });
+
+  it("puts a scoped sidecar in a directory of its own, under the same file name", () => {
+    expect(createSidecar(dir, "abc").path).toBe(join(dir, "tailess", "abc", "tailess.css"));
+    expect(createSidecar(dir).path).toBe(join(dir, "tailess", "tailess.css"));
+  });
+
   it("never leaves a half-written file when refreshes overlap", async () => {
     // A build transforms several stylesheets at once and a watcher tick can land
     // mid-transform, so refresh() gets called concurrently with different lists.

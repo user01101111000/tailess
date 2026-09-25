@@ -269,6 +269,40 @@ describe("PostCSS integration (Next.js and any PostCSS setup)", () => {
     expect(result.messages).toEqual([]);
   });
 
+  it("keeps two differently configured instances' classes apart", async () => {
+    // A monorepo root running two apps' pipelines, or a multi-compiler build: both wrote
+    // one sidecar in the working directory's cache, and each app got the other's list —
+    // concurrently, and again on a watcher's rebuild — with the marker present.
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(dir);
+    for (const app of ["a", "b"]) {
+      await mkdir(join(dir, app), { recursive: true });
+      const size = app === "a" ? "p-3" : "p-7";
+      await writeFile(
+        join(dir, app, "x.tsx"),
+        `import { ss } from "tailess";\nss({ md: "${size}" });\n`,
+      );
+      await writeFile(join(dir, app, "app.css"), `@import "tailwindcss";`);
+    }
+    const build = (app: string) =>
+      postcss([
+        tailess({ content: [join(dir, app)] }),
+        tailwindcss({ base: join(dir, app), optimize: false }),
+      ])
+        .process(`@import "tailwindcss";`, { from: join(dir, app, "app.css") })
+        .then((result) => result.css);
+    try {
+      const [a, b] = await Promise.all([build("a"), build("b")]);
+      expect(missingRules(a, ["md:p-3"])).toEqual([]);
+      expect(missingRules(b, ["md:p-7"])).toEqual([]);
+      expect(missingRules(b, ["md:p-3"])).toEqual(["md:p-3"]);
+      // One after the other in one process, as a watcher rebuilds.
+      await build("b");
+      expect(missingRules(await build("a"), ["md:p-3"])).toEqual([]);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it("recognises @tailwind utilities as an entry too", async () => {
     const result = await postcss([
       tailess({ content: [dir], cacheDir: join(dir, ".cache") }),

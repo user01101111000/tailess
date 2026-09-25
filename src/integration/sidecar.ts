@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { buildPrelude } from "./inject.js";
 
@@ -66,9 +66,15 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-/** Create a sidecar writer rooted at `cacheDir`. */
-export function createSidecar(cacheDir: string): Sidecar {
-  const path = join(resolve(cacheDir), "tailess", "tailess.css");
+/**
+ * Create a sidecar writer rooted at `cacheDir`.
+ *
+ * `scope` gives the file a directory of its own, for a caller that runs more than one
+ * differently configured instance against one cache directory: sharing the file let one
+ * app's candidate list silently replace the other's.
+ */
+export function createSidecar(cacheDir: string, scope?: string): Sidecar {
+  const path = join(resolve(cacheDir), "tailess", ...(scope ? [scope] : []), "tailess.css");
   let written: string | null = null;
   let serial = 0;
 
@@ -103,15 +109,12 @@ export function createSidecar(cacheDir: string): Sidecar {
   ): Promise<{ css: string; changed: boolean }> {
     const css = buildPrelude(classes);
 
-    // Confirm the file is still there rather than trusting `written` alone: cache
-    // directories get wiped between runs (`vite --force`, a clean script), and a
-    // stale "already written" would leave the entry importing nothing.
+    // Confirm the file still holds this list rather than trusting `written` alone: cache
+    // directories get wiped between runs (`vite --force`, a clean script), and another
+    // writer pointed at the same file replaces it — either way a stale "already written"
+    // would leave the entry importing nothing, or someone else's classes.
     const unchanged =
-      css === written &&
-      (await stat(path).then(
-        () => true,
-        () => false,
-      ));
+      css === written && (await readFile(path, "utf8").catch(() => undefined)) === css;
     if (unchanged) return { css, changed: false };
 
     await write(css);

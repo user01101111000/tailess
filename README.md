@@ -1458,7 +1458,9 @@ a width it moves — are printed in every mode and fail nothing, so a project th
 breakpoint still fails it: that one leaves classes with no rule.
 
 The PostCSS plugin takes one more, `cacheDir`, since it has no host to borrow one
-from — on Vite it is not an option at all, and Vite's own `cacheDir` is used.
+from — on Vite it is not an option at all, and Vite's own `cacheDir` is used. Instances
+with different `content`, `extensions` or `ignore` write their lists to separate files
+under it, so two apps' pipelines in one working directory do not share one.
 
 ```js
 // postcss.config.mjs
