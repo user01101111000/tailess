@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,16 +17,84 @@ import { jsonResult } from "./result.js";
  * it has it; `init` writes that edit, after showing it.
  */
 
-/** How this project gets Tailwind, which decides which plugin it needs. */
+/**
+ * How this project gets Tailwind, which decides which plugin it needs.
+ *
+ * `framework` is set for a config that runs Vite itself — `astro.config`, `nuxt.config`,
+ * SolidStart's `app.config` — with the Vite plugins under its `vite` key. `data` is set
+ * for a PostCSS config that is JSON or YAML rather than code (`.postcssrc`, the
+ * `package.json` key), whose `source` is then that config as JSON: something to read,
+ * never to edit.
+ */
 export type Host =
-  | { kind: "vite"; file: string; source: string }
-  | { kind: "postcss"; file: string; source: string }
+  | { kind: "vite"; file: string; source: string; framework?: string }
+  | { kind: "postcss"; file: string; source: string; data?: "json" | "yaml" | "package.json" }
   | { kind: "unknown" };
 
 const viteConfig = /^vite\.config\.[cm]?[jt]s$/;
-const postcssConfig = /^postcss\.config\.[cm]?[jt]s$/;
+/** Configs that run Vite themselves, read like a Vite config for the plugin they need. */
+const frameworkConfig = /^(?:astro|nuxt|app)\.config\.[cm]?[jt]s$/;
+const postcssConfig = /^(?:postcss\.config|\.postcssrc)\.[cm]?[jt]s$/;
 /** A `postcss.config.json` or a `.postcssrc`, which are data rather than code. */
-const postcssData = /^(?:\.postcssrc(?:\.json)?|postcss\.config\.json)$/;
+const postcssData = /^(?:\.postcssrc(?:\.json|\.ya?ml)?|postcss\.config\.json)$/;
+
+/** Vite's own lookup order, so the file read is the one Vite loads. */
+const viteNames = ["js", "mjs", "ts", "cjs", "mts", "cts"].map((ext) => `vite.config.${ext}`);
+/** The frameworks whose own config holds `vite.plugins`, and the file each one reads. */
+const frameworks: [framework: string, stem: string][] = [
+  ["Astro", "astro.config"],
+  ["Nuxt", "nuxt.config"],
+  ["SolidStart", "app.config"],
+];
+/** postcss-load-config's lookup order, after the `package.json` key it tries first. */
+const postcssNames = [
+  ".postcssrc",
+  ".postcssrc.json",
+  ".postcssrc.yaml",
+  ".postcssrc.yml",
+  ...["ts", "cts", "mts", "js", "cjs", "mjs"].map((ext) => `.postcssrc.${ext}`),
+  ...["ts", "cts", "mts", "js", "cjs", "mjs"].map((ext) => `postcss.config.${ext}`),
+  "postcss.config.json",
+];
+
+/**
+ * The part of a YAML `.postcssrc` this reads: its `plugins:` block, as `name: value` or
+ * `- name` lines, into the object postcss-load-config would build. Anything else in the
+ * file is left out; a flow-style `plugins: { … }` is read as JSON.
+ */
+function readYaml(text: string): unknown {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/(?:^|\s)#.*$/, ""))
+    .filter((line) => line.trim() !== "");
+  const at = lines.findIndex((line) => /^plugins\s*:/.test(line));
+  if (at === -1) return {};
+  const inline = (lines[at] as string).replace(/^plugins\s*:\s*/, "");
+  if (inline) return { plugins: JSON.parse(inline) as unknown };
+  const body: string[] = [];
+  for (const line of lines.slice(at + 1)) {
+    if (!/^\s/.test(line)) break;
+    body.push(line);
+  }
+  const depth = (line: string) => (/^\s*/.exec(line) as RegExpExecArray)[0].length;
+  const indent = Math.min(...body.map(depth));
+  const entries = body.filter((line) => depth(line) === indent).map((line) => line.trim());
+  const unquote = (text: string) => text.trim().replace(/^(["'])(.*)\1$/, "$2");
+  if (entries.every((line) => line.startsWith("-"))) {
+    return { plugins: entries.map((line) => unquote(line.slice(1))) };
+  }
+  const plugins: Record<string, unknown> = {};
+  for (const line of entries) {
+    const entry = /^("[^"]*"|'[^']*'|[^:]+?)\s*:\s*(.*)$/.exec(line);
+    if (entry) plugins[unquote(entry[1] as string)] = entry[2] === "false" ? false : {};
+  }
+  return { plugins };
+}
+
+/** True when `text` names `specifier` as a module, outside comments. */
+function mentions(text: string, specifier: string): boolean {
+  return new RegExp(`["']${specifier}["']`).test(maskLiterals(text));
+}
 
 /**
  * The name `code` binds `specifier` to, when it imports it at all.
@@ -66,7 +134,12 @@ function insideOption(blank: string, at: number): boolean {
     if (c === ")" || c === "]" || c === "}") depth += 1;
     else if (c === "(" || c === "[" || c === "{") {
       if (depth > 0) depth -= 1;
-      else if (c === "{" && propertyKey.test(blank.slice(Math.max(0, i - 200), i))) return true;
+      else if (c === "{") {
+        // `vite: {` is where Astro, Nuxt and SolidStart keep the Vite config, so the
+        // `plugins` inside it are that config's own.
+        const key = propertyKey.exec(blank.slice(Math.max(0, i - 200), i))?.[1];
+        if (key !== undefined && key !== "vite") return true;
+      }
     }
   }
   return false;
@@ -173,16 +246,14 @@ export function wired(text: string, kind?: "vite" | "postcss"): boolean {
  * cannot work — the README's own warning, which reading either plugin as wiring passed.
  */
 export function pluginFor(name: string, text: string): "vite" | "postcss" | undefined {
-  if (viteConfig.test(name)) {
-    const code = maskLiterals(text);
+  if (viteConfig.test(name) || frameworkConfig.test(name)) {
     const postcssOnly =
-      /["']@tailwindcss\/postcss["']/.test(code) && !/["']@tailwindcss\/vite["']/.test(code);
+      mentions(text, "@tailwindcss/postcss") && !mentions(text, "@tailwindcss/vite");
     return postcssOnly ? undefined : "vite";
   }
-  if (postcssConfig.test(name) || /^\.postcssrc/.test(name) || name === "package.json") {
+  if (postcssConfig.test(name) || postcssData.test(name) || name === "package.json") {
     return "postcss";
   }
-  if (postcssData.test(name)) return "postcss";
   return undefined;
 }
 
@@ -195,19 +266,97 @@ export function pluginFor(name: string, text: string): "vite" | "postcss" | unde
  * `postcss.config` still compiles its CSS through Vite.
  */
 export async function findHost(cwd: string): Promise<Host> {
-  const names = await readdir(cwd).catch(() => [] as string[]);
+  const present = new Set(await readdir(cwd).catch(() => [] as string[]));
   const read = async (name: string) => ({
     file: join(cwd, name),
     source: await readFile(join(cwd, name), "utf8").catch(() => ""),
   });
+  const postcss = await findPostcss(cwd, present);
 
-  const vite = names.find((name) => viteConfig.test(name));
-  if (vite) return { kind: "vite", ...(await read(vite)) };
+  // Vite's order, not the directory's: with a stale `vite.config.cjs` beside the
+  // `vite.config.ts` Vite loads, reading the first name `readdir` returned answered for
+  // the wrong file.
+  const vite = viteNames.find((name) => present.has(name));
+  if (vite) {
+    const host = { kind: "vite" as const, ...(await read(vite)) };
+    // A Vite project can compile Tailwind through PostCSS instead, and the README calls
+    // `tailess/postcss` the right plugin there — so asking for `tailess()` in the Vite
+    // config failed a working build and `init` then added a redundant plugin.
+    const viaPostcss =
+      postcss !== undefined &&
+      !mentions(host.source, "@tailwindcss/vite") &&
+      mentions(postcss.source, "@tailwindcss/postcss");
+    return viaPostcss ? postcss : host;
+  }
 
-  const postcss = names.find((name) => postcssConfig.test(name) || postcssData.test(name));
-  if (postcss) return { kind: "postcss", ...(await read(postcss)) };
+  for (const [framework, stem] of frameworks) {
+    const name = viteNames
+      .map((file) => file.replace("vite.config", stem))
+      .find((file) => present.has(file));
+    if (!name) continue;
+    const host = { kind: "vite" as const, framework, ...(await read(name)) };
+    // `app.config` is SolidStart's only when it says so; Nuxt uses the name for something else.
+    if (framework === "SolidStart" && !/@solidjs\/start|vinxi/.test(host.source)) continue;
+    return host;
+  }
 
-  return { kind: "unknown" };
+  return postcss ?? { kind: "unknown" };
+}
+
+/**
+ * The PostCSS config postcss-load-config would load here, in its order.
+ *
+ * `package.json`'s `postcss` key and the `.postcssrc` family were missed, so `doctor`
+ * exited 2 on wired, working projects — "no postcss.config here" — and blamed the
+ * directory for it. Those are read as data; only a code config is one `init` edits.
+ */
+async function findPostcss(
+  cwd: string,
+  present: Set<string>,
+): Promise<Extract<Host, { kind: "postcss" }> | undefined> {
+  if (present.has("package.json")) {
+    const text = await readFile(join(cwd, "package.json"), "utf8").catch(() => "");
+    let postcss: unknown;
+    try {
+      postcss = (JSON.parse(text) as { postcss?: unknown }).postcss;
+    } catch {
+      postcss = undefined;
+    }
+    if (postcss !== undefined) {
+      const source = JSON.stringify(postcss, null, 2);
+      return { kind: "postcss", file: join(cwd, "package.json"), source, data: "package.json" };
+    }
+  }
+  const name = postcssNames.find((file) => present.has(file));
+  if (!name) return undefined;
+  const file = join(cwd, name);
+  const text = await readFile(file, "utf8").catch(() => "");
+  if (!postcssData.test(name)) return { kind: "postcss", file, source: text };
+  const yaml = /\.ya?ml$/.test(name);
+  try {
+    // A bare `.postcssrc` is JSON or YAML, whichever parses.
+    const parsed = yaml ? readYaml(text) : JSON.parse(text);
+    return {
+      kind: "postcss",
+      file,
+      source: JSON.stringify(parsed, null, 2),
+      data: yaml ? "yaml" : "json",
+    };
+  } catch {
+    try {
+      if (!yaml && name === ".postcssrc") {
+        return {
+          kind: "postcss",
+          file,
+          source: JSON.stringify(readYaml(text), null, 2),
+          data: "yaml",
+        };
+      }
+    } catch {
+      // Falls through to the raw text, which reads as unwired rather than crashing.
+    }
+    return { kind: "postcss", file, source: text, data: yaml ? "yaml" : "json" };
+  }
 }
 
 /** What `init` would write, or `null` when there is nothing to change. */
@@ -331,6 +480,11 @@ export function planEdit(host: Host): Edit | null {
   // A plugin listed after Tailwind's is not one to add a second copy of: that is a reorder,
   // which `doctor` describes rather than this guessing at where the entry ends.
   if (host.kind === "unknown") return null;
+  // A framework's own config and a JSON or YAML one are read, never written: their
+  // shapes are not the two this edits, and a wrong edit is worse than none.
+  if ((host.kind === "vite" && host.framework) || (host.kind === "postcss" && host.data)) {
+    return null;
+  }
   const kind = pluginFor(basename(host.file), host.source);
   if (kind !== host.kind || wiring(host.source, kind) !== "unwired") return null;
 
@@ -583,10 +737,42 @@ export async function runDoctor(cwd: string, json = false): Promise<number> {
     return done(2, { error: "no-config" });
   }
 
-  const state = wiring(host.source, pluginFor(basename(host.file), host.source));
+  const reading = await readWiring(host);
+  const { state } = reading;
+  const tailwind = tailwindNote(host, reading, where);
+  if (tailwind) say(tailwind, true);
+  const extra = tailwind ? { tailwind: false } : {};
+
   if (state === "wired") {
-    say(`[tailess] ${where(host.file)} calls the plugin. Nothing to do.`);
-    return done(0, { host: host.kind, file: where(host.file), wired: true });
+    const via = reading.via ? ` through ${where(reading.via)}` : "";
+    say(`[tailess] ${where(host.file)} calls the plugin${via}. Nothing to do.`);
+    return done(0, {
+      host: host.kind,
+      file: where(host.file),
+      wired: true,
+      ...(reading.via ? { via: where(reading.via) } : {}),
+      ...extra,
+    });
+  }
+
+  if (state === "unknown") {
+    // A plugin list built in a shared preset is the shape every monorepo has, and failing
+    // it failed a working build — `check` abstains on the same shape. This says what it
+    // could not read, rather than guessing either way.
+    say(
+      `[tailess] ${where(host.file)} does not call the plugin itself, and imports ` +
+        `${reading.unread}, which doctor could not read. If that adds it, nothing is wrong; ` +
+        "if it does not, no variant class on the page has CSS behind it:",
+      true,
+    );
+    say(`\n${handEdit(host)}`, true);
+    return done(0, {
+      host: host.kind,
+      file: where(host.file),
+      wired: null,
+      unread: reading.unread,
+      ...extra,
+    });
   }
 
   if (state === "misordered") {
@@ -628,7 +814,116 @@ export async function runDoctor(cwd: string, json = false): Promise<number> {
     file: where(host.file),
     wired: false,
     fixable: plan !== null,
+    ...extra,
   });
+}
+
+/** What {@link readWiring} found, and — when it followed an import — where. */
+interface Reading {
+  state: Wiring | "unknown";
+  /** The local module the plugin was found in, when not the config itself. */
+  via?: string;
+  /** The first local import that could not be read, when that left it undecided. */
+  unread?: string;
+  /** Every source read, for questions about the whole config. */
+  sources: string[];
+}
+
+/** A relative module a config imports, re-exports or requires. */
+const localModule =
+  /^[ \t]*(?:import|export)\b[^;"'`]*?\bfrom\s*["'](\.\.?\/[^"'\n]*)["']|^[ \t]*import\s*["'](\.\.?\/[^"'\n]*)["']|\brequire\s*\(\s*["'](\.\.?\/[^"'\n]*)["']/gm;
+
+/**
+ * A module that is not code. Listed rather than inferred: `./vite.shared` and
+ * `./vite.base` are code with a dot in the name, and reading `.shared` as an extension
+ * skipped exactly the preset this follows imports to find.
+ */
+const nonCode =
+  /\.(?:json5?|css|s[ac]ss|less|styl|svg|png|jpe?g|gif|webp|avif|ico|wasm|txt|md|html|ya?ml|toml|node)$/i;
+
+/** The file a relative specifier names, trying what a config's loader would. */
+async function resolveLocal(from: string, specifier: string): Promise<string | undefined> {
+  const base = join(dirname(from), specifier);
+  // TypeScript's ESM spelling names `./shared.js` for `./shared.ts`.
+  const stem = base.replace(/\.[cm]?js$/, "");
+  const extensions = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"];
+  const candidates = [
+    base,
+    ...extensions.map((ext) => stem + ext),
+    ...extensions.map((ext) => join(base, `index${ext}`)),
+  ];
+  for (const candidate of candidates) {
+    if ((await stat(candidate).catch(() => undefined))?.isFile()) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * How `host` wires the plugin, following its local imports a few levels deep.
+ *
+ * Reading one file answered "not wired" for a plugin list built in `./vite.shared.ts` —
+ * a working build, failed, and `init` then registered the plugin a second time. A local
+ * module that does not wire it either leaves the answer "unwired"; one that cannot be
+ * found or read leaves it "unknown", which `doctor` says rather than guessing at.
+ */
+async function readWiring(host: Exclude<Host, { kind: "unknown" }>): Promise<Reading> {
+  const kind = pluginFor(basename(host.file), host.source);
+  const seen = new Set<string>();
+  const read = async (file: string, source: string, depth: number): Promise<Reading> => {
+    seen.add(file);
+    const state = wiring(source, kind);
+    const sources = [source];
+    if (state !== "unwired" || ("data" in host && host.data)) return { state, sources };
+    let unread: string | undefined;
+    for (const match of maskLiterals(source).matchAll(localModule)) {
+      const specifier = match[1] ?? match[2] ?? match[3] ?? "";
+      // `./package.json`, a stylesheet or an asset carries no plugin list.
+      if (nonCode.test(specifier)) continue;
+      const path = await resolveLocal(file, specifier);
+      if (path && seen.has(path)) continue;
+      const text = path ? await readFile(path, "utf8").catch(() => undefined) : undefined;
+      if (path === undefined || text === undefined || depth === 0) {
+        unread ??= specifier;
+        continue;
+      }
+      const inner = await read(path, text, depth - 1);
+      sources.push(...inner.sources);
+      if (inner.state === "wired" || inner.state === "misordered") {
+        return { state: inner.state, via: inner.via ?? path, sources };
+      }
+      if (inner.state === "unknown") unread ??= specifier;
+    }
+    return unread ? { state: "unknown", unread, sources } : { state: "unwired", sources };
+  };
+  return read(host.file, host.source, 3);
+}
+
+/**
+ * A note when the config never loads Tailwind's own plugin, or `undefined`.
+ *
+ * Wiring tailess into a config that compiles no Tailwind leaves nothing styled at all,
+ * and `doctor` called that healthy. It is a note rather than a failure: a plugin preset
+ * from a package can bring Tailwind in where no file here can see it, and failing a
+ * working build on a guess is the one thing this command must not do.
+ */
+function tailwindNote(
+  host: Exclude<Host, { kind: "unknown" }>,
+  reading: Reading,
+  where: (file: string) => string,
+): string | undefined {
+  if (reading.state === "unknown") return undefined;
+  const wanted =
+    pluginFor(basename(host.file), host.source) === "vite"
+      ? "@tailwindcss/vite"
+      : host.kind === "postcss"
+        ? "@tailwindcss/postcss"
+        : undefined;
+  if (!wanted) return undefined;
+  if (reading.sources.some((source) => mentions(source, wanted))) return undefined;
+  return (
+    `[tailess] note: ${where(host.file)} does not load ${wanted} either, so unless another ` +
+    "plugin brings it in, nothing compiles Tailwind and no class has CSS. Add it too."
+  );
 }
 
 /**
@@ -641,11 +936,24 @@ function handEdit(host: Exclude<Host, { kind: "unknown" }>): string {
   const masked = maskLiterals(host.source);
   const cjs = isCommonJs(host.file, masked);
   if (host.kind === "vite") {
+    const plugins = host.framework
+      ? "vite: { plugins: [tailwindcss(), tailess()] }"
+      : "plugins: [tailwindcss(), tailess()]";
     return cjs
-      ? '  const tailess = require("tailess/vite");\n  plugins: [tailwindcss(), tailess()]'
-      : '  import tailess from "tailess/vite";\n  plugins: [tailwindcss(), tailess()]';
+      ? `  const tailess = require("tailess/vite");\n  ${plugins}`
+      : `  import tailess from "tailess/vite";\n  ${plugins}`;
   }
   const order = "\n\ntailess must come first: it writes the candidate list Tailwind then reads.";
+  // A JSON config needs its keys quoted, and a YAML one is not braces at all.
+  if (host.data === "yaml") {
+    return `  plugins:\n    tailess/postcss: {}\n    "@tailwindcss/postcss": {}${order}`;
+  }
+  if (host.data === "json") {
+    return `  "plugins": { "tailess/postcss": {}, "@tailwindcss/postcss": {} }${order}`;
+  }
+  if (host.data === "package.json") {
+    return `  "postcss": { "plugins": { "tailess/postcss": {}, "@tailwindcss/postcss": {} } }${order}`;
+  }
   const array = /\bplugins\s*:\s*\[\s*([^\s\]])/.exec(masked)?.[1];
   if (array !== undefined && !/["']/.test(array)) {
     return cjs
@@ -678,10 +986,21 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
     return done(2, { error: "no-config" });
   }
 
-  const state = wiring(host.source, pluginFor(basename(host.file), host.source));
+  const reading = await readWiring(host);
+  const { state } = reading;
   if (state === "wired") {
-    say(`[tailess] ${where(host.file)} already calls the plugin. Nothing to do.`);
+    const via = reading.via ? ` through ${where(reading.via)}` : "";
+    say(`[tailess] ${where(host.file)} already calls the plugin${via}. Nothing to do.`);
     return done(0, { file: where(host.file), wired: true, written: false });
+  }
+  if (state === "unknown") {
+    say(
+      `[tailess] ${where(host.file)} imports ${reading.unread}, which init could not read, ` +
+        "so it cannot tell whether the plugin is already there. Nothing was written. " +
+        "`npx tailess doctor` prints the line to add by hand.",
+      true,
+    );
+    return done(2, { error: "not-editable", file: where(host.file), unread: reading.unread });
   }
   if (state === "misordered") {
     say(
@@ -695,9 +1014,15 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
 
   const plan = planEdit(host);
   if (!plan) {
+    const what =
+      host.kind === "vite" && host.framework
+        ? `is ${host.framework}'s own config, which init reads but does not edit`
+        : host.kind === "postcss" && host.data
+          ? "is data rather than code, which init reads but does not edit"
+          : "has no plugins list this can edit safely";
     say(
-      `[tailess] ${where(host.file)} has no plugins list this can edit safely, so nothing ` +
-        "was written. `npx tailess doctor` prints the line to add.",
+      `[tailess] ${where(host.file)} ${what}, so nothing was written. ` +
+        "`npx tailess doctor` prints the line to add.",
       true,
     );
     return done(2, { error: "not-editable", file: where(host.file) });
@@ -721,5 +1046,12 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
 
   await writeFile(plan.file, plan.after, "utf8");
   say(`[tailess] wrote ${where(plan.file)}. Restart your dev server.`);
-  return done(0, { file: where(plan.file), written: true, diff: diffOf(plan) });
+  const tailwind = tailwindNote(host, reading, where);
+  if (tailwind) say(tailwind, true);
+  return done(0, {
+    file: where(plan.file),
+    written: true,
+    diff: diffOf(plan),
+    ...(tailwind ? { tailwind: false } : {}),
+  });
 }

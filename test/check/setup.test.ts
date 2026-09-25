@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkEdit,
@@ -217,6 +217,202 @@ describe("finding which integration a project needs", () => {
 
   it("says so when there is neither", async () => {
     expect((await findHost(dir)).kind).toBe("unknown");
+  });
+
+  it("reads the Vite config Vite loads, not the first one the directory lists", async () => {
+    // Vite tries js, mjs, ts, cjs, mts, cts; a stale `vite.config.cjs` beside the `.ts`
+    // was read instead and a wired project failed.
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\nexport default { plugins: [tailwindcss(), tailess()] };\n`,
+    );
+    await writeFile(join(dir, "vite.config.cjs"), `module.exports = { plugins: [] };\n`);
+    const host = await findHost(dir);
+    expect(host.kind === "vite" && basename(host.file)).toBe("vite.config.ts");
+  });
+
+  it("answers for the PostCSS config when that is where a Vite project gets Tailwind", async () => {
+    // The README calls `tailess/postcss` the right plugin there; asking for `tailess()` in
+    // the Vite config failed a working build, and `init` added a redundant plugin.
+    await writeFile(join(dir, "vite.config.ts"), `export default { plugins: [react()] };\n`);
+    await writeFile(
+      join(dir, "postcss.config.mjs"),
+      `export default { plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} } };\n`,
+    );
+    expect((await findHost(dir)).kind).toBe("postcss");
+    const { code } = await capture(() => runDoctor(dir));
+    expect(code).toBe(0);
+  });
+
+  describe("PostCSS configs that are data, in every place postcss-load-config looks", () => {
+    const wiredObject = { plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} } };
+    const unwiredObject = { plugins: { "@tailwindcss/postcss": {} } };
+
+    it.each([
+      ["package.json", JSON.stringify({ name: "app", postcss: wiredObject })],
+      [".postcssrc", JSON.stringify(wiredObject)],
+      [".postcssrc.json", JSON.stringify(wiredObject)],
+      [
+        ".postcssrc.yml",
+        `# PostCSS\nplugins:\n  tailess/postcss: {}\n  "@tailwindcss/postcss": {}\n`,
+      ],
+      [".postcssrc.yaml", `plugins:\n  - tailess/postcss\n  - "@tailwindcss/postcss"\n`],
+      [
+        ".postcssrc.js",
+        `module.exports = { plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} } };\n`,
+      ],
+    ])("passes one wired in %s", async (file, text) => {
+      // Each of these exited 2 — "no postcss.config here" — on a working project.
+      await writeFile(join(dir, file), text);
+      const { code } = await capture(() => runDoctor(dir));
+      expect(code).toBe(0);
+    });
+
+    it.each([
+      ["package.json", JSON.stringify({ name: "app", postcss: unwiredObject }), '"postcss": {'],
+      [".postcssrc.json", JSON.stringify(unwiredObject), '"plugins": {'],
+      [
+        ".postcssrc.yml",
+        `plugins:\n  tailess/postcss: false\n  "@tailwindcss/postcss": {}\n`,
+        "plugins:\n",
+      ],
+    ])("fails one unwired in %s, with the line in its own syntax", async (file, text, snippet) => {
+      await writeFile(join(dir, file), text);
+      const { code, output } = await capture(() => runDoctor(dir));
+      expect(code).toBe(1);
+      expect(output).toContain(snippet);
+    });
+
+    it("reads them, and does not edit them", async () => {
+      const text = JSON.stringify({ name: "app", postcss: unwiredObject });
+      await writeFile(join(dir, "package.json"), text);
+      const { code, output } = await capture(() => runInit(dir, true));
+      expect(code).toBe(2);
+      expect(output).toContain("data rather than code");
+      expect(await readFile(join(dir, "package.json"), "utf8")).toBe(text);
+    });
+
+    it("ignores a package.json with no postcss key", async () => {
+      await writeFile(join(dir, "package.json"), JSON.stringify({ name: "app" }));
+      expect((await findHost(dir)).kind).toBe("unknown");
+    });
+  });
+
+  describe("frameworks that run Vite from their own config", () => {
+    it.each([
+      ["astro.config.mjs", "Astro"],
+      ["nuxt.config.ts", "Nuxt"],
+    ])("reads vite.plugins in %s", async (file, framework) => {
+      // The README lists Astro under Vite; doctor exited 2 and blamed a monorepo.
+      await writeFile(
+        join(dir, file),
+        `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\nexport default defineConfig({ vite: { plugins: [tailwindcss(), tailess()] } });\n`,
+      );
+      const host = await findHost(dir);
+      expect(host.kind === "vite" && host.framework).toBe(framework);
+      expect((await capture(() => runDoctor(dir))).code).toBe(0);
+    });
+
+    it("fails one that is not wired, says where it goes, and leaves the file alone", async () => {
+      const text = `import tailwindcss from "@tailwindcss/vite";\nexport default defineConfig({ vite: { plugins: [tailwindcss()] } });\n`;
+      await writeFile(join(dir, "astro.config.mjs"), text);
+      const doctor = await capture(() => runDoctor(dir));
+      expect(doctor.code).toBe(1);
+      expect(doctor.output).toContain("vite: { plugins: [tailwindcss(), tailess()] }");
+      const init = await capture(() => runInit(dir, true));
+      expect(init.code).toBe(2);
+      expect(init.output).toContain("Astro's own config");
+      expect(await readFile(join(dir, "astro.config.mjs"), "utf8")).toBe(text);
+    });
+
+    it("takes app.config for SolidStart's only when it is", async () => {
+      await writeFile(
+        join(dir, "app.config.ts"),
+        `export default defineAppConfig({ title: "x" });\n`,
+      );
+      expect((await findHost(dir)).kind).toBe("unknown");
+      await writeFile(
+        join(dir, "app.config.ts"),
+        `import { defineConfig } from "@solidjs/start/config";\nexport default defineConfig({ vite: { plugins: [] } });\n`,
+      );
+      const host = await findHost(dir);
+      expect(host.kind === "vite" && host.framework).toBe("SolidStart");
+    });
+  });
+});
+
+describe("a plugin list built in another file", () => {
+  const preset = `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\n\nexport const sharedPlugins = () => [tailwindcss(), tailess()];\n`;
+
+  it.each([
+    ["called", "plugins: sharedPlugins()"],
+    ["spread", "plugins: [...sharedPlugins()]"],
+  ])("is followed when %s from a local preset", async (_, plugins) => {
+    // The shape every monorepo has. doctor failed it, and init registered the plugin a
+    // second time.
+    await writeFile(join(dir, "vite.shared.ts"), preset);
+    const config = `import { defineConfig } from "vite";\nimport { sharedPlugins } from "./vite.shared";\n\nexport default defineConfig({ ${plugins} });\n`;
+    await writeFile(join(dir, "vite.config.ts"), config);
+    const doctor = await capture(() => runDoctor(dir));
+    expect(doctor.code).toBe(0);
+    expect(doctor.output).toContain("through vite.shared.ts");
+    const init = await capture(() => runInit(dir, true));
+    expect(init.code).toBe(0);
+    expect(await readFile(join(dir, "vite.config.ts"), "utf8")).toBe(config);
+  });
+
+  it("still fails when the preset does not wire it either", async () => {
+    await writeFile(
+      join(dir, "vite.shared.ts"),
+      `import tailwindcss from "@tailwindcss/vite";\nexport const sharedPlugins = () => [tailwindcss()];\n`,
+    );
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import { sharedPlugins } from "./vite.shared.js";\nexport default { plugins: sharedPlugins() };\n`,
+    );
+    expect((await capture(() => runDoctor(dir))).code).toBe(1);
+  });
+
+  it("says it cannot tell when the preset cannot be read, rather than failing the build", async () => {
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import { sharedPlugins } from "./presets/vite";\nexport default { plugins: sharedPlugins() };\n`,
+    );
+    const doctor = await capture(() => runDoctor(dir));
+    expect(doctor.code).toBe(0);
+    expect(doctor.output).toContain("could not read");
+    expect((await capture(() => runInit(dir, true))).code).toBe(2);
+  });
+
+  it("does not take package.json, or any other non-code import, for a preset", async () => {
+    // `with { type: "json" }` is how an ESM config reads its version; it has no plugins.
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import pkg from "./package.json" with { type: "json" };\nexport default { plugins: [] };\n`,
+    );
+    expect((await capture(() => runDoctor(dir))).code).toBe(1);
+  });
+});
+
+describe("a config with no Tailwind plugin at all", () => {
+  it("is noted, not failed, since a preset package can bring Tailwind in unseen", async () => {
+    // Nothing is styled at all in this project, and doctor called it healthy.
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import tailess from "tailess/vite";\nexport default { plugins: [tailess()] };\n`,
+    );
+    const { code, output } = await capture(() => runDoctor(dir));
+    expect(code).toBe(0);
+    expect(output).toContain("does not load @tailwindcss/vite either");
+  });
+
+  it("is quiet when Tailwind's plugin is there", async () => {
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\nexport default { plugins: [tailwindcss(), tailess()] };\n`,
+    );
+    const { output } = await capture(() => runDoctor(dir));
+    expect(output).not.toContain("note:");
   });
 });
 
