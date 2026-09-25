@@ -938,6 +938,11 @@ The `export {}` matters. A `.d.ts` with no import or export of its own is a glob
 script, and there `declare module "tailess"` does not add to the package's types — it
 *replaces* them, and every `import { ss } from "tailess"` stops compiling.
 
+The package ships one set of declarations for `import` and one for `require`, and the
+block adds to whichever one its own file resolves. A project that mixes the two —
+`.cts` files in a `"type": "module"` package, or `.mts` in a CommonJS one — needs the
+same block in a file of each kind: `tailess.d.ts` and a copy named `tailess-cjs.d.cts`.
+
 ```ts
 ss({ md: "p-6", "3xl": "p-12", "sidebar-open": "translate-x-0" });
 ```
