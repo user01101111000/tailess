@@ -224,8 +224,12 @@ const tailessPostcss = Object.assign(
         });
 
         reportDiagnostics(diagnostics, process.cwd(), options.diagnostics);
-        if (files.length === 0 && options.content?.length) {
-          reportEmptyScan(options.content, `the working directory (${process.cwd()})`);
+        if (files.length === 0 && (options.content?.length || options.extensions !== undefined)) {
+          reportEmptyScan(
+            options.content?.length ? options.content : [process.cwd()],
+            `the working directory (${process.cwd()})`,
+            options.extensions,
+          );
         }
 
         // The breakpoint keys are compiled in, so a `@theme` that moves them is

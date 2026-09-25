@@ -651,6 +651,60 @@ describe("Vite: content paths and server lifecycle", () => {
     warn.mockRestore();
   });
 
+  it("warns when an extensions list matches nothing, with content left at its default", async () => {
+    // `extensions: ["*.tsx"]` unstyled every prefixed class with the marker present and no
+    // warning, because the check only ran for an explicit `content`.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const extensions of [["*.tsx"], [], ["mjs"]]) {
+      clearReported();
+      warn.mockClear();
+      const plugin = tailessVite({ extensions });
+      plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+      await plugin.transform.handler.call(
+        { addWatchFile: () => {} },
+        `@import "tailwindcss";`,
+        entryId(),
+      );
+      const said = warn.mock.calls.map((call) => String(call[0]));
+      expect(
+        said.filter((m) => m.includes("matched no files")),
+        String(extensions),
+      ).toHaveLength(1);
+      expect(said.some((m) => m.includes(`with an extension in [${extensions.join(", ")}]`))).toBe(
+        true,
+      );
+      expect(said.some((m) => m.includes("not globs"))).toBe(extensions[0] === "*.tsx");
+    }
+
+    clearReported();
+    warn.mockClear();
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(dir);
+    await writeFile(join(dir, "app.css"), `@import "tailwindcss";`);
+    await postcss([
+      tailess({ extensions: ["*.tsx"], cacheDir: join(dir, ".cache") }),
+      tailwindcss({ base: dir, optimize: false }),
+    ]).process(`@import "tailwindcss";`, { from: join(dir, "app.css") });
+    cwd.mockRestore();
+    expect(warn.mock.calls.some((call) => String(call[0]).includes("matched no files"))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("stays quiet when an extensions list matches the project's files", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clearReported();
+    const plugin = tailessVite({ extensions: ["tsx"] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      entryId(),
+    );
+    expect(warn.mock.calls.some((call) => String(call[0]).includes("matched no files"))).toBe(
+      false,
+    );
+    warn.mockRestore();
+  });
+
   it("registers listeners again on a restarted server", async () => {
     // Vite calls configureServer once per server, and reuses a plugin instance
     // supplied through inlineConfig across a restart. A latch on the instance would

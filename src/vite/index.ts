@@ -165,10 +165,10 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
     // runtime equivalents only fire once the offending line renders in a browser.
     reportDiagnostics(diagnostics, root, options.diagnostics);
 
-    // An explicit `content` that matches nothing is always a mistake; see
-    // `reportEmptyScan`, which the PostCSS plugin shares.
-    if (files.length === 0 && options.content?.length) {
-      reportEmptyScan(scanned, `Vite's root (${root})`);
+    // An explicit `content` or `extensions` that matches nothing is always a mistake;
+    // see `reportEmptyScan`, which the PostCSS plugin shares.
+    if (files.length === 0 && (options.content?.length || options.extensions !== undefined)) {
+      reportEmptyScan(scanned, `Vite's root (${root})`, options.extensions);
     }
 
     try {

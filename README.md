@@ -1485,8 +1485,9 @@ tailess({
 ```
 
 `content` takes directories and files — **not globs**. `"src"` scans everything under
-it, so `"src/**/*.tsx"` is both unnecessary and inert. A `content` that matches no files
-warns rather than quietly producing a stylesheet with nothing in it.
+it, so `"src/**/*.tsx"` is both unnecessary and inert. A `content` or `extensions` that
+matches no files warns rather than quietly producing a stylesheet with nothing in it —
+extensions are names (`"tsx"`), not globs (`"*.tsx"`).
 
 | Option | Default |
 | ------ | ------- |
@@ -1573,7 +1574,8 @@ A monorepo package or shared UI folder — point `content` at it.
 
 `content` takes directories and files, not globs. `content: ["src/**/*.tsx"]` matches
 nothing; `content: ["src"]` scans the whole tree, which is what the glob was reaching
-for. The plugin warns when `content` matches no files and names the wildcard case.
+for. The plugin warns when `content` or `extensions` matches no files, and names the
+wildcard case.
 
 </details>
 

@@ -17,30 +17,41 @@ export function clearReported(): void {
 }
 
 /**
- * Say so when an explicit `content` option matched no files — once per list of roots.
+ * Say so when an explicit `content` or `extensions` option matched no files — once per
+ * list of roots.
  *
  * Always a mistake: a wrong path, an extension list that excludes the project's own
  * files, or a glob. Left quiet it looks exactly like a project that uses no tailess at
  * all, right up until the page renders unstyled — with the marker present, so the
  * runtime's own "plugin not wired" check stays quiet too. Shared by both plugins, which
- * the README promises behave the same.
+ * the README promises behave the same. With neither option set, an empty scan is a
+ * stylesheet in a project with no source to read, and says nothing.
  *
  * `against` names what relative paths were resolved from: Vite's root, or the
- * working directory a PostCSS host runs in.
+ * working directory a PostCSS host runs in. `extensions` is the list the caller set,
+ * when it set one: with the default `content`, it is the only thing that can be wrong.
  */
-export function reportEmptyScan(scanned: readonly string[], against: string): void {
-  const key = `empty\0${scanned.join("\0")}`;
+export function reportEmptyScan(
+  scanned: readonly string[],
+  against: string,
+  extensions?: Iterable<string>,
+): void {
+  const listed = extensions === undefined ? undefined : [...extensions].map(String);
+  const key = `empty\0${scanned.join("\0")}\0${listed?.join("\0") ?? ""}`;
   if (reported.has(key)) return;
   reported.add(key);
   // Naming the glob case explicitly: `content` was glob-shaped in Tailwind v3, so it is
   // the first thing a reader reaches for, and "matched no files" on its own reads like a
   // wrong path rather than a wrong kind of path.
-  const glob = scanned.some((path) => path.includes("*"))
-    ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
+  const glob = [...scanned, ...(listed ?? [])].some((path) => path.includes("*"))
+    ? ' Wildcards are not expanded — pass a directory ("src") or a file, and extensions ' +
+      'as names ("tsx"), not globs.'
     : "";
+  const option = listed === undefined ? '"content" option' : '"content" and "extensions" options';
+  const only = listed === undefined ? "" : ` with an extension in [${listed.join(", ")}]`;
   console.warn(
-    `[tailess] the "content" option matched no files, so no variant class will have ` +
-      `CSS. Scanned: ${scanned.join(", ")}. Paths are resolved against ${against}.${glob}`,
+    `[tailess] the ${option} matched no files, so no variant class will have CSS. ` +
+      `Scanned: ${scanned.join(", ")}${only}. Paths are resolved against ${against}.${glob}`,
   );
 }
 
