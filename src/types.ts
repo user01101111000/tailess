@@ -53,7 +53,9 @@ export type SsValue =
   | boolean
   | null
   | undefined
-  | ClassValue[]
+  // `readonly`, so an `as const` list — which the runtime reads exactly like a mutable one —
+  // is a class value here too, as it already is for `on` and a recipe's `compound`.
+  | readonly ClassValue[]
   | SsInput;
 
 /**

@@ -178,6 +178,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 | **Tailwind CSS** | v4.1 or later — the plugins inject `@source inline(…)`, which 4.0 cannot parse; v3 is not supported |
 | **Node** | 20.19+ for the build plugins and the CLI (what `engines` enforces, and what Vite 8 needs); the runtime has no Node dependency |
 | **Bundler** | anything using `@tailwindcss/vite` or `@tailwindcss/postcss` — anything else via [`tailess emit`](#tailess-emit--the-stylesheet-as-a-file) |
+| **TypeScript** | 5.0+ for the types, which use `const` type parameters; 4.9 cannot read them, even with `skipLibCheck`. Plain JavaScript needs nothing |
 | **Dependencies** | one — `tailwind-merge` |
 
 ## Install

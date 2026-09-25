@@ -696,6 +696,49 @@ describe("cva's one-argument call", () => {
     expect(plain({}, "gap-2")).toBe("flex items-center gap-2");
     expect(variants({ base: "only" } as never)()).toBe("only");
   });
+
+  it("refuses a class string where the props go", () => {
+    // Its props were typed `{}`, which a string satisfies, so `plain(className)` — the
+    // cn habit — compiled and the class vanished.
+    const plain = variants("flex items-center");
+    const className = "mt-2";
+    // @ts-expect-error extra classes are the second argument.
+    plain("mt-2");
+    // @ts-expect-error the same, through a variable.
+    plain(className);
+    expect(plain(undefined, className)).toBe("flex items-center mt-2");
+  });
+
+  it("does not take a recipe config held in a variable for base classes", () => {
+    // With the base-first overloads ahead of the config ones, a config in a variable —
+    // no excess-property check to refuse it — would have matched `variants(base)` and
+    // lost its variants' types.
+    const config = {
+      base: "rounded",
+      variants: { tone: { a: "bg-red-500", b: "bg-blue-500" } },
+    } as const;
+    const recipe = variants(config);
+    expectTypeOf<VariantProps<typeof recipe>>().toEqualTypeOf<{
+      tone?: "a" | "b" | undefined;
+    }>();
+    // @ts-expect-error "c" is not one of tone's options.
+    recipe({ tone: "c" });
+    expect(recipe({ tone: "b" })).toBe("rounded bg-blue-500");
+  });
+});
+
+describe("a readonly class list", () => {
+  it("is a class value wherever a mutable one is", () => {
+    // `as const` lists were refused by ss and variants, though the runtime reads them the
+    // same and `on` and a recipe's `compound` already took them.
+    const layout = ["flex", "gap-2"] as const;
+    const fromProps: readonly string[] = ["p-4"];
+    expect(ss({ base: layout, md: "gap-4" })).toBe("flex gap-2 md:gap-4");
+    expect(ss(layout)).toBe("flex gap-2");
+    expect(ss({ md: fromProps })).toBe("md:p-4");
+    const recipe = variants({ base: layout, variants: { s: { a: ["p-1", "m-1"] as const } } });
+    expect(recipe({ s: "a" })).toBe("flex gap-2 p-1 m-1");
+  });
 });
 
 describe("a variant whose options are numbered", () => {

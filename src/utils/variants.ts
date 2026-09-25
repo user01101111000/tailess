@@ -195,8 +195,11 @@ export interface VariantComponent<V extends VariantGroups> {
    * The class string for these props, with the caller's extra classes last. An extra is
    * a {@link ClassArg} — not an `ss` map, which the build could never see here; wrap
    * one in `ss()`.
+   *
+   * `props` is an object, always: with no variants its type was `{}`, which a string
+   * satisfies, so `bare(className)` — the `cn` habit — compiled and dropped the class.
    */
-  (props?: PropsOf<V>, ...rest: ClassArg[]): string;
+  (props?: PropsOf<V> & object, ...rest: ClassArg[]): string;
   /**
    * The variants it was built from, kept so `VariantProps<typeof button>` has
    * something to read the option names back out of — and useful in its own right for
@@ -214,7 +217,7 @@ export interface SlottedComponent<V extends AnyGroups, S extends SlotDefaults> {
    * {@link ClassArg} — an `ss` map there is never seen by the build; wrap it in `ss()`.
    */
   (
-    props?: PropsOf<V>,
+    props?: PropsOf<V> & object,
     extra?: { -readonly [K in keyof S]?: ClassArg | undefined },
   ): { -readonly [K in keyof S]: string };
   readonly variants: V;
@@ -498,19 +501,18 @@ type KnownParts<V, S> = {
   };
 };
 
-export function variants<
-  const S extends SlotDefaults,
-  const V extends SlottedGroups<S>,
-  const E extends AnySlottedRecipe | undefined = undefined,
->(
-  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E } & {
-    variants: KnownParts<V, MergedSlots<S, InheritedSlots<E>>>;
-  },
-): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
-export function variants<
-  const V extends VariantGroups,
-  const E extends AnyRecipe | undefined = undefined,
->(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
+// The overloads that take base classes first come first. TypeScript reports a call no
+// overload accepts against the *last* one it tried, and with `variants(base)` last a typo
+// anywhere in a flat recipe — `compound: [{ tones: … }]` — was "'variants' does not exist
+// in type 'SsInput'", pointing at `variants` and naming nothing that was wrong. With the
+// flat config last, the error is about the flat config, at the rule, with the typo in it.
+// A config object is refused by the base overload by type rather than by excess-property
+// checking, so a config held in a variable cannot land there either.
+
+/** `cva`'s one-argument call: base classes and nothing else. */
+export function variants<const B extends SsArg>(
+  base: B extends { variants: unknown } ? never : B,
+): VariantComponent<Empty>;
 /**
  * `cva`'s own call shape: the base classes first, everything else second.
  *
@@ -525,8 +527,19 @@ export function variants<
   base: SsArg,
   config: Omit<VariantsConfig<V, Inherited<E>>, "base"> & { extend?: E },
 ): VariantComponent<V & Inherited<E>>;
-/** `cva`'s other call: base classes and nothing else. */
-export function variants(base: SsArg): VariantComponent<Empty>;
+export function variants<
+  const S extends SlotDefaults,
+  const V extends SlottedGroups<S>,
+  const E extends AnySlottedRecipe | undefined = undefined,
+>(
+  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E } & {
+    variants: KnownParts<V, MergedSlots<S, InheritedSlots<E>>>;
+  },
+): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
+export function variants<
+  const V extends VariantGroups,
+  const E extends AnyRecipe | undefined = undefined,
+>(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
 
 /**
  * Build a component's `className` from a set of typed variants.
