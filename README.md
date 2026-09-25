@@ -210,6 +210,14 @@ printing it. `doctor` is the same reading without the edit, and is worth a CI st
 missing plugin is the one failure nothing else reports, because the build succeeds and
 the class attributes are correct while nothing on the page has styles.
 
+Both read the file your build loads: `vite.config.*` in Vite's own order, the `vite` key of
+an Astro, Nuxt or SolidStart config, and a PostCSS config wherever postcss-load-config
+looks for one — `package.json` and every `.postcssrc` spelling included. They follow a
+plugin list into a local preset (`plugins: sharedPlugins()` from `./vite.shared`), and a
+PostCSS entry counts only when it is listed, not `false`, and ahead of
+`@tailwindcss/postcss`. `init` edits `vite.config` and `postcss.config` files; for a
+framework's config or a JSON or YAML one it prints the line to add instead.
+
 Or do it by hand — it is one line either way.
 
 ### Vite
