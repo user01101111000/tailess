@@ -1374,22 +1374,37 @@ script that builds your CSS:
 
 **Publishing a component library.** A consumer's scan skips `node_modules`, and even
 pointed at your package it would be reading a bundled `dist` where the helper names are
-gone. So enumerate the classes at *your* build time and ship the result:
+gone. So enumerate the classes at *your* build time and ship the result — together with
+a line that points the consumer's Tailwind at your bundle, because `emit` writes only the
+classes tailess *builds*. Your `base` classes, flat variant options, `match` values and
+plain `className` strings are literals, which in an app Tailwind finds by scanning; in a
+consumer nothing scans your package unless your stylesheet says so.
 
 ```json
 {
   "scripts": { "build": "tsup && tailess emit --content src --out dist/tailess.css" },
-  "files": ["dist"],
-  "exports": { ".": "./dist/index.js", "./styles.css": "./dist/tailess.css" }
+  "files": ["dist", "styles.css"],
+  "exports": { ".": "./dist/index.js", "./styles.css": "./styles.css" }
 }
 ```
 
-Your consumer adds one line, and needs neither the plugin nor a scan of your source:
+```css
+/* styles.css, at your package root, committed */
+@source "./dist";            /* your bundle: every literal class in it */
+@import "./dist/tailess.css"; /* the classes tailess builds at runtime */
+```
+
+`@source` resolves relative to the file it is in, so your consumer still adds one line,
+and needs neither the plugin nor a scan of your source:
 
 ```css
 @import "tailwindcss";
 @import "@acme/ui/styles.css";
 ```
+
+Ship only the emitted file and the prefixed classes arrive while every literal one is
+unstyled in the consumer — nothing in either build says so. `test/integration/library.test.ts`
+builds this recipe end to end.
 
 The file is deterministic — same source, same bytes — so it diffs cleanly and caches.
 
