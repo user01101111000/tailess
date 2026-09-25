@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
+import { readOptions } from "../integration/options.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
@@ -103,7 +104,8 @@ const debounceMs = 25;
 // gets the plugin creator itself rather than a namespace object Vite would reject.
 // Adding a named export back would also make Rollup's CJS writer warn on every
 // build, since it cannot tell which shape a mixed entry was meant to have.
-function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
+function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
+  const options = readOptions<TailessViteOptions>(given, "tailess/vite");
   let root = process.cwd();
   let sidecar = createSidecar(join(root, "node_modules", ".vite"));
 

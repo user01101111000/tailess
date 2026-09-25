@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { collect, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
 import { sourceLiterals } from "../integration/inject.js";
+import { readOptions } from "../integration/options.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
@@ -214,7 +215,8 @@ function sidecarScope(options: TailessPostcssOptions): string | undefined {
 let warnedAboutOrder = false;
 
 const tailessPostcss = Object.assign(
-  (options: TailessPostcssOptions = {}): Plugin => {
+  (given: TailessPostcssOptions = {}): Plugin => {
+    const options = readOptions<TailessPostcssOptions>(given, "tailess/postcss");
     const sidecar = createSidecar(
       options.cacheDir ?? join(process.cwd(), "node_modules", ".cache"),
       sidecarScope(options),
