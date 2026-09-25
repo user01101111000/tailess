@@ -1195,16 +1195,22 @@ builds a variant prefix is not, and that is what this reports.
 
 **A bucket the scanner cannot read** is the package's most common support case, and the
 type system cannot express any of it — `ss({ md: size })` is perfectly well typed and
-completely unstyled. Everything the
-[scanner cannot see](#what-the-scanner-can-and-cannot-see) under a *prefixed* key is
-reported by name:
+completely unstyled. Every part of a value under a *prefixed* key that becomes a class —
+both branches of a ternary, both sides of `||` and `??`, each array element — has to be
+one the [scanner can see](#what-the-scanner-can-and-cannot-see), and the one that is not
+is reported by name:
 
 ```ts
 ss({ md: size })                 // ❌ reported
 ss({ md: `text-${scale}` })      // ❌ reported
+ss({ md: cond ? size : "p-2" })  // ❌ reported — "p-2" says nothing about `size`
+ss({ md: [size, "flex"] })       // ❌ reported
 ss({ base: size })               // ✅ no prefix, so Tailwind finds the literal itself
 ss({ md: cond && "p-4" })        // ✅ the sweep reads both halves
 ```
+
+A helper call inside a bucket — `ss({ md: on("hover", size) })` — is read as its own
+call, and its arguments are not checked from here.
 
 **An `ss` map in the wrong place.** Composition runs one way — a helper nests *inside*
 an `ss` bucket, never the reverse. Every helper's class argument is a `ClassValue`, where

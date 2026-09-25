@@ -14,6 +14,7 @@ import {
   type RawCall,
   scanCalls,
   scanMatchCalls,
+  splitArgs,
 } from "./scan.js";
 
 /**
@@ -183,7 +184,103 @@ function bucketMapAsDictionary(
 }
 
 /** Values that contribute no class at all, so being unreadable costs nothing. */
-const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '""', "''", "``"]);
+const contributesNothing = new Set([
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "void 0",
+  "0",
+  '""',
+  "''",
+  "``",
+]);
+
+/**
+ * The index of the first top-level `op` in `blank` — the value with its strings and
+ * comments masked — or -1. Top level means outside every `()`, `[]` and `{}`.
+ */
+function topLevel(blank: string, op: RegExp): number {
+  let depth = 0;
+  for (let i = 0; i < blank.length; i += 1) {
+    const c = blank[i];
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") depth -= 1;
+    else if (depth === 0 && op.test(blank.slice(i, i + 2))) return i;
+  }
+  return -1;
+}
+
+/**
+ * The parts of a bucket value that become classes.
+ *
+ * Both branches of a ternary, both sides of `||` and `??`, the last of an `&&` chain —
+ * the ones before it are conditions — and every element of an array. A literal anywhere
+ * used to vouch for the whole value, so `cond ? size : "p-2"`, `[size, "flex"]` and
+ * `size ?? "p-2"` all read as fine while `size` built a class nothing enumerated.
+ */
+function operands(value: string): string[] {
+  const text = value.trim();
+  if (isArrayLiteral(text)) return splitArgs(arrayBody(text)).flatMap(operands);
+  const blank = maskLiterals(text, true);
+  if (text.startsWith("(") && closing(blank) === blank.length - 1) {
+    return operands(text.slice(1, -1));
+  }
+  const split = ternary(blank);
+  if (split) {
+    const [question, colon] = split;
+    return [...operands(text.slice(question + 1, colon)), ...operands(text.slice(colon + 1))];
+  }
+  for (const [op, keepAll] of [
+    [/^(?:\|\||\?\?)/, true],
+    [/^&&/, false],
+  ] as const) {
+    const at = topLevel(blank, op);
+    if (at === -1) continue;
+    const right = operands(text.slice(at + 2));
+    return keepAll ? [...operands(text.slice(0, at)), ...right] : right;
+  }
+  return [text];
+}
+
+/** Where the bracket opening `blank` closes, or -1. */
+function closing(blank: string): number {
+  let depth = 0;
+  for (let i = 0; i < blank.length; i += 1) {
+    const c = blank[i];
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if ((c === ")" || c === "]" || c === "}") && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * The top-level `?` of a ternary in `blank` and the `:` that closes it, or `undefined`.
+ * `?.` and `??` are not ternaries; a nested ternary's `:` is its own.
+ */
+function ternary(blank: string): [question: number, colon: number] | undefined {
+  let depth = 0;
+  let question = -1;
+  let nested = 0;
+  for (let i = 0; i < blank.length; i += 1) {
+    const c = blank[i];
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") depth -= 1;
+    else if (depth !== 0) continue;
+    else if (c === "?") {
+      if (blank[i + 1] === "." || blank[i + 1] === "?" || blank[i - 1] === "?") continue;
+      if (question === -1) question = i;
+      else nested += 1;
+    } else if (c === ":" && question !== -1) {
+      if (nested === 0) return [question, i];
+      nested -= 1;
+    }
+  }
+  return undefined;
+}
+
+/** A bare identifier: a shorthand property, `{ md }`, is `md: md`. */
+const identifier = /^[A-Za-z_$][\w$]*$/;
 
 /**
  * Report a bucket whose value the scanner cannot read.
@@ -213,30 +310,50 @@ function dynamicBuckets(
   nested = true,
 ): void {
   if (!text) return;
+  const unreadable = (key: string, trimmed: string, part: string) =>
+    report({
+      kind: "dynamic-value",
+      message:
+        `the "${key}" bucket is set to \`${trimmed}\`` +
+        (part === trimmed ? "" : `, and \`${part}\` in it`) +
+        ", which the scanner cannot read — so nothing enumerates the class it builds and it " +
+        "reaches the element with no rule. Keep the class literal at the call site: " +
+        `match(${part}, { … }) for a lookup, or vars() when the value is a number.`,
+    });
   for (const map of objectLiterals(text)) {
     for (const { key, value } of parseObject(map)) {
       const prefixed = underPrefix || key !== "base";
-      if (objectLiterals(value).length > 0) {
+      if (objectLiterals(value).length > 0 && !isArrayLiteral(value.trim())) {
         if (nested) dynamicBuckets(value, report, prefixed);
         continue;
       }
       if (!prefixed) continue;
       const trimmed = value.trim();
-      if (trimmed === "" || contributesNothing.has(trimmed)) continue;
-      // A literal anywhere in the value is enough: the sweep reads both branches of a
-      // ternary and both halves of `cond && "p-4"`, so those are not dynamic.
-      if (extractStrings(value).length > 0) continue;
-      report({
-        kind: "dynamic-value",
-        message:
-          `the "${key}" bucket is set to \`${trimmed}\`, which the scanner cannot read — so ` +
-          `nothing enumerates the class it builds and it reaches the element with no rule. ` +
-          `Keep the class literal at the call site: match(${trimmed}, { … }) for a lookup, ` +
-          `or vars() when the value is a number.`,
-      });
+      // Each part that becomes a class has to be readable on its own — a literal in the
+      // other branch builds a different class, and says nothing about this one. A known
+      // helper's call is its own call, read where it stands; an object in an array is a
+      // clsx dictionary, whose keys are the classes.
+      for (const part of operands(trimmed)) {
+        if (part === "" || contributesNothing.has(part) || extractStrings(part).length > 0)
+          continue;
+        if (part.startsWith("{") || helperCall.test(part)) continue;
+        unreadable(key, trimmed, part);
+        break;
+      }
+    }
+    // `parseObject` skips shorthand, and `{ base: "p-1", md }` is `md: md` — a variable
+    // under a prefix, as unreadable as any other.
+    const body = map.trim().slice(1, map.trim().lastIndexOf("}"));
+    for (const entry of splitArgs(body)) {
+      const name = entry.trim();
+      if (!identifier.test(name) || !everyKey.has(name)) continue;
+      if (name !== "base" || underPrefix) unreadable(name, name, name);
     }
   }
 }
+
+/** A call to a helper the scanner reads, which it enumerates where it stands. */
+const helperCall = new RegExp(`^(?:${helperNames.join("|")})\\s*\\(`);
 
 /** What each helper that writes into `…-[…]` calls the text it puts there. */
 const arbitraryNoun: Record<string, string> = {

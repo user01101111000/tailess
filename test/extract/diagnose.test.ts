@@ -528,12 +528,44 @@ describe("a bucket the scanner cannot read", () => {
     expect(kinds(`ss({ base: props.className })`)).toEqual([]);
   });
 
-  it("says nothing when a literal is in reach", () => {
+  it("says nothing when every part that becomes a class is a literal", () => {
     expect(kinds(`ss({ md: cond && "p-4" })`)).toEqual([]);
+    expect(kinds(`ss({ md: a && b && "p-4" })`)).toEqual([]);
     expect(kinds(`ss({ md: cond ? "p-4" : "p-2" })`)).toEqual([]);
-    expect(kinds(`ss({ md: [x, "p-4"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: cond ? "p-4" : undefined })`)).toEqual([]);
+    expect(kinds(`ss({ md: a ? "p-1" : b ? "p-2" : "p-3" })`)).toEqual([]);
+    expect(kinds(`ss({ md: [cond && "p-4", "flex"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: [{ "p-4": open }, "flex"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: (cond ? "p-4" : "p-2") })`)).toEqual([]);
+    expect(kinds(`ss({ md: user?.admin ? "p-4" : "p-2" })`)).toEqual([]);
     expect(kinds(`ss({ md: { hover: "underline" } })`)).toEqual([]);
     expect(kinds(`ss({ md: on("hover", "underline") })`)).toEqual([]);
+    expect(kinds(`ss({ base: "p-1", md: "p-2" })`)).toEqual([]);
+  });
+
+  it("reports the part that is not a literal, even beside one that is", () => {
+    // A literal anywhere in the value vouched for all of it, so each of these built a
+    // class nothing enumerated — `md:<size>` — and said nothing. `[x, "p-4"]` was in the
+    // quiet list above until the audit that found this: `md:<x>` has no rule either.
+    for (const code of [
+      `ss({ md: cond ? size : "p-2" })`,
+      `ss({ md: [size, "flex"] })`,
+      `ss({ md: [x, "p-4"] })`,
+      `ss({ md: size ?? "p-2" })`,
+      `ss({ md: size || "p-2" })`,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the fixture
+      'ss({ md: [`text-${scale}`, "font-bold"] })',
+      `ss({ md: ["p-4", button({ tone })] })`,
+      `ss({ base: "p-1", md })`,
+      `ss({ md: { base: "p-1", hover } })`,
+    ]) {
+      expect(kinds(code), code).toEqual(["dynamic-value"]);
+    }
+    const [first] = diag(`ss({ md: cond ? size : "p-2" })`);
+    expect(first?.message).toContain(
+      '"md" bucket is set to `cond ? size : "p-2"`, and `size` in it',
+    );
+    expect(first?.message).toContain("match(size, { … })");
   });
 
   it("says nothing about a value that contributes no class at all", () => {
