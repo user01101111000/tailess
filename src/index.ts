@@ -24,7 +24,7 @@ export {
   stateKeys,
 } from "./constants.js";
 export type { ConfigureOptions, TailessSettings } from "./internal/settings.js";
-export { configure } from "./internal/settings.js";
+export { configure, resetWarnings } from "./internal/settings.js";
 export type { ClassArg, ClassValue, ResponsiveMap, SsArg, SsInput, SsValue } from "./types.js";
 export { aria, data } from "./utils/attrs.js";
 export { cn } from "./utils/cn.js";

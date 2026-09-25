@@ -887,7 +887,8 @@ skip merging entirely.
 make them fatal in CI, collect to assert on them in a test, or pass `() => {}` to
 silence them. Each warning is reported once per process, so passing `onWarn` also clears
 that history — otherwise a collector set up after the code under test had already warned
-would stay empty and the assertion would pass without asserting anything.
+would stay empty and the assertion would pass without asserting anything. `resetWarnings()`
+clears it on its own, for a test that asserts on the same warning twice.
 
 **`keys`** is the runtime half of the next section.
 

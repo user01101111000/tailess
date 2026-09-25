@@ -165,3 +165,18 @@ describe("the memo behind once-per-process warnings", () => {
     expect(firstTime(seen, "value-0")).toBe(true);
   });
 });
+
+describe("resetWarnings from the public entry", () => {
+  it("lets the same warning report a second time", async () => {
+    // The 0.12.0 changelog says it is exported; it was not, from any entry.
+    const { resetWarnings } = await import("../../src/index.js");
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    withPrefix("has-[data-reset=a b]", "p-4");
+    withPrefix("has-[data-reset=a b]", "p-4");
+    expect(seen).toHaveLength(1);
+    resetWarnings();
+    withPrefix("has-[data-reset=a b]", "p-4");
+    expect(seen).toHaveLength(2);
+  });
+});
