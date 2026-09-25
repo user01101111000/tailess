@@ -277,6 +277,11 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
     { src: `on(c ? ["dark", "hover"] : "focus", "underline")`, env: { c } },
     { src: `on([c ? "md" : "lg", "dark", c ? "hover" : "focus"], "underline")`, env: { c } },
   ]),
+  // An inline lookup picks one of its values; under a prefix, each value is a class.
+  ...["a", "b"].map((k) => ({ src: `ss({ md: { a: "p-2", b: "p-4" }[k] })`, env: { k } })),
+  // Through a namespace import, a method call is still ours.
+  { src: `t.on("hover", "underline")`, env: { t: { on } } },
+  { src: `t.on(["dark", "hover"], "underline")`, env: { t: { on } } },
 ];
 
 describe("what the runtime builds, the scanner finds", () => {

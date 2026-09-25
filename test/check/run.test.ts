@@ -425,6 +425,30 @@ describe("the check itself", () => {
   });
 });
 
+describe("code that only looks like a tailess call", () => {
+  it("passes event handlers and inline lookups, which are healthy code", async () => {
+    // Each of these failed the gate: `end:animate-spin` from an EventEmitter handler,
+    // `click:hidden` from jQuery, `primary:bg-blue-600` from an inline lookup object —
+    // "3 of 3 runtime-built classes reach the element with no rule".
+    await writeFile(
+      join(dir, "stream.ts"),
+      `stream.on("end", () => el.classList.remove("animate-spin"));\n` +
+        `socket.on("message", () => el.classList.add("hidden"));\n`,
+    );
+    await writeFile(
+      join(dir, "menu.ts"),
+      `import { ss } from "tailess";\n` +
+        `$("#menu").on("click", () => $("#nav").toggleClass("hidden flex"));\n` +
+        `export const pill = (tone) => ss("rounded", { primary: "bg-blue-600", danger: "bg-red-600" }[tone]);\n` +
+        `export const pad = (k) => ss({ md: { a: "p-2", b: "p-4" }[k] });\n`,
+    );
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    const { code, output } = await check({ strict: true });
+    expect(output).not.toContain("no rule");
+    expect(code).toBe(0);
+  });
+});
+
 describe("stylesheets imported from packages", () => {
   /** A package in the project's own node_modules, with a manifest and one stylesheet. */
   async function pkg(name: string, manifest: object, file: string, css: string) {

@@ -466,6 +466,41 @@ function renamedImports(code: string, report: (d: Diagnostic) => void): void {
 const anyTailessImport = /^[ \t]*import\b[^;]*?["']tailess["']|\brequire\(\s*["']tailess["']\s*\)/m;
 /** `import * as tl from "tailess"`, whose members are helper calls. */
 const namespaceImport = /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm;
+/** `import { ss, on } from "tailess"`, the names a bare call has to be. */
+const namedImport =
+  /\bimport\s+(?:type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
+/** `const { ss, on } = require("tailess")`, the same in CommonJS. */
+const namedRequire = /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*["']tailess["']\s*\)/g;
+
+/**
+ * The local names an import or a destructuring `require` of tailess binds.
+ *
+ * Type-only entries bind nothing callable. A renamed one binds its new name, which is
+ * not a helper name the scanner looks for — and the renamed-import check reports it.
+ */
+function boundNames(list: string, out: Set<string>): void {
+  for (const raw of list.split(",")) {
+    const entry = raw.trim();
+    if (entry === "" || entry.startsWith("type ")) continue;
+    const local = entry
+      .split(/\s+as\s+|\s*:\s*/)
+      .at(-1)
+      ?.trim();
+    if (local && /^[A-Za-z_$][\w$]*$/.test(local)) out.add(local);
+  }
+}
+
+/** The bare names a file can call a helper by: what it imported from tailess by name. */
+function importedNames(masked: string): Set<string> {
+  const names = new Set<string>();
+  for (const pattern of [namedImport, namedRequire]) {
+    pattern.lastIndex = 0;
+    for (let m = pattern.exec(masked); m !== null; m = pattern.exec(masked)) {
+      boundNames(m[1] as string, names);
+    }
+  }
+  return names;
+}
 
 /**
  * The names a call has to be reached through in this file to be one of ours, or `null`
@@ -522,8 +557,14 @@ export function diagnose(code: string, file?: string): Diagnostic[] {
 
   const receivers = callableHere(masked);
   if (receivers) {
+    // A bare call is ours only under a name the file imported from tailess: Solid's `on`
+    // beside tailess's `ss` is a file that imports the package, and its
+    // `on(accessor, (c) => ({ open: c > 0 }))` was checked as a class map.
+    const bare = importedNames(masked);
     for (const call of scanCalls(code)) {
-      if (receivers.has(call.receiver)) check(call, report);
+      if (call.receiver === "" ? bare.has(call.name) : receivers.has(call.receiver)) {
+        check(call, report);
+      }
     }
   }
 

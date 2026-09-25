@@ -17,7 +17,7 @@ import { diagnose } from "../../src/extract/diagnose.js";
  * `has`, `inside` and `between` are ordinary identifiers, so without this a file that has
  * never heard of the package would be told one of its classes is unstyled.
  */
-const importsThem = `import { ss, cn, on, until, between, data, aria, withPrefix, supports, notSupports, group, peer, container, has, notHas, inside, nth, nthLast, variants } from "tailess";\n`;
+const importsThem = `import { ss, cn, on, until, between, data, aria, withPrefix, supports, notSupports, group, peer, container, has, notHas, inside, nth, nthLast, nthOfType, nthLastOfType, responsive, match, variants } from "tailess";\n`;
 
 /** Diagnose `code` as the body of a file that imports the helpers. */
 const diag = (code: string, file?: string) => diagnose(importsThem + code, file);
@@ -176,6 +176,36 @@ export function Presence() {
     // reads `socket.on` as a call, and only the reporting has to know better.
     expect(kinds(`socket.on("presence", { base: "x", md: "y" })`)).toEqual([]);
     expect(kinds(`emitter.on("change", { first: true, last: false })`)).toEqual([]);
+  });
+
+  it("says nothing about a call through an expression, which reads as bare otherwise", () => {
+    // `$(x).on(…)` has no identifier before its dot, so it was taken for a bare `on`: a
+    // jQuery toggle in a file importing `ss` was told "hidden" never reaches the element.
+    expect(kinds(`$("#menu").on("click", () => $("#nav").toggleClass("hidden flex"))`)).toEqual([]);
+    expect(kinds(`getSocket().on("presence", { base: "x", md: "y" })`)).toEqual([]);
+    expect(kinds(`items[0].on("hover", { base: "underline" })`)).toEqual([]);
+  });
+
+  it("says nothing about a bare call to a helper the file imported from elsewhere", () => {
+    // Solid's `on` beside tailess's `ss`: the file imports the package, so every bare
+    // `on(…)` was checked as ours, and the accessor's `{ open, active }` became a bucket
+    // map given class names.
+    const solid = `import { createMemo, on } from "solid-js";
+import { ss } from "tailess";
+const state = createMemo(on(() => props.count, (c) => ({ open: c > 0, active: c > 5 })));
+export const cls = ss({ md: "p-4" });`;
+    expect(diagnose(solid, "src/Counter.tsx")).toEqual([]);
+    // Named in the import, it is ours again.
+    const ours = `import { ss, on } from "tailess";\non("hover", { base: "underline" });`;
+    expect(diagnose(ours, "src/a.ts").map((d) => d.kind)).toEqual(["bucket-as-dictionary"]);
+    const required = `const { on } = require("tailess");\non("hover", { base: "underline" });`;
+    expect(diagnose(required, "src/a.cjs").map((d) => d.kind)).toEqual(["bucket-as-dictionary"]);
+  });
+
+  it("reads an inline lookup as its values, not as a bucket map", () => {
+    // `{ … }[tone]` picks one value at runtime. Taking it for a map named its keys as
+    // variants — `primary:bg-blue-600` — and warned that on() was given a dictionary.
+    expect(kinds(`on("hover", { sm: "underline", lg: "font-bold" }[size])`)).toEqual([]);
   });
 
   it("still reports a call through a namespace import, which really is ours", () => {

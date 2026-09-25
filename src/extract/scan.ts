@@ -577,13 +577,24 @@ export function objectLiterals(text: string): string[] {
       if (frames.pop() === true) calls -= 1;
     } else if (c === "{" && brackets === 0 && calls === 0) {
       const end = matchBrace(text, i);
-      out.push(text.slice(i, end));
+      // `{ primary: "bg-blue-600", danger: "bg-red-600" }[tone]` is a lookup that picks
+      // one value, not a map: its keys are discriminants, and reading them as variants
+      // put `primary:bg-blue-600` in the candidate list for `check` to fail. The values
+      // are string literals, which the sweep over this text already reads.
+      if (!lookupFollows(text, end)) out.push(text.slice(i, end));
       i = end;
       continue;
     }
     i += 1;
   }
   return out;
+}
+
+/** True when the object literal ending at `end` is indexed straight away: `{…}[key]`. */
+function lookupFollows(text: string, end: number): boolean {
+  let j = end;
+  while (j < text.length && /\s/.test(text[j] as string)) j += 1;
+  return text[j] === "[" || (text[j] === "?" && text[j + 1] === "." && text[j + 2] === "[");
 }
 
 /** The identifier immediately before the `(` at `i`, or `""` for a grouping paren. */
@@ -650,7 +661,10 @@ export function dictionaryKeys(text: string, bare: boolean, shorthand = true): s
 
     if (c === "{") {
       const end = matchBrace(text, i);
-      if (foreign === 0 && (regions > 0 || bare)) collectKeys(text.slice(i, end), out, shorthand);
+      // `{ sm: "underline" }[size]` is a lookup whose result is one of its values, not a
+      // dictionary whose keys become classes.
+      const dictionary = foreign === 0 && (regions > 0 || bare) && !lookupFollows(text, end);
+      if (dictionary) collectKeys(text.slice(i, end), out, shorthand);
       i = end;
       continue;
     }
@@ -840,11 +854,15 @@ export function scanCalls(code: string): RawCall[] {
   return calls;
 }
 
-/** `foo` in `foo.ss(`, at the end of the text before the name. */
-const memberReceiver = /([A-Za-z_$][\w$]*)\s*\.\s*$/;
+/**
+ * `foo` in `foo.ss(`, at the end of the text before the name — or the `)` / `]` that
+ * ends an expression, as in `$(el).on(` or `items[0].on(`, which no import can name.
+ */
+const memberReceiver = /([A-Za-z_$][\w$]*|[)\]])\s*\??\.\s*$/;
 
 /**
- * The identifier a call was reached through, or `""` when it was called bare.
+ * The identifier a call was reached through, `")"` or `"]"` when it was reached through
+ * an expression, or `""` when it was called bare.
  *
  * The lookback is bounded: an identifier and a dot are a few characters, and this runs
  * once per matched call across every file in the project.

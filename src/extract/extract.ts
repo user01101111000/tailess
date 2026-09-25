@@ -1,3 +1,4 @@
+import { stateKeys } from "../constants.js";
 import { escapeCondition } from "../internal/condition.js";
 import {
   arrayBody,
@@ -131,6 +132,9 @@ function literalWord(text: string, word: string): boolean {
  * them; a real one has one or two, and this only keeps generated code from exploding.
  */
 const maxStacks = 256;
+
+/** Every state `on` accepts, for telling `t.on("hover", …)` from `stream.on("end", …)`. */
+const knownStates = new Set<string>(stateKeys);
 
 /** Helper name to the variant it builds, for the four `nth-*` families. */
 const nthVariants: Record<string, string> = {
@@ -398,7 +402,16 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       }
       // A state outside any list stands alone: `c ? ["dark", "hover"] : "focus"`.
       for (const state of extractStrings(rest)) push(state);
-      emitValue(args[1] ?? "", prefixes, add, follow);
+      // `on` is the one helper name every event emitter shares, and a method call on
+      // anything might be a namespace import — so `stream.on("end", …)` and
+      // `$(el).on("click", …)` were read as ours, and `end:animate-spin` failed the gate
+      // on healthy code. `on` only accepts Tailwind's own states, so through a receiver
+      // a stack of anything else cannot be a call the runtime builds.
+      const reachable =
+        call.receiver === ""
+          ? prefixes
+          : prefixes.filter((stack) => stack.split(":").every((state) => knownStates.has(state)));
+      emitValue(args[1] ?? "", reachable, add, follow);
       return;
     }
 
