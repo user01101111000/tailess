@@ -906,6 +906,7 @@ cannot know about. [Declare it](#build-time-checks) and it joins the union:
 
 ```ts
 // tailess.d.ts, anywhere your tsconfig includes
+export {}; // makes this file a module, so the block below adds to tailess's types
 declare module "tailess" {
   interface CustomKeys {
     "3xl": true;
@@ -913,6 +914,10 @@ declare module "tailess" {
   }
 }
 ```
+
+The `export {}` matters. A `.d.ts` with no import or export of its own is a global
+script, and there `declare module "tailess"` does not add to the package's types — it
+*replaces* them, and every `import { ss } from "tailess"` stops compiling.
 
 ```ts
 ss({ md: "p-6", "3xl": "p-12", "sidebar-open": "translate-x-0" });

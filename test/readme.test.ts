@@ -213,3 +213,48 @@ describe("the list of exported types", () => {
     expect(undocumented).toEqual([]);
   });
 });
+
+describe("the tailess.d.ts the README tells you to write", () => {
+  it("adds to the package's types rather than replacing them", async () => {
+    // Copied verbatim it was a global script, so `declare module "tailess"` replaced the
+    // package's declarations and every `import { ss } from "tailess"` stopped compiling.
+    // Compiled here against the built declarations, exactly as a consumer's would be.
+    const { existsSync } = await import("node:fs");
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const ts = (await import("typescript")).default;
+
+    const declarations = fileURLToPath(new URL("../dist/index.d.ts", import.meta.url));
+    expect(existsSync(declarations), "build first: this compiles against dist/").toBe(true);
+
+    const snippet = readme.match(/```ts\n(\/\/ tailess\.d\.ts[\s\S]*?)```/)?.[1];
+    expect(snippet).toBeDefined();
+
+    const dir = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-dts-"));
+    try {
+      await writeFile(join(dir, "tailess.d.ts"), snippet as string);
+      await writeFile(
+        join(dir, "main.ts"),
+        `import { configure, ss } from "tailess";\n` +
+          `configure({ keys: ["3xl", "sidebar-open"] });\n` +
+          `export const a = ss({ md: "p-6", "3xl": "p-12", "sidebar-open": "translate-x-0" });\n`,
+      );
+      const program = ts.createProgram([join(dir, "main.ts"), join(dir, "tailess.d.ts")], {
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        target: ts.ScriptTarget.ES2022,
+        paths: { tailess: [declarations] },
+      });
+      const errors = ts
+        .getPreEmitDiagnostics(program)
+        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+      expect(errors).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
