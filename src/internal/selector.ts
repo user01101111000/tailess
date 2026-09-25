@@ -7,23 +7,30 @@
  * reimplementing the other direction and getting it wrong somewhere else.
  *
  * Notably a leading digit becomes a hex escape, so `2xl:flex` is emitted as
- * `.\32 xl\:flex`.
+ * `.\32 xl\:flex`. Anything from U+0080 up is written as it is, as `CSS.escape` does
+ * — `data-[state=geöffnet]:` keeps its `ö`, and an emoji its whole code point — and a
+ * control character becomes a hex escape.
  */
 export function selectorFor(cls: string): string {
   let out = "";
-  for (let i = 0; i < cls.length; i += 1) {
-    const ch = cls[i] as string;
-    if (i === 0 && ch >= "0" && ch <= "9") {
-      out += `\\3${ch} `;
-      continue;
-    }
-    out += /[a-zA-Z0-9_-]/.test(ch) ? ch : `\\${ch}`;
+  let first = true;
+  for (const ch of cls) {
+    const code = ch.codePointAt(0) as number;
+    if (first && ch >= "0" && ch <= "9") out += `\\3${ch} `;
+    else if (code < 0x20 || code === 0x7f) out += `\\${code.toString(16)} `;
+    else if (code >= 0x80 || /[a-zA-Z0-9_-]/.test(ch)) out += ch;
+    else out += `\\${ch}`;
+    first = false;
   }
   return `.${out}`;
 }
 
-/** What can continue a class name, so a match that ends in one is a longer class. */
-const nameChar = /[\w-]/;
+/**
+ * True if `ch` can continue a class name, so a match that ends in one is a longer class —
+ * including a character past ASCII, which a selector carries unescaped.
+ */
+const continuesName = (ch: string): boolean =>
+  /[\w-]/.test(ch) || (ch.codePointAt(0) as number) >= 0x80;
 
 /**
  * True if `css` contains a rule for `cls`.
@@ -38,7 +45,7 @@ export function hasRule(css: string, cls: string): boolean {
   let at = css.indexOf(selector);
   while (at !== -1) {
     const next = css[at + selector.length];
-    if (next === undefined || (next !== "\\" && !nameChar.test(next))) return true;
+    if (next === undefined || (next !== "\\" && !continuesName(next))) return true;
     at = css.indexOf(selector, at + 1);
   }
   return false;
