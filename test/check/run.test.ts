@@ -425,6 +425,68 @@ describe("the check itself", () => {
   });
 });
 
+describe("stylesheets imported from packages", () => {
+  /** A package in the project's own node_modules, with a manifest and one stylesheet. */
+  async function pkg(name: string, manifest: object, file: string, css: string) {
+    const root = join(dir, "node_modules", ...name.split("/"));
+    await mkdir(join(root, file, ".."), { recursive: true });
+    await writeFile(join(root, "package.json"), JSON.stringify({ name, ...manifest }));
+    await writeFile(join(root, file), css);
+  }
+
+  it("follows a style-only export whose manifest is not itself exported", async () => {
+    // tw-animate-css's shape, which shadcn/ui's Tailwind v4 stylesheet imports: the
+    // package's exports map lists "." with a `style` condition and nothing else — not
+    // `./package.json`. The real build resolved it; the gate reached for the manifest
+    // through that exports map, got ERR_PACKAGE_PATH_NOT_EXPORTED, and exited 2.
+    await pkg(
+      "tw-animate-like",
+      { exports: { ".": { style: "./dist/animate.css" } } },
+      "dist/animate.css",
+      "@utility animate-wiggle { rotate: 3deg; }",
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4", hover: "animate-wiggle" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "tw-animate-like";`);
+    const { code, output } = await check();
+    expect(output).not.toContain("not defined by");
+    expect(code).toBe(0);
+  });
+
+  it("finds a scoped package, rather than looking for @scope/package.json", async () => {
+    await pkg(
+      "@acme/tokens",
+      { exports: { ".": { style: "./tokens.css" }, "./package.json": "./package.json" } },
+      "tokens.css",
+      "@theme { --color-brand: #123456; }",
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "text-brand" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "@acme/tokens";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+
+  it("follows a style condition on a subpath export", async () => {
+    await pkg(
+      "@acme/ui",
+      { exports: { "./theme": { style: "./css/theme.css", default: "./index.js" } } },
+      "css/theme.css",
+      "@theme { --color-accent: #abcdef; }",
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "bg-accent" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "@acme/ui/theme";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+
+  it("still reads a package's top-level style field when there is no exports map", async () => {
+    await pkg("old-style", { style: "main.css" }, "main.css", "@theme { --color-old: #000; }");
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "text-old" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "old-style";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+});
+
 describe("tailess emit", () => {
   /** Run the emit command quietly, returning its exit code and what it printed. */
   async function emit(extra: Partial<Parameters<typeof run>[0]> = {}) {

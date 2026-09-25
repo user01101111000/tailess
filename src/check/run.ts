@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -207,34 +207,98 @@ export async function version(): Promise<string> {
   return "unknown";
 }
 
+/** An `exports` entry: a path, a map of conditions, or a list of fallbacks. */
+type ExportTarget = string | null | ExportTarget[] | { [condition: string]: ExportTarget };
+
 /**
- * Resolve an `@import` the way a bundler would.
+ * The file an `exports` entry names for a stylesheet: the `style` condition, which is
+ * what Tailwind's own resolver asks for, else `default` — whichever comes first, since
+ * conditions match in the order the package wrote them.
+ */
+function styleTarget(target: ExportTarget | undefined): string | undefined {
+  if (typeof target === "string") return target;
+  if (Array.isArray(target)) {
+    for (const option of target) {
+      const found = styleTarget(option);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!target) return undefined;
+  for (const [condition, value] of Object.entries(target)) {
+    if (condition === "style" || condition === "default") {
+      const found = styleTarget(value);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The directory of an installed package, found on disk rather than through Node's
+ * resolver.
+ *
+ * `require.resolve("<pkg>/package.json")` goes through the package's `exports` map, and
+ * a style-only package — tw-animate-css, which shadcn/ui's stylesheet imports, or a
+ * scoped design-token package — has no reason to export its manifest. Tailwind's own
+ * resolver does not need it to, so the gate cannot either.
+ */
+async function packageDir(name: string, base: string): Promise<string | undefined> {
+  for (let dir = base; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules", name);
+    if (await stat(join(candidate, "package.json")).catch(() => undefined)) return candidate;
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/**
+ * Resolve an `@import` the way Tailwind's Node host does.
  *
  * A bare package root resolves to JavaScript, not CSS — `require.resolve("tailwindcss")`
- * hands back `dist/lib.js` — so the package's `style` condition is what to follow. A
- * subpath (`tailwindcss/theme.css`) resolves directly.
+ * hands back `dist/lib.js` — so the package's `style` condition is what to follow, on the
+ * root or on a subpath (`@import "@acme/ui/theme"`). A subpath that names the file
+ * (`tailwindcss/theme.css`) resolves directly.
  */
 async function loadStylesheet(id: string, base: string) {
-  let path: string;
+  let path: string | undefined;
   if (id.startsWith(".") || isAbsolute(id)) {
     path = resolve(base, id);
   } else {
-    const req = createRequire(join(base, "_"));
-    let resolved: string | undefined;
     try {
-      resolved = req.resolve(id);
+      const resolved = createRequire(join(base, "_")).resolve(id);
+      if (resolved.endsWith(".css")) path = resolved;
     } catch {
-      resolved = undefined;
+      // A style-only export has no `require` condition; the manifest is read below.
     }
-    if (resolved?.endsWith(".css")) {
-      path = resolved;
-    } else {
-      const pkgPath = req.resolve(`${id.split("/")[0]}/package.json`);
-      const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as {
-        exports?: { "."?: { style?: string } };
+    if (path === undefined) {
+      const segments = id.split("/");
+      const nameLength = id.startsWith("@") ? 2 : 1;
+      const name = segments.slice(0, nameLength).join("/");
+      const subpath = segments.slice(nameLength).join("/");
+      const dir = await packageDir(name, base);
+      if (dir === undefined) throw new Error(`could not resolve "${id}" from ${base}`);
+      const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8")) as {
+        exports?: ExportTarget;
         style?: string;
       };
-      path = resolve(dirname(pkgPath), pkg.exports?.["."]?.style ?? pkg.style ?? "index.css");
+      const key = subpath ? `./${subpath}` : ".";
+      const { exports } = pkg;
+      // `exports` is either a map of subpaths or, for a single-entry package, the
+      // conditions for "." directly.
+      const isSubpathMap =
+        exports !== null &&
+        typeof exports === "object" &&
+        !Array.isArray(exports) &&
+        Object.keys(exports).some((k) => k.startsWith("."));
+      const entry = isSubpathMap
+        ? (exports as Record<string, ExportTarget>)[key]
+        : key === "."
+          ? exports
+          : undefined;
+      const target = styleTarget(entry);
+      path = target
+        ? resolve(dir, target)
+        : resolve(dir, subpath || (pkg.style ?? "index.css"));
     }
   }
   return { base: dirname(path), path, content: await readFile(path, "utf8") };
