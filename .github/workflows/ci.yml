@@ -94,6 +94,36 @@ jobs:
       - name: Validate workflow inputs against the actions they go to
         run: npm run check:actions
 
+  floors:
+    # The lowest versions the manifest admits, installed for real. Every other job runs the
+    # lockfile's, so a range that promised more than it delivered stayed green: the peer
+    # range admitted Tailwind 4.0.x, where every build failed, and tailwind-merge 3.3.1,
+    # which keeps both classes of a Tailwind 4.2 logical-utility conflict. Keep these in
+    # step with `peerDependencies` and `dependencies` in package.json.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Take the floor of every range tailess declares
+        run: |
+          npm install --no-save --no-audit --no-fund \
+            tailwindcss@4.1.0 @tailwindcss/postcss@4.1.0 tailwind-merge@3.7.0
+          node -p "'tailwindcss ' + require('tailwindcss/package.json').version"
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
   engines:
     # The floor `engines` promises, loaded rather than asserted. It is 20.19 because
     # that is what Vite 8 requires and what a Tailwind v4 toolchain therefore already
