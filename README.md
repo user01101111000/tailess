@@ -1165,6 +1165,9 @@ that moves the variants out from under the keys, and CSS that imports Tailwind w
 Each is a class that cannot work — nothing is reported for code that merely looks
 unusual, and a later argument overriding an earlier one is never flagged, since that is
 the point of passing `className` last.
+The source checks speak only about calls that are really tailess's: a bare call under a
+name the file imports from `"tailess"`, or a member of `import * as tl from "tailess"`.
+Solid's `on`, `emitter.on(…)` and `$(el).on(…)` are left alone.
 
 **A renamed import** is the widest of them. The scanner finds calls by identifier, so
 `import { ss as tw } from "tailess"` is one line that removes every class in that file
