@@ -84,6 +84,25 @@ describe.runIf(built)("built plugin entry points", () => {
     expect(namespace.default().name).toBe("tailess");
   });
 
+  it("answers --help and --version in JSON when asked to", async () => {
+    // `--json` promises one object on stdout, and these were the two paths that printed
+    // prose instead.
+    const { execFileSync } = await import("node:child_process");
+    const cli = (...args: string[]) =>
+      JSON.parse(execFileSync(process.execPath, [dist("cli.js"), ...args], { encoding: "utf8" }));
+    expect(cli("--version", "--json")).toMatchObject({
+      tailess: 1,
+      ok: true,
+      code: 0,
+      version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+    });
+    expect(cli("doctor", "--help", "--json")).toMatchObject({
+      command: "doctor",
+      ok: true,
+      help: expect.stringContaining("npx tailess doctor"),
+    });
+  });
+
   it("keeps Node built-ins out of the browser entry", async () => {
     const { readFile } = await import("node:fs/promises");
     for (const entry of ["index.js", "index.cjs"]) {

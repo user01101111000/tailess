@@ -895,4 +895,74 @@ describe("the diff shown before writing", () => {
       "+   plugins: [tailess(), tailwindcss()],",
     ]);
   });
+
+  it("costs the size of the change, not the square of the file", () => {
+    // A full table of (lines + 1)² numbers: 6.7 s at 10,000 lines, and out of memory at
+    // 30,000, where `--json` printed nothing at all.
+    const define = Array.from({ length: 30_000 }, (_, i) => `    K${i}: ${i},`).join("\n");
+    const before = `import tailwindcss from "@tailwindcss/vite";\nexport default {\n  define: {\n${define}\n  },\n  plugins: [tailwindcss()],\n};\n`;
+    const plan = planEdit({ kind: "vite", file: join(dir, "vite.config.ts"), source: before });
+    const started = performance.now();
+    const lines = diffOf(plan as Edit).split("\n");
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(lines).toEqual([
+      '+ import tailess from "tailess/vite";',
+      "-   plugins: [tailwindcss()],",
+      "+   plugins: [tailess(), tailwindcss()],",
+    ]);
+  });
+
+  it("stays correct for changes it did not write", () => {
+    const edit = (before: string, after: string): Edit => ({ file: "x", before, after });
+    expect(diffOf(edit("a\nb\nc", "a\nc"))).toBe("- b");
+    expect(diffOf(edit("a\nc", "a\nb\nc"))).toBe("+ b");
+    expect(diffOf(edit("a\nb\nc", "x\nb\ny"))).toBe("- a\n+ x\n- c\n+ y");
+    expect(diffOf(edit("same", "same"))).toBe("");
+  });
+});
+
+describe("an edit laid out like the file it goes in", () => {
+  /** Plan an edit for `source` as `file`. */
+  const plan = (file: string, source: string) =>
+    planEdit(
+      file.startsWith("vite")
+        ? { kind: "vite", file: join(dir, file), source }
+        : { kind: "postcss", file: join(dir, file), source },
+    )?.after;
+
+  it("puts the entry on its own line, at the others' indent, in a list of one per line", () => {
+    expect(
+      plan(
+        "vite.config.ts",
+        `export default {\n  plugins: [\n    react(),\n    tailwindcss(),\n  ],\n};\n`,
+      ),
+    ).toContain("plugins: [\n    tailess(),\n    react(),\n");
+    expect(
+      plan(
+        "postcss.config.mjs",
+        `export default {\n\tplugins: {\n\t\t"@tailwindcss/postcss": {},\n\t},\n};\n`,
+      ),
+    ).toContain(`plugins: {\n\t\t"tailess/postcss": {},\n\t\t"@tailwindcss/postcss": {},`);
+  });
+
+  it("keeps a one-line list on one line, and fills an empty one tidily", () => {
+    expect(
+      plan("postcss.config.mjs", `export default { plugins: { "@tailwindcss/postcss": {} } };\n`),
+    ).toBe(`export default { plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} } };\n`);
+    expect(plan("postcss.config.mjs", `export default { plugins: {} };\n`)).toBe(
+      `export default { plugins: { "tailess/postcss": {} } };\n`,
+    );
+  });
+
+  it("writes the import in the file's own quotes, and without a semicolon where it has none", () => {
+    expect(
+      plan(
+        "vite.config.ts",
+        `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n})\n`,
+      ),
+    ).toContain(`import react from '@vitejs/plugin-react'\nimport tailess from 'tailess/vite'\n`);
+    expect(
+      plan("postcss.config.mjs", `export default { plugins: { '@tailwindcss/postcss': {} } };\n`),
+    ).toContain(`{ 'tailess/postcss': {}, '@tailwindcss/postcss': {} }`);
+  });
 });

@@ -410,9 +410,42 @@ function insertAt(source: string, at: number, text: string): string {
   return source.slice(0, at) + text + source.slice(at);
 }
 
-/** True when the list opened just before `at` is empty, so the entry needs no separator. */
-function listIsEmpty(masked: string, at: number, close: string): boolean {
-  return masked.slice(at).trimStart().startsWith(close);
+/**
+ * `source` with `text` added as the first entry of the list opened just before `at`,
+ * laid out like the entries already there: on a line of its own at their indent when
+ * they are one per line, inline otherwise. A fixed four-space line in a tab-indented
+ * file, and `tailess(), ` trailing the `[` of a multi-line array, were diff noise in
+ * exactly the edit people read before accepting it.
+ */
+function firstEntry(
+  source: string,
+  masked: string,
+  at: number,
+  close: string,
+  text: string,
+  eol: string,
+): string {
+  const rest = masked.slice(at);
+  const pad = (/^[ \t]*/.exec(rest) as RegExpExecArray)[0].length;
+  if (rest.slice(pad).startsWith(close)) {
+    // Empty: `{ "tailess/postcss": {} }` and `[tailess()]`.
+    const filled = close === "}" ? ` ${text} ` : text;
+    return source.slice(0, at) + filled + source.slice(at + pad);
+  }
+  const next = /^[ \t]*\r?\n(?:[ \t]*\r?\n)*([ \t]*)(\S)/.exec(rest);
+  if (!next) return insertAt(source, at + pad, `${text}, `);
+  if (next[2] === close) return insertAt(source, at, text);
+  return insertAt(source, at + pad, `${eol}${next[1]}${text},`);
+}
+
+/**
+ * How the file writes its code, so an added line reads like its neighbours: the quote
+ * its imports use, and whether its statements end in a semicolon.
+ */
+function styleOf(masked: string): { quote: string; semi: string } {
+  const quote = /(?:\bfrom|^[ \t]*import|\brequire\s*\()\s*(["'])/m.exec(masked)?.[1] ?? '"';
+  const semi = /;[ \t]*(?:\r?\n|$)/.test(masked) || !/\S/.test(masked) ? ";" : "";
+  return { quote, semi };
 }
 
 /**
@@ -501,7 +534,10 @@ export function planEdit(host: Host): Edit | null {
       (match) => !insideOption(blank, match.index ?? 0),
     );
   const entry = (listAt: number, close: string, text: string) =>
-    insertAt(host.source, listAt, listIsEmpty(masked, listAt, close) ? text : `${text}, `);
+    firstEntry(host.source, masked, listAt, close, text, eol);
+  const { quote } = styleOf(masked);
+  /** The quote the list's own string entries use, or the file's. */
+  const quoteIn = (listAt: number) => /^\s*(["'])/.exec(masked.slice(listAt))?.[1] ?? quote;
   // An import left behind by a deleted call is the commonest unwired shape there is, and
   // adding a second one declared the same name twice: a config that no longer parses,
   // written after `doctor` recommended it. The binding that is there is reused, and a
@@ -532,9 +568,9 @@ export function planEdit(host: Host): Edit | null {
     if (found.length !== 1 || /["']tailess\/postcss["']\s*:\s*false\b/.test(masked)) return null;
     const list = found[0] as RegExpMatchArray;
     const listAt = (list.index ?? 0) + list[0].length;
+    const q = quoteIn(listAt);
     if (list[0].endsWith("{")) {
-      const empty = listIsEmpty(masked, listAt, "}");
-      after = insertAt(host.source, listAt, `${eol}    "tailess/postcss": {}${empty ? "" : ","}`);
+      after = entry(listAt, "}", `${q}tailess/postcss${q}: {}`);
     } else {
       // An array holds strings for Next.js and plugin instances for postcss-load-config,
       // and each loader rejects the other's: a string put in front of
@@ -542,10 +578,10 @@ export function planEdit(host: Host): Edit | null {
       // plugins[0]". The entries already there say which one reads it; an empty array
       // says nothing, so it is left alone.
       const head = masked.slice(listAt).trimStart();
-      if (/^["']/.test(head)) after = entry(listAt, "]", '"tailess/postcss"');
+      if (/^["']/.test(head)) after = entry(listAt, "]", `${q}tailess/postcss${q}`);
       else if (!/^[\w$]/.test(head)) return null;
       else if (isCommonJs(host.file, masked)) {
-        after = entry(listAt, "]", 'require("tailess/postcss")()');
+        after = entry(listAt, "]", `require(${quote}tailess/postcss${quote})()`);
       } else {
         const binding = nameFor("tailess/postcss");
         if (!binding) return null;
@@ -579,9 +615,10 @@ function withImport(
   const cjs = isCommonJs(file, masked);
   const at = cjs ? requireInsertPoint(masked) : importInsertPoint(masked);
   if (at > limit) return null;
+  const { quote, semi } = styleOf(masked);
   const statement = cjs
-    ? `const tailess = require("${specifier}");`
-    : `import tailess from "${specifier}";`;
+    ? `const tailess = require(${quote}${specifier}${quote})${semi}`
+    : `import tailess from ${quote}${specifier}${quote}${semi}`;
   // Leading, when nothing but trivia precedes the insertion point; trailing otherwise, so
   // the new line follows the import it is placed after rather than splitting it.
   const text = masked.slice(0, at).trim() === "" ? `${statement}${eol}` : `${eol}${statement}`;
@@ -659,51 +696,86 @@ export async function checkEdit(edit: Edit, cwd: string): Promise<string | undef
 /**
  * The lines that change, for showing before writing.
  *
- * A longest-common-subsequence walk rather than a running index: a *modified* line
- * throws the two sides out of step, and a naive comparison then reports every line
- * after it as new. Showing a wrong diff and then editing someone's build config on the
- * strength of it is worse than not offering the command.
+ * A shortest-edit-script walk rather than a running index: a *modified* line throws the
+ * two sides out of step, and a naive comparison then reports every line after it as
+ * new. Showing a wrong diff and then editing someone's build config on the strength of
+ * it is worse than not offering the command.
+ *
+ * Myers' algorithm, which costs time in the size of the *change* rather than of the file:
+ * the full longest-common-subsequence table it replaced was (lines + 1)² numbers, took
+ * 6.7 s on a 10,000-line config and ran out of memory at 30,000 — with `--json` printing
+ * nothing at all. An edit this command writes changes three lines.
  */
 export function diffOf(edit: Edit): string {
   const before = edit.before.split("\n");
   const after = edit.after.split("\n");
+  // The unchanged ends need no search, and trimming them makes the rest small.
+  let head = 0;
+  while (head < before.length && head < after.length && before[head] === after[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < before.length - head &&
+    tail < after.length - head &&
+    before[before.length - 1 - tail] === after[after.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  const a = before.slice(head, before.length - tail);
+  const b = after.slice(head, after.length - tail);
+  return shortestEdit(a, b)
+    .map(([op, line]) => `${op} ${line}`)
+    .join("\n");
+}
 
-  // lengths[i][j] = length of the LCS of before[i..] and after[j..].
-  const lengths: number[][] = Array.from({ length: before.length + 1 }, () =>
-    new Array<number>(after.length + 1).fill(0),
-  );
-  for (let i = before.length - 1; i >= 0; i -= 1) {
-    for (let j = after.length - 1; j >= 0; j -= 1) {
-      (lengths[i] as number[])[j] =
-        before[i] === after[j]
-          ? ((lengths[i + 1] as number[])[j + 1] as number) + 1
-          : Math.max(
-              (lengths[i + 1] as number[])[j] as number,
-              (lengths[i] as number[])[j + 1] as number,
-            );
+/** The fewest `-`/`+` lines that turn `a` into `b`, in order. */
+function shortestEdit(a: string[], b: string[]): [op: "-" | "+", line: string][] {
+  const n = a.length;
+  const m = b.length;
+  const max = n + m;
+  // Past this many changes the search's memory grows as its square; a diff that large is
+  // not one of this command's edits, and listing both sides whole is still correct.
+  const limit = 2000;
+  const v = new Int32Array(2 * max + 2);
+  const trace: Int32Array[] = [];
+  let found = -1;
+  for (let d = 0; d <= Math.min(max, limit) && found === -1; d += 1) {
+    trace.push(v.slice(max - d, max + d + 1));
+    for (let k = -d; k <= d; k += 2) {
+      const down = k === -d || (k !== d && (v[max + k - 1] as number) < (v[max + k + 1] as number));
+      let x = down ? (v[max + k + 1] as number) : (v[max + k - 1] as number) + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x += 1;
+        y += 1;
+      }
+      v[max + k] = x;
+      if (x >= n && y >= m) {
+        found = d;
+        break;
+      }
     }
   }
-
-  const lines: string[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < before.length && j < after.length) {
-    if (before[i] === after[j]) {
-      i += 1;
-      j += 1;
-    } else if (
-      ((lengths[i + 1] as number[])[j] as number) >= ((lengths[i] as number[])[j + 1] as number)
-    ) {
-      lines.push(`- ${before[i]}`);
-      i += 1;
-    } else {
-      lines.push(`+ ${after[j]}`);
-      j += 1;
-    }
+  if (found === -1) {
+    return [
+      ...a.map((line): ["-", string] => ["-", line]),
+      ...b.map((line): ["+", string] => ["+", line]),
+    ];
   }
-  while (i < before.length) lines.push(`- ${before[i++]}`);
-  while (j < after.length) lines.push(`+ ${after[j++]}`);
-  return lines.join("\n");
+
+  const edits: [op: "-" | "+", line: string][] = [];
+  let x = n;
+  let y = m;
+  for (let d = found; d > 0; d -= 1) {
+    const window = trace[d] as Int32Array;
+    const at = (k: number) => window[k + d] as number;
+    const k = x - y;
+    const down = k === -d || (k !== d && at(k - 1) < at(k + 1));
+    const previous = down ? k + 1 : k - 1;
+    x = at(previous);
+    y = x - previous;
+    edits.push(down ? ["+", b[y] as string] : ["-", a[x] as string]);
+  }
+  return edits.reverse();
 }
 
 /**
@@ -1038,10 +1110,11 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
     return done(2, { error: "not-editable", file: where(plan.file), reason: broken });
   }
 
-  say(`[tailess] ${where(plan.file)}\n\n${diffOf(plan)}\n`);
+  const diff = diffOf(plan);
+  say(`[tailess] ${where(plan.file)}\n\n${diff}\n`);
   if (!write) {
     say("[tailess] nothing written. Re-run with --write to apply it.");
-    return done(0, { file: where(plan.file), written: false, diff: diffOf(plan) });
+    return done(0, { file: where(plan.file), written: false, diff });
   }
 
   await writeFile(plan.file, plan.after, "utf8");
@@ -1051,7 +1124,7 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
   return done(0, {
     file: where(plan.file),
     written: true,
-    diff: diffOf(plan),
+    diff,
     ...(tailwind ? { tailwind: false } : {}),
   });
 }

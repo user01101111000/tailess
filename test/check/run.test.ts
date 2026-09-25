@@ -97,6 +97,30 @@ describe("parsing the command line", () => {
     expect(() => parse(["--bogus"])).toThrow(/unknown option/);
   });
 
+  it("calls a word after the command an argument, not an unknown command", () => {
+    // "unknown command doctor. Expected one of: check, emit, init, doctor." rejected the
+    // very word it listed.
+    expect(() => parse(["doctor", "doctor"])).toThrow(/^unexpected argument doctor$/);
+    expect(() => parse(["check", "src"])).toThrow(
+      /unexpected argument src — for a directory, --content src/,
+    );
+    expect(() => parse(["src"])).toThrow(/unknown command src/);
+  });
+
+  it("refuses a flag on a command it does nothing for", () => {
+    // Each was accepted and ignored: `init --content apps/web` wrote the current
+    // directory's config, and `doctor --strict` was the same doctor.
+    expect(() => parse(["doctor", "--strict"])).toThrow(/--strict does not apply to doctor/);
+    expect(() => parse(["init", "--content", "apps/web"])).toThrow(
+      /--content does not apply to init/,
+    );
+    expect(() => parse(["check", "--write"])).toThrow(/--write does not apply to check/);
+    expect(() => parse(["emit", "--out", "a.css", "--css", "b.css"])).toThrow(/--css/);
+    expect(parse(["init", "--write", "--json"])).toMatchObject({ command: "init", write: true });
+    expect(parse(["emit", "--out", "a.css", "--content", "src"])).toMatchObject({ out: "a.css" });
+    expect(parse(["doctor", "--json"])).toMatchObject({ command: "doctor", json: true });
+  });
+
   it("reads the subcommand, and treats a bare invocation as check", () => {
     expect(parse([])).toMatchObject({ command: "check" });
     expect(parse(["check"])).toMatchObject({ command: "check" });

@@ -61,6 +61,18 @@ const nouns: Record<string, string> = {
   "--ignore": "directory name",
 };
 
+/** The commands each flag means something to; `--json` and the rest apply to all four. */
+const scoped: Record<string, Options["command"][]> = {
+  "--content": ["check", "emit"],
+  "--css": ["check"],
+  "--extensions": ["check", "emit"],
+  "--ignore": ["check", "emit"],
+  "--strict": ["check"],
+  "--max": ["check"],
+  "--out": ["emit"],
+  "--write": ["init"],
+};
+
 /**
  * An error in how the command was invoked, as opposed to one from running it.
  *
@@ -132,14 +144,31 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
       i += 1;
       continue;
     }
+    if (arg.startsWith("-")) throw new UsageError(`unknown option ${arg}`);
     // A bare word in the first position was meant as a command, not an option, and
     // saying "unknown option" sends the reader to the flag list rather than the command
-    // list — where the answer is.
+    // list — where the answer is. After a command it is an argument nothing takes:
+    // "unknown command doctor. Expected one of: …, doctor" rejected the very word it
+    // listed.
+    if (i === 0 && rest === argv) {
+      throw new UsageError(`unknown command ${arg}. Expected one of: ${commands.join(", ")}.`);
+    }
     throw new UsageError(
-      i === 0 && !arg.startsWith("-")
-        ? `unknown command ${arg}. Expected one of: ${commands.join(", ")}.`
-        : `unknown option ${arg}`,
+      `unexpected argument ${arg}` +
+        (command === "check" || command === "emit" ? ` — for a directory, --content ${arg}` : ""),
     );
+  }
+
+  // `--help` annotates the flags that belong to one command, and accepting them anywhere
+  // else did nothing without saying so: `init --content apps/web` wrote to the current
+  // directory's config, and `doctor --strict` was the same doctor.
+  for (const flag of new Set(rest.filter((arg) => arg.startsWith("--")))) {
+    const only = scoped[flag];
+    if (only && !only.includes(command)) {
+      throw new UsageError(
+        `${flag} does not apply to ${command} (it is for ${only.join(" and ")})`,
+      );
+    }
   }
 
   return {
