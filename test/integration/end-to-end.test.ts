@@ -718,3 +718,36 @@ describe('diagnostics: "error" and a theme that adds rather than removes', () =>
     warn.mockRestore();
   });
 });
+
+describe("a Tailwind prefix written in the entry stylesheet, through PostCSS", () => {
+  // The documented total failure: with prefix(tw) every class tailess builds is the wrong
+  // name. The PostCSS plugin rebuilt each @import as its bare specifier before the theme
+  // check read it, so the prefix on the entry's own import was dropped and never
+  // reported — only one nested a file deeper was. The Vite plugin passes the full CSS.
+  async function build(css: string, diagnostics: "warn" | "error") {
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-prefix-"));
+    try {
+      await writeFile(join(project, "a.tsx"), `ss({ hover: "skew-y-3" })`);
+      return await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache"), diagnostics }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(css, { from: join(project, "app.css") });
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }
+
+  it("reports it, and fails the build under diagnostics: error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clearReported();
+    await build(`@import "tailwindcss" prefix(tw);`, "warn");
+    expect(warn.mock.calls.map((c) => String(c[0])).some((m) => m.includes('prefix("tw")'))).toBe(
+      true,
+    );
+    clearReported();
+    await expect(build(`@import "tailwindcss" prefix(tw) layer(base);`, "error")).rejects.toThrow(
+      /build-time diagnostic/,
+    );
+    warn.mockRestore();
+  });
+});

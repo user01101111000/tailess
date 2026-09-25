@@ -179,8 +179,11 @@ function themeSource(root: Root): string {
     } else if (name === "custom-variant" || name === "config") {
       parts.push(`@${name} ${rule.params};`);
     } else if (name === "import") {
-      const specifier = /["']([^"']+)["']/.exec(rule.params)?.[1];
-      if (specifier) parts.push(`@import "${specifier}";`);
+      // The params as written, not a rebuilt `@import "<specifier>"`: `prefix(tw)` rides
+      // on the import itself, and dropping it hid the one total failure the theme check
+      // exists to catch whenever it sat on the entry's own import. The Vite plugin hands
+      // over the whole stylesheet, so this is what makes the two agree.
+      if (/["']/.test(rule.params)) parts.push(`@import ${rule.params};`);
     }
     return undefined;
   });
