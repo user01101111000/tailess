@@ -12,6 +12,7 @@ import {
   parseObject,
   type RawCall,
   scanCalls,
+  scanMatchCalls,
 } from "./scan.js";
 
 /**
@@ -138,15 +139,19 @@ const ambiguousAsClass = new Set<string>(
  * an `ss` map handed to one is read as a dictionary and its *keys* become the classes:
  * `on("hover", { base: "underline", md: "font-bold" })` builds `"hover:base hover:md"`.
  *
- * The type system refuses it, so this only fires where a cast or an untyped boundary let
- * it through — and there it is silent, which is why it is worth a build check. The test
- * is exact: `base`, `md` and `hover` are `ss` keys and none of them is a Tailwind
- * utility, so a dictionary key that is one of them was meant as a bucket.
+ * The type system cannot refuse it: a clsx dictionary is any object, so an `ss` map is
+ * one too. The runtime is silent, which is why it is worth a build check. The test is
+ * exact: `base`, `md` and `hover` are `ss` keys and none of them is a Tailwind utility,
+ * so a dictionary key that is one of them was meant as a bucket.
+ *
+ * `fix` is the rewrite to offer, given the key: for the prefixing helpers it is nesting
+ * the other way round; for a value of `responsive` or `match` it is wrapping it in `ss`.
  */
 function bucketMapAsDictionary(
   name: string,
   text: string | undefined,
   report: (d: Diagnostic) => void,
+  fix: (key: string) => string = (key) => `Nest the other way round: ss({ ${key}: ${name}(…) }).`,
 ): void {
   if (!text) return;
   // Spelled-out entries only. `({ open, dark }) => …` is a destructuring parameter, not a
@@ -157,8 +162,8 @@ function bucketMapAsDictionary(
       kind: "bucket-as-dictionary",
       message:
         `${name}() was given an object with the key "${key}", which is an ss bucket — but ` +
-        `its class argument is a clsx value, so "${key}" becomes the class name. Nest the ` +
-        `other way round: ss({ ${key}: ${name}(…) }).` +
+        `its class argument is a clsx value, so "${key}" becomes the class name. ` +
+        fix(key) +
         // `first`, `last`, `open`, `checked`, `disabled` are ordinary conditional class
         // names — Bootstrap's `.active`, a CSS module's `.open` — so the nesting mistake
         // is not the only way to land here. The class is dead either way, but only one of
@@ -193,18 +198,23 @@ const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '
  * A `base` inside a prefixed map is prefixed all the same — `{ md: { base: size } }` is
  * `md:<size>` — and a value that is itself a map is walked, since the bucket that cannot
  * be read may be the one nested inside it.
+ *
+ * `nested` is false where a value is a flat class value rather than an `ss` argument —
+ * `responsive`'s breakpoints — since an object there is a clsx dictionary, whose
+ * `{ hidden: !open }` is a condition, not a bucket.
  */
 function dynamicBuckets(
   text: string | undefined,
   report: (d: Diagnostic) => void,
   underPrefix = false,
+  nested = true,
 ): void {
   if (!text) return;
   for (const map of objectLiterals(text)) {
     for (const { key, value } of parseObject(map)) {
       const prefixed = underPrefix || key !== "base";
       if (objectLiterals(value).length > 0) {
-        dynamicBuckets(value, report, prefixed);
+        if (nested) dynamicBuckets(value, report, prefixed);
         continue;
       }
       if (!prefixed) continue;
@@ -413,7 +423,37 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       // place a bucket the scanner cannot read is worth reporting.
       for (const arg of args) {
         deadClasses(arg, report);
-        dynamicBuckets(arg, report);
+        dynamicBuckets(arg, report, false, name === "ss");
+      }
+      // A breakpoint's value is a flat class value, not another map:
+      // `responsive("p-2", { md: { hover: "p-4" } })` builds `md:hover`, which no
+      // utility matches, so `check` skips it as junk and nothing else says a word.
+      if (name === "responsive") {
+        for (const map of objectLiterals(args[1] ?? "")) {
+          for (const { key, value } of parseObject(map)) {
+            bucketMapAsDictionary(
+              name,
+              value,
+              report,
+              (inner) => `Write the stack as a map: ss({ ${key}: { ${inner}: "…" } }).`,
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    // The same mistake in a lookup: `match(size, { sm: { md: "p-4" } })` builds `md`.
+    case "match": {
+      for (const map of objectLiterals(args[1] ?? "")) {
+        for (const { value } of parseObject(map)) {
+          bucketMapAsDictionary(
+            name,
+            value,
+            report,
+            (inner) => `Wrap the option in ss(): { …: ss({ ${inner}: "…" }) }.`,
+          );
+        }
       }
       return;
     }
@@ -628,7 +668,7 @@ export function diagnose(code: string, file?: string): Diagnostic[] {
     // beside tailess's `ss` is a file that imports the package, and its
     // `on(accessor, (c) => ({ open: c > 0 }))` was checked as a class map.
     const bare = importedNames(masked);
-    for (const call of scanCalls(code)) {
+    for (const call of [...scanCalls(code), ...scanMatchCalls(code)]) {
       if (call.receiver === "" ? bare.has(call.name) : receivers.has(call.receiver)) {
         check(call, report);
       }

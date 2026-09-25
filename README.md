@@ -1198,8 +1198,11 @@ an `ss` bucket, never the reverse. Every helper's class argument is a `ClassValu
 an object is a `clsx` dictionary (`until("md", { hidden: !open })` is the documented
 shape), so an `ss` map handed to one is read as a dictionary and its **keys** become the
 classes: `on("hover", { base: "underline", md: "font-bold" })` builds
-`"hover:base hover:md"`. The types refuse it, so this only fires where a cast or an
-untyped boundary let it through — and there it is completely silent.
+`"hover:base hover:md"`. The types cannot refuse it — a `clsx` dictionary is any object,
+so an `ss` map is one too — and the runtime is completely silent, so this check is what
+catches it. It reads the same mistake in a `responsive` breakpoint
+(`responsive("p-2", { md: { hover: "p-4" } })` builds `md:hover`) and in a `match`
+option.
 
 ```ts
 ss({ md: on("hover", "underline") })      // ✅ this way round — "md:hover:underline"

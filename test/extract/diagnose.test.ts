@@ -412,6 +412,21 @@ describe("an ss map handed to a helper that takes a flat class value", () => {
     expect(kinds(`has("> img", { hover: "p-0" })`)).toEqual(["bucket-as-dictionary"]);
   });
 
+  it("reports one inside responsive()'s breakpoints and match()'s options too", () => {
+    // Nothing else catches these two: `responsive("p-2", { md: { hover: "p-4" } })`
+    // builds `md:hover`, `match(size, { sm: { md: "p-4" } })` builds `md`, and neither
+    // utility exists — so `check` skips them as junk, and the element ships unstyled.
+    const [fromResponsive] = diag(`responsive("p-2", { md: { hover: "p-4" } })`);
+    expect(fromResponsive?.kind).toBe("bucket-as-dictionary");
+    expect(fromResponsive?.message).toContain('ss({ md: { hover: "…" } })');
+    const [fromMatch] = diag(`match(size, { sm: { md: "p-4" }, lg: "p-8" })`);
+    expect(fromMatch?.kind).toBe("bucket-as-dictionary");
+    expect(fromMatch?.message).toContain("ss(");
+    // A real clsx dictionary there is fine.
+    expect(kinds(`responsive("p-2", { md: { hidden: !open } })`)).toEqual([]);
+    expect(kinds(`match(size, { sm: { "p-2": dense }, lg: "p-8" })`)).toEqual([]);
+  });
+
   it("says nothing about the composition that is correct", () => {
     expect(kinds(`ss({ md: on("hover", "underline") })`)).toEqual([]);
     expect(kinds(`ss({ base: "p-4", md: "p-6" })`)).toEqual([]);

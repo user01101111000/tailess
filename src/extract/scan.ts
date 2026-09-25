@@ -838,9 +838,25 @@ export function arrayBody(text: string): string {
  * broken layout they cannot debug.
  */
 export function scanCalls(code: string): RawCall[] {
+  return callsMatching(code, callPattern);
+}
+
+/**
+ * `match(` — which is not in {@link helperNames}: its options are literals Tailwind
+ * reads itself, so there is nothing to enumerate, and a renamed `match` loses nothing.
+ * Only the diagnostics read it, for an `ss` map written where a class value goes.
+ */
+const matchPattern = /(?<![\w$])(match)\s*\(/g;
+
+/** Every `match(…)` call, for the diagnostics. See {@link matchPattern}. */
+export function scanMatchCalls(code: string): RawCall[] {
+  return callsMatching(code, matchPattern);
+}
+
+function callsMatching(code: string, pattern: RegExp): RawCall[] {
   const calls: RawCall[] = [];
-  callPattern.lastIndex = 0;
-  for (let match = callPattern.exec(code); match !== null; match = callPattern.exec(code)) {
+  pattern.lastIndex = 0;
+  for (let match = pattern.exec(code); match !== null; match = pattern.exec(code)) {
     const name = match[1];
     if (name === undefined) continue;
     // The pattern ends at the `(`, so the match's last character is the paren.
