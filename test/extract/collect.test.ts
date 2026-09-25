@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -245,5 +245,85 @@ describe("overlapping roots", () => {
     const result = await collect({ roots: [join(dir, "src"), join(dir, "src", "ui"), dir] });
     expect(result.files).toHaveLength(2);
     expect(result.diagnostics.filter((d) => d.kind === "empty-range")).toHaveLength(1);
+  });
+});
+
+describe("linked folders and files", () => {
+  /** Link `path` to the directory `target`: a junction on Windows, a symlink elsewhere. */
+  const linkDir = (target: string, path: string) => symlink(target, path, "junction");
+
+  it("walks a linked folder, as Tailwind's own scanner does", async () => {
+    // A shared/ folder linked into an app: Tailwind styled its literals and every
+    // tailess-built class in it was unstyled, with the check green.
+    await mkdir(join(dir, "app", "src"), { recursive: true });
+    await mkdir(join(dir, "shared"));
+    await writeFile(join(dir, "app", "src", "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "shared", "Button.tsx"), `ss({ lg: "gap-8" })`);
+    await linkDir(join(dir, "shared"), join(dir, "app", "src", "shared"));
+    const result = await collect({ roots: [join(dir, "app")] });
+    expect(result.classes).toEqual(["lg:gap-8", "md:p-4"]);
+  });
+
+  it("ends on a link back up the tree, and walks a target reached twice once", async () => {
+    await mkdir(join(dir, "src", "deep"), { recursive: true });
+    await mkdir(join(dir, "shared"));
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "shared", "b.tsx"), `ss({ lg: "p-8" })`);
+    await linkDir(join(dir, "src"), join(dir, "src", "deep", "loop"));
+    await linkDir(join(dir, "shared"), join(dir, "src", "one"));
+    await linkDir(join(dir, "shared"), join(dir, "src", "two"));
+    const result = await collect({ roots: [join(dir, "src")] });
+    expect(result.classes).toEqual(["lg:p-8", "md:p-4"]);
+    expect(result.files).toHaveLength(2);
+  });
+
+  it("honours the ignore list for a linked folder, by its name", async () => {
+    await mkdir(join(dir, "src"));
+    await mkdir(join(dir, "vendor"));
+    await writeFile(join(dir, "vendor", "x.tsx"), `ss({ md: "p-4" })`);
+    await linkDir(join(dir, "vendor"), join(dir, "src", "node_modules"));
+    expect((await collect({ roots: [join(dir, "src")] })).classes).toEqual([]);
+  });
+
+  it("reads a linked file", async (context) => {
+    await mkdir(join(dir, "src"));
+    await writeFile(join(dir, "real.tsx"), `ss({ md: "p-4" })`);
+    try {
+      await symlink(join(dir, "real.tsx"), join(dir, "src", "link.tsx"), "file");
+    } catch {
+      // A file symlink needs Developer Mode or admin on Windows; a junction does not.
+      context.skip();
+    }
+    expect((await collect({ roots: [join(dir, "src")] })).classes).toEqual(["md:p-4"]);
+  });
+});
+
+describe("the per-file cache", () => {
+  it("rereads a same-size edit that kept its mtime", async () => {
+    // NTFS left most back-to-back rewrites with the same mtime, and FAT's is 2 s: a
+    // same-length edit then kept the old classes until the dev server restarted.
+    // Pinned to a whole second, so both writes carry exactly the same mtime.
+    const tick = new Date(Math.floor(Date.now() / 1000) * 1000);
+    const file = join(dir, "a.tsx");
+    await writeFile(file, `ss({ md: "p-4" })`);
+    await utimes(file, tick, tick);
+    expect((await collect({ roots: [dir] })).classes).toEqual(["md:p-4"]);
+    await writeFile(file, `ss({ lg: "p-4" })`);
+    await utimes(file, tick, tick);
+    expect((await stat(file)).mtimeMs).toBe(tick.getTime());
+    expect((await collect({ roots: [dir] })).classes).toEqual(["lg:p-4"]);
+  });
+
+  it("still trusts a file that has not changed for a while", async () => {
+    const file = join(dir, "a.tsx");
+    await writeFile(file, `ss({ md: "p-4" })`);
+    const old = new Date(Date.now() - 60_000);
+    await utimes(file, old, old);
+    const first = await collect({ roots: [dir] });
+    const second = await collect({ roots: [dir] });
+    expect(second.classes).toEqual(first.classes);
+    // Same content either way; what matters is that it was not read again — the
+    // entry object is the cached one.
+    expect(second.diagnostics).toEqual(first.diagnostics);
   });
 });

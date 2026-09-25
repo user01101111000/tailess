@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import type { Dirent } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { extname, join, resolve, sep } from "node:path";
 import { type Diagnostic, diagnose } from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
@@ -130,9 +130,22 @@ export interface FileDiagnostic extends Diagnostic {
 interface CacheEntry {
   mtimeMs: number;
   size: number;
+  /** When the file was read, which decides whether its mtime can be trusted. */
+  readAt: number;
   classes: string[];
   diagnostics: Diagnostic[];
 }
+
+/**
+ * How close to the read an mtime has to be before it cannot vouch for the content.
+ *
+ * Two seconds is the coarsest mtime in use (FAT and exFAT), and NTFS often leaves a
+ * back-to-back rewrite with the same one. A same-length edit inside that window — a
+ * formatter, a codemod, an agent — kept the old classes until the dev server restarted.
+ * Git's "racy" rule, for the same reason: a file changed within a tick of being read is
+ * read again, and one changed well before is trusted.
+ */
+const mtimeTick = 2000;
 
 /**
  * Per-file extraction cache, keyed by absolute path and invalidated by
@@ -190,6 +203,7 @@ async function walk(
   found: string[],
   outputs: ReadonlySet<string> = outputDirs,
   top = true,
+  links: Set<string> = new Set(),
 ): Promise<void> {
   let entries: Dirent[];
   try {
@@ -218,17 +232,53 @@ async function walk(
       // dropping those classes is the exact failure this package exists to prevent.
       if (ignore.has(entry.name)) continue;
       if (writesOutput && outputs.has(entry.name)) continue;
-      nested.push(walk(full, extensions, ignore, found, outputs, false));
+      nested.push(walk(full, extensions, ignore, found, outputs, false, links));
     } else if (entry.isFile() && isScannable(entry.name, extensions)) {
       found.push(full);
+    } else if (entry.isSymbolicLink()) {
+      if (ignore.has(entry.name) || (writesOutput && outputs.has(entry.name))) continue;
+      nested.push(follow(full, root, extensions, ignore, found, outputs, links));
     }
   }
   await Promise.all(nested);
 }
 
+/**
+ * Walk a symlink or junction the way Tailwind's own scanner does: into the folder or
+ * file it points at.
+ *
+ * Skipped, a linked `shared/` folder — how monorepos put common components into an app —
+ * had its literal classes styled by Tailwind and every tailess-built one unstyled, with
+ * the check green. Each target is walked once per scan, and never when it is the
+ * directory the link sits in or one above it, so a link back up the tree ends.
+ */
+async function follow(
+  link: string,
+  parent: string,
+  extensions: Set<string>,
+  ignore: Set<string>,
+  found: string[],
+  outputs: ReadonlySet<string>,
+  links: Set<string>,
+): Promise<void> {
+  const info = await stat(link).catch(() => undefined);
+  if (info?.isFile()) {
+    if (isScannable(link, extensions)) found.push(link);
+    return;
+  }
+  if (!info?.isDirectory()) return;
+  const target = await realpath(link).catch(() => undefined);
+  if (target === undefined || links.has(target)) return;
+  // Claimed before the next await: two links to one folder are followed concurrently.
+  links.add(target);
+  const here = await realpath(parent).catch(() => parent);
+  if (here === target || here.startsWith(target + sep)) return;
+  await walk(link, extensions, ignore, found, outputs, false, links);
+}
+
 /** Read one file, reusing the cached extraction when it hasn't changed. */
 async function scanFile(file: string): Promise<CacheEntry> {
-  const empty: CacheEntry = { mtimeMs: 0, size: -1, classes: [], diagnostics: [] };
+  const empty: CacheEntry = { mtimeMs: 0, size: -1, readAt: 0, classes: [], diagnostics: [] };
   let mtimeMs = 0;
   let size = -1;
   try {
@@ -241,14 +291,23 @@ async function scanFile(file: string): Promise<CacheEntry> {
   }
 
   const cached = cache.get(file);
-  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached;
+  if (
+    cached &&
+    cached.mtimeMs === mtimeMs &&
+    cached.size === size &&
+    mtimeMs < cached.readAt - mtimeTick
+  ) {
+    return cached;
+  }
 
+  const readAt = Date.now();
   const code = await readFile(file, "utf8").catch(() => "");
   // Both walks read the same text once; diagnostics are cached beside the classes so
   // an unchanged file costs a `stat` on the next scan, exactly as before.
   const entry: CacheEntry = {
     mtimeMs,
     size,
+    readAt,
     classes: extractClasses(code),
     diagnostics: diagnose(code, file),
   };
@@ -285,7 +344,10 @@ async function run(options: CollectOptions): Promise<CollectResult> {
 
   const roots = [...new Set(options.roots.map((p) => resolve(p)))];
   const walked: string[] = [];
-  await Promise.all(roots.map((root) => walk(root, extensions, ignore, walked, outputDirs, true)));
+  const links = new Set<string>();
+  await Promise.all(
+    roots.map((root) => walk(root, extensions, ignore, walked, outputDirs, true, links)),
+  );
   // Overlapping roots — `src` and `src/components`, the whole project and one of its
   // folders — reach the same file twice. Read twice, it counted twice and reported every
   // diagnostic in it twice, which is what `check --json` then handed CI.
