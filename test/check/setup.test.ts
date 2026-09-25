@@ -7,9 +7,11 @@ import {
   type Edit,
   findHost,
   planEdit,
+  pluginFor,
   runDoctor,
   runInit,
   wired,
+  wiring,
 } from "../../src/check/setup.js";
 
 /**
@@ -74,6 +76,130 @@ export default defineConfig({ plugins: [] });`),
   it("does not read a code sample in a template as wiring", () => {
     expect(wired("const doc = `plugins: [tailess()]`;\nplugins: []")).toBe(false);
   });
+
+  describe("the Vite plugin, called where Vite runs it", () => {
+    const vite = (source: string) =>
+      wired(`import tailess from "tailess/vite";\n${source}`, "vite");
+
+    it("counts the config's own list, however the config is built", () => {
+      expect(vite(`export default defineConfig({ plugins: [tailess()] });`)).toBe(true);
+      expect(vite(`export default defineConfig(() => ({ plugins: [tailess()] }));`)).toBe(true);
+      expect(
+        vite(`export default defineConfig(() => {\n  return { plugins: [tailess()] };\n});`),
+      ).toBe(true);
+      expect(vite(`export default mergeConfig(base, { plugins: [tailess()] });`)).toBe(true);
+      expect(vite(`const plugins = [tailwindcss(), tailess()];\nexport default { plugins };`)).toBe(
+        true,
+      );
+      expect(vite(`export default c ? { plugins: [x()] } : { plugins: [tailess()] };`)).toBe(true);
+      expect(wired(`module.exports = { plugins: [require("tailess/vite")()] };`, "vite")).toBe(
+        true,
+      );
+    });
+
+    it("does not count one in an option nested inside it", () => {
+      // Vite ignores a plugin's dev-server hooks in rollupOptions.plugins: the build has the
+      // CSS and the dev server has none, with nothing printed.
+      expect(vite(`export default { build: { rollupOptions: { plugins: [tailess()] } } };`)).toBe(
+        false,
+      );
+      expect(vite(`export default { worker: { plugins: () => [tailess()] } };`)).toBe(false);
+    });
+
+    it("does not count tailess/postcss beside @tailwindcss/vite", () => {
+      // The README's own warning: that PostCSS plugin cannot work on Vite's Tailwind.
+      const source = `import tailwindcss from "@tailwindcss/vite";\nexport default {\n  plugins: [tailwindcss()],\n  css: { postcss: { plugins: [require("tailess/postcss")()] } },\n};`;
+      expect(pluginFor("vite.config.ts", source)).toBe("vite");
+      expect(wired(source, pluginFor("vite.config.ts", source))).toBe(false);
+    });
+
+    it("reads a Vite config that runs Tailwind through PostCSS as a PostCSS one", () => {
+      const source = `export default {\n  css: { postcss: { plugins: [require("tailess/postcss")(), require("@tailwindcss/postcss")()] } },\n};`;
+      expect(wired(source, pluginFor("vite.config.ts", source))).toBe(true);
+    });
+  });
+
+  describe("the PostCSS plugin, listed ahead of Tailwind's", () => {
+    const postcss = (source: string) => wiring(source, "postcss");
+
+    it("counts every form a loader reads", () => {
+      expect(
+        postcss(
+          `module.exports = { plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} } };`,
+        ),
+      ).toBe("wired");
+      expect(postcss(`export default { plugins: { "tailess/postcss": { cacheDir: "x" } } };`)).toBe(
+        "wired",
+      );
+      expect(
+        postcss(`module.exports = { plugins: ["tailess/postcss", "@tailwindcss/postcss"] };`),
+      ).toBe("wired");
+      expect(
+        postcss(`module.exports = { plugins: [["tailess/postcss", {}], "@tailwindcss/postcss"] };`),
+      ).toBe("wired");
+      expect(
+        postcss(
+          `module.exports = { plugins: [require("tailess/postcss")(), require("@tailwindcss/postcss")()] };`,
+        ),
+      ).toBe("wired");
+      expect(
+        postcss(
+          `import tailess from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailess(), tailwindcss()] };`,
+        ),
+      ).toBe("wired");
+      expect(
+        postcss(
+          `const tailess = require("tailess/postcss");\nmodule.exports = { plugins: [tailess, require("@tailwindcss/postcss")] };`,
+        ),
+      ).toBe("wired");
+    });
+
+    it("does not count an import or require whose name is never used", () => {
+      // The README's array form with its call deleted: the build loads only Tailwind and
+      // prints nothing, and naming the package passed doctor and check --strict.
+      expect(
+        postcss(
+          `import tailess from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss()] };`,
+        ),
+      ).toBe("unwired");
+      expect(
+        postcss(
+          `const tailess = require("tailess/postcss");\nmodule.exports = { plugins: [require("@tailwindcss/postcss")()] };`,
+        ),
+      ).toBe("unwired");
+      expect(
+        postcss(
+          `import type { TailessPostcssOptions } from "tailess/postcss";\nexport default { plugins: [] };`,
+        ),
+      ).toBe("unwired");
+    });
+
+    it("does not count a plugin switched off with false", () => {
+      expect(
+        postcss(
+          `export default { plugins: { "tailess/postcss": false, "@tailwindcss/postcss": {} } };`,
+        ),
+      ).toBe("unwired");
+    });
+
+    it("tells a plugin listed after Tailwind's from one listed before it", () => {
+      expect(
+        postcss(
+          `export default { plugins: { "@tailwindcss/postcss": {}, "tailess/postcss": {} } };`,
+        ),
+      ).toBe("misordered");
+      expect(
+        postcss(
+          `module.exports = { plugins: [require("@tailwindcss/postcss")(), require("tailess/postcss")()] };`,
+        ),
+      ).toBe("misordered");
+      expect(
+        postcss(
+          `import tailess from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss(), tailess()] };`,
+        ),
+      ).toBe("misordered");
+    });
+  });
 });
 
 describe("finding which integration a project needs", () => {
@@ -118,6 +244,40 @@ describe("tailess doctor", () => {
     await writeFile(join(dir, "postcss.config.mjs"), `export default { plugins: {} };`);
     const { output } = await capture(() => runDoctor(dir));
     expect(output).toContain("tailess must come first");
+  });
+
+  it("fails a PostCSS config that lists tailess after Tailwind, and says to move it", async () => {
+    // Its own advice is "tailess must come first"; passing a config that breaks it left
+    // a build log line as the only sign that no variant class had CSS.
+    await writeFile(
+      join(dir, "postcss.config.cjs"),
+      `module.exports = { plugins: [require("@tailwindcss/postcss")(), require("tailess/postcss")()] };\n`,
+    );
+    const { code, output } = await capture(() => runDoctor(dir));
+    expect(code).toBe(1);
+    expect(output).toContain('after "@tailwindcss/postcss"');
+    expect(output).toContain(
+      'plugins: [require("tailess/postcss")(), require("@tailwindcss/postcss")()]',
+    );
+  });
+
+  it("fails a PostCSS config that imports tailess and never lists it", async () => {
+    await writeFile(
+      join(dir, "postcss.config.mjs"),
+      `import tailess from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss()] };\n`,
+    );
+    const { code, output } = await capture(() => runDoctor(dir));
+    expect(code).toBe(1);
+    expect(output).toContain('import tailess from "tailess/postcss"');
+  });
+
+  it("fails a Vite config whose only tailess() is in build.rollupOptions.plugins", async () => {
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import tailess from "tailess/vite";\nimport tailwindcss from "@tailwindcss/vite";\nconst plugins = [tailwindcss()];\nexport default { plugins, build: { rollupOptions: { plugins: [tailess()] } } };\n`,
+    );
+    const { code } = await capture(() => runDoctor(dir));
+    expect(code).toBe(1);
   });
 
   it("exits 2 where there is no build config at all", async () => {
@@ -229,11 +389,32 @@ describe("tailess init", () => {
       expect(wired(after)).toBe(true);
     });
 
-    it("refuses when there is more than one plugins list to choose from", async () => {
+    it("writes into the config's own list, never into css.postcss.plugins before it", async () => {
       // `css.postcss.plugins` is a documented Vite option and can precede the top-level
       // array; a first-match replace put the Vite plugin in the PostCSS list and left the
       // one that matters untouched.
-      const source = `import { defineConfig } from "vite";\n\nexport default defineConfig({\n  css: { postcss: { plugins: [] } },\n  plugins: [],\n});\n`;
+      const { code, after } = await initVite(
+        `import { defineConfig } from "vite";\n\nexport default defineConfig({\n  css: { postcss: { plugins: [] } },\n  plugins: [],\n});\n`,
+      );
+      expect(code).toBe(0);
+      expect(after).toContain("css: { postcss: { plugins: [] } },\n  plugins: [tailess()],");
+    });
+
+    it("refuses when two lists are both the config's own", async () => {
+      const source = `import { defineConfig } from "vite";\nexport default defineConfig(({ command }) =>\n  command === "build" ? { plugins: [a()] } : { plugins: [b()] },\n);\n`;
+      const { code, after } = await initVite(source);
+      expect(code).toBe(2);
+      expect(after).toBe(source);
+    });
+
+    it.each([
+      ["build.rollupOptions.plugins", "build: { rollupOptions: { plugins: [banner()] } }"],
+      ["css.postcss.plugins", "css: { postcss: { plugins: [noop] } }"],
+    ])("does not take %s for the list a plugins variable holds", async (_, option) => {
+      // With `plugins` in a variable the nested literal was the only one left, and writing
+      // there lost every variant class in dev with nothing printed (rollupOptions) or
+      // failed the build (css.postcss) — with `doctor` calling both wired afterwards.
+      const source = `import tailwindcss from "@tailwindcss/vite";\nconst plugins = [tailwindcss()];\nexport default { plugins, ${option} };\n`;
       const { code, after } = await initVite(source);
       expect(code).toBe(2);
       expect(after).toBe(source);
@@ -397,6 +578,82 @@ describe("tailess init", () => {
         `import path = require("node:path");\nimport tailess from "tailess/vite";`,
       );
       expect(await parses("vite.config.ts", after)).toBe(true);
+    });
+  });
+
+  describe("a PostCSS list, in the form its loader reads", () => {
+    /** Write `source` as `file`, run `init --write`, read it back. */
+    async function init(file: string, source: string) {
+      await writeFile(join(dir, file), source);
+      const { code } = await capture(() => runInit(dir, true));
+      return { code, after: await readFile(join(dir, file), "utf8") };
+    }
+
+    it("adds a call to a CommonJS list of plugin instances, never a string", async () => {
+      // The README's "Other PostCSS setups" form. A string in front of an instance is
+      // "Invalid PostCSS Plugin found at: plugins[0]" in postcss-load-config.
+      const { code, after } = await init(
+        "postcss.config.cjs",
+        `module.exports = { plugins: [require("@tailwindcss/postcss")()] };\n`,
+      );
+      expect(code).toBe(0);
+      expect(after).toBe(
+        `module.exports = { plugins: [require("tailess/postcss")(), require("@tailwindcss/postcss")()] };\n`,
+      );
+      expect(wiring(after, "postcss")).toBe("wired");
+    });
+
+    it("imports and calls it in an ES module list of plugin instances", async () => {
+      const { code, after } = await init(
+        "postcss.config.mjs",
+        `import tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss()] };\n`,
+      );
+      expect(code).toBe(0);
+      expect(after).toBe(
+        `import tailwindcss from "@tailwindcss/postcss";\nimport tailess from "tailess/postcss";\nexport default { plugins: [tailess(), tailwindcss()] };\n`,
+      );
+    });
+
+    it("reuses an import of it that is already there", async () => {
+      const { after } = await init(
+        "postcss.config.mjs",
+        `import tw from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss()] };\n`,
+      );
+      expect(after.split('"tailess/postcss"').length - 1).toBe(1);
+      expect(after).toContain("plugins: [tw(), tailwindcss()]");
+    });
+
+    it("keeps a list of strings — the Next.js form — a list of strings", async () => {
+      const { after } = await init(
+        "postcss.config.js",
+        `module.exports = { plugins: ["@tailwindcss/postcss"] };\n`,
+      );
+      expect(after).toContain(`plugins: ["tailess/postcss", "@tailwindcss/postcss"]`);
+    });
+
+    it("does not add a key in front of one that switches it off", async () => {
+      // The later duplicate key is the one an object literal keeps, so the plugin stayed
+      // off after an edit that read as wiring it.
+      const source = `export default { plugins: { "tailess/postcss": false, "@tailwindcss/postcss": {} } };\n`;
+      const { code, after } = await init("postcss.config.mjs", source);
+      expect(code).toBe(2);
+      expect(after).toBe(source);
+    });
+
+    it("leaves an empty list alone, which says nothing about its loader", async () => {
+      const source = `module.exports = { plugins: [] };\n`;
+      const { code, after } = await init("postcss.config.cjs", source);
+      expect(code).toBe(2);
+      expect(after).toBe(source);
+    });
+
+    it("does not add a second entry to a list that has it after Tailwind's", async () => {
+      const source = `export default { plugins: { "@tailwindcss/postcss": {}, "tailess/postcss": {} } };\n`;
+      await writeFile(join(dir, "postcss.config.mjs"), source);
+      const { code, output } = await capture(() => runInit(dir, true));
+      expect(code).toBe(2);
+      expect(output).toContain("move it first");
+      expect(await readFile(join(dir, "postcss.config.mjs"), "utf8")).toBe(source);
     });
   });
 

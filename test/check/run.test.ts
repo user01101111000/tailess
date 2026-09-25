@@ -931,6 +931,31 @@ describe("the unwired-plugin guess", () => {
     expect(output).toContain("may not be running");
   });
 
+  it.each([
+    [
+      "listed after Tailwind's",
+      `export default { plugins: { "@tailwindcss/postcss": {}, "tailess/postcss": {} } };\n`,
+    ],
+    [
+      "imported and never listed",
+      `import tailess from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss()] };\n`,
+    ],
+    [
+      "switched off",
+      `export default { plugins: { "tailess/postcss": false, "@tailwindcss/postcss": {} } };\n`,
+    ],
+  ])("catches a PostCSS plugin %s, which only names tailess", async (_, config) => {
+    // Every one of these builds with no variant CSS and no error, and each passed
+    // `--strict` because the file mentioned "tailess/postcss".
+    await writeFile(join(dir, "postcss.config.mjs"), config);
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(1);
+    expect(output).toContain("may not be running");
+  });
+
   it("does not claim to have checked anything on that path", async () => {
     // Nothing is compiled before this returns, so `checked: N` told a consumer reading it
     // that a verification had happened.

@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { maskLiterals } from "../extract/scan.js";
 import { jsonResult } from "./result.js";
@@ -29,34 +29,118 @@ const postcssConfig = /^postcss\.config\.[cm]?[jt]s$/;
 const postcssData = /^(?:\.postcssrc(?:\.json)?|postcss\.config\.json)$/;
 
 /**
- * `import tailess from "tailess/vite"` — the name is what the plugin is called here.
- * `import { default as tw } from …` is the same binding spelled out.
+ * The name `code` binds `specifier` to, when it imports it at all.
+ *
+ * `import tailess from "tailess/vite"`, `import { default as tw } from …` (the same binding
+ * spelled out), `const tailess = require(…)` and TypeScript's `import tailess = require(…)`.
  */
-const esmImport =
-  /import\s+(?:([\w$]+)\s*(?:,[^\n]*?)?|\{\s*default\s+as\s+([\w$]+)\s*(?:,[^}]*)?\})\s*from\s*["']tailess\/vite["']/;
-/**
- * `const tailess = require("tailess/vite")` — the same, with the name on the other side,
- * and TypeScript's `import tailess = require(…)`.
- */
-const cjsImport =
-  /(?:(?:const|let|var)\s+([\w$]+)\s*=|import\s+([\w$]+)\s*=)\s*require\(\s*["']tailess\/vite["']/;
-
-/** The name `code` binds the Vite plugin to, when it imports it at all. */
-function bindingOf(code: string): string | undefined {
-  const esm = esmImport.exec(code);
+function bindingOf(code: string, specifier = "tailess/vite"): string | undefined {
+  const esm = new RegExp(
+    `import\\s+(?:([\\w$]+)\\s*(?:,[^\\n]*?)?|\\{\\s*default\\s+as\\s+([\\w$]+)\\s*(?:,[^}]*)?\\})\\s*from\\s*["']${specifier}["']`,
+  ).exec(code);
   if (esm) return esm[1] ?? esm[2];
-  const cjs = cjsImport.exec(code);
+  const cjs = new RegExp(
+    `(?:(?:const|let|var)\\s+([\\w$]+)\\s*=|import\\s+([\\w$]+)\\s*=)\\s*require\\(\\s*["']${specifier}["']`,
+  ).exec(code);
   return cjs ? (cjs[1] ?? cjs[2]) : undefined;
 }
 
+/** `key:` just before an object — the object is that property's value. `? x : {` is not. */
+const propertyKey = /[{,]\s*([\w$]+|"[^"]*"|'[^']*'|\[[^\]]*\])\s*:\s*$/;
+
 /**
- * True when `text` wires tailess in, rather than merely naming it.
+ * True when `at` lies inside an object that is some option's value, rather than in the
+ * config object itself: `build.rollupOptions.plugins`, `css.postcss.plugins`,
+ * `optimizeDeps.esbuildOptions.plugins`.
+ *
+ * Read from the brackets around it in `blank` — {@link maskLiterals} with the strings
+ * blanked too, so a bracket in a string is not counted. An object that is a property's
+ * value is an option; one passed to `defineConfig(`, returned, or assigned is the config.
+ * A tailess plugin in `rollupOptions.plugins` builds, but Vite ignores its dev-server
+ * hooks, so every variant class is unstyled in dev with nothing printed.
+ */
+function insideOption(blank: string, at: number): boolean {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const c = blank[i];
+    if (c === ")" || c === "]" || c === "}") depth += 1;
+    else if (c === "(" || c === "[" || c === "{") {
+      if (depth > 0) depth -= 1;
+      else if (c === "{" && propertyKey.test(blank.slice(Math.max(0, i - 200), i))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the Vite plugin is called in the config, not in an option nested inside it.
+ *
+ * `tailess()` by whatever name it was imported as, or `require("tailess/vite")()` inline.
+ */
+function viteWired(code: string, blank: string): boolean {
+  const name = (bindingOf(code) ?? "tailess").replace(/\$/g, "\\$");
+  const calls = new RegExp(
+    `(?<![\\w$.])${name}\\s*\\(|\\brequire\\s*\\(\\s*["']tailess/vite["']\\s*\\)\\s*\\(`,
+    "g",
+  );
+  for (const call of code.matchAll(calls)) {
+    if (!insideOption(blank, call.index ?? 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Where a PostCSS config puts `specifier` in its plugin list, as an offset — or -1.
+ *
+ * A string key or element counts unless its value is `false`, which is how both
+ * postcss-load-config and Next.js switch a plugin off. `require(…)` inline counts. An
+ * import or a `require` into a name does not by itself — the name has to be used, which
+ * is the Vite rule too: an import a deleted `tailess()` left behind is not wiring, and
+ * reading it as wiring passed `doctor` and `check --strict` on a build with no variant CSS.
+ */
+function postcssUse(code: string, blank: string, specifier: string): number {
+  let first = -1;
+  const use = (at: number) => {
+    if (first === -1 || at < first) first = at;
+  };
+  for (const match of code.matchAll(new RegExp(`["']${specifier}["']`, "g"))) {
+    const at = match.index ?? 0;
+    const before = code.slice(Math.max(0, at - 200), at);
+    const into =
+      /(?:(?:const|let|var)\s+([\w$]+)\s*=|import\s+([\w$]+)\s*=)\s*require\s*\(\s*$/.exec(
+        before,
+      ) ??
+      /import\s+(?!type\s)(?:([\w$]+)|\{\s*default\s+as\s+([\w$]+)[^}]*\})[^;]*?\bfrom\s*$/.exec(
+        before,
+      );
+    if (into) {
+      const name = (into[1] ?? into[2] ?? "").replace(/\$/g, "\\$");
+      const names = [...blank.matchAll(new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, "g"))];
+      // The declaration is the last mention before the specifier; any other is a use.
+      const declared = names.filter((m) => (m.index ?? 0) < at).pop();
+      for (const m of names) if (m !== declared) use(m.index ?? 0);
+      continue;
+    }
+    if (/\bimport\s*\(?\s*$|\bfrom\s*$/.test(before)) continue;
+    const inline = /\brequire\s*\(\s*$/.exec(before);
+    if (inline) use(at - before.length + inline.index);
+    else if (!/^\s*:\s*false\b/.test(code.slice(at + match[0].length))) use(at);
+  }
+  return first;
+}
+
+/** How a config stands: wired, not wired, or — PostCSS — wired after Tailwind's plugin. */
+export type Wiring = "wired" | "unwired" | "misordered";
+
+/**
+ * How `text` wires tailess in, read as a config of `kind` — or, with none, as either.
  *
  * The Vite plugin has to be *called*: deleting `tailess()` from the `plugins` array and
  * leaving the import behind is exactly the shape this exists to catch, and reading for
  * the word alone would have called that wired. The import is read only to learn what the
- * plugin was bound to, so an aliased one is not a false alarm. The PostCSS form is a
- * string in a config rather than a call, so naming it *is* wiring it.
+ * plugin was bound to, so an aliased one is not a false alarm. The PostCSS plugin has to
+ * be in the list, and ahead of `@tailwindcss/postcss`: it writes the candidate list that
+ * plugin reads, so second is the same as absent — and the build prints no error either way.
  *
  * Read against {@link maskLiterals} rather than the raw text, because the same deletion
  * that leaves an import behind leaves a comment behind — `// we removed tailess()` — and
@@ -64,11 +148,42 @@ function bindingOf(code: string): string | undefined {
  * that unstyles a whole application with no build error, so the check that catches it
  * must not be readable by prose.
  */
-export function wired(text: string): boolean {
+export function wiring(text: string, kind?: "vite" | "postcss"): Wiring {
   const code = maskLiterals(text);
-  if (/["']tailess\/postcss["']/.test(code)) return true;
-  const name = (bindingOf(code) ?? "tailess").replace(/\$/g, "\\$");
-  return new RegExp(`(?<![\\w$.])${name}\\s*\\(`).test(code);
+  const blank = maskLiterals(text, true);
+  if (kind !== "postcss" && viteWired(code, blank)) return "wired";
+  if (kind === "vite") return "unwired";
+  const tailess = postcssUse(code, blank, "tailess/postcss");
+  if (tailess === -1) return "unwired";
+  const tailwind = postcssUse(code, blank, "@tailwindcss/postcss");
+  return tailwind !== -1 && tailwind < tailess ? "misordered" : "wired";
+}
+
+/** True when {@link wiring} says `text` is wired. */
+export function wired(text: string, kind?: "vite" | "postcss"): boolean {
+  return wiring(text, kind) === "wired";
+}
+
+/**
+ * Which plugin `text`, a config file called `name`, has to wire — `undefined` for either.
+ *
+ * A Vite config that loads `@tailwindcss/postcss` rather than `@tailwindcss/vite` runs
+ * Tailwind through PostCSS, where `tailess/postcss` is the right plugin. One that loads
+ * `@tailwindcss/vite` needs the Vite plugin, and `tailess/postcss` in its `css.postcss`
+ * cannot work — the README's own warning, which reading either plugin as wiring passed.
+ */
+export function pluginFor(name: string, text: string): "vite" | "postcss" | undefined {
+  if (viteConfig.test(name)) {
+    const code = maskLiterals(text);
+    const postcssOnly =
+      /["']@tailwindcss\/postcss["']/.test(code) && !/["']@tailwindcss\/vite["']/.test(code);
+    return postcssOnly ? undefined : "vite";
+  }
+  if (postcssConfig.test(name) || /^\.postcssrc/.test(name) || name === "package.json") {
+    return "postcss";
+  }
+  if (postcssData.test(name)) return "postcss";
+  return undefined;
 }
 
 /**
@@ -141,25 +256,6 @@ function importEnd(masked: string, from: number): number {
   return end;
 }
 
-/**
- * The one place `pattern` matches, or `null` when it matches anywhere but exactly once.
- *
- * Two candidates is an ambiguity, and this command gives up on those. `css.postcss.plugins`
- * is a documented Vite option that can legitimately precede the top-level `plugins` array,
- * and a non-global `String.replace` takes the first match — which writes the Vite plugin
- * into the PostCSS list and leaves the array that matters untouched, after saying it
- * succeeded.
- */
-function soleMatch(masked: string, pattern: RegExp): RegExpMatchArray | null {
-  const all = [...masked.matchAll(new RegExp(pattern.source, "g"))];
-  return all.length === 1 ? (all[0] as RegExpMatchArray) : null;
-}
-
-/** How many times `pattern` occurs in `masked`. */
-function countOf(masked: string, pattern: RegExp): number {
-  return [...masked.matchAll(new RegExp(pattern.source, "g"))].length;
-}
-
 /** Splice `text` into `source` at `at`. */
 function insertAt(source: string, at: number, text: string): string {
   return source.slice(0, at) + text + source.slice(at);
@@ -228,76 +324,114 @@ function isCommonJs(file: string, masked: string): boolean {
  *
  * Every position is found in {@link maskLiterals} of the source and spliced into the raw
  * text at that index, so a `plugins: [` inside a comment is neither edited nor counted.
- * The result is then read back with {@link wired}: an edit that does not actually wire
+ * The result is then read back with {@link wiring}: an edit that does not actually wire
  * the plugin in is not returned at all, however plausible its diff looks.
  */
 export function planEdit(host: Host): Edit | null {
-  if (host.kind === "unknown" || wired(host.source)) return null;
+  // A plugin listed after Tailwind's is not one to add a second copy of: that is a reorder,
+  // which `doctor` describes rather than this guessing at where the entry ends.
+  if (host.kind === "unknown") return null;
+  const kind = pluginFor(basename(host.file), host.source);
+  if (kind !== host.kind || wiring(host.source, kind) !== "unwired") return null;
 
   const masked = maskLiterals(host.source);
+  const blank = maskLiterals(host.source, true);
   // Match the file rather than forcing `\n` into it: a CRLF config edited with a bare
   // newline is left with mixed line endings, which every diff downstream then shows.
   const eol = host.source.includes("\r\n") ? "\r\n" : "\n";
-  let after: string;
+  // Only the config's own lists. With `plugins` held in a variable, the one literal left
+  // was `build.rollupOptions.plugins` or `css.postcss.plugins`, and writing there either
+  // lost every variant class in dev with nothing printed or failed the build.
+  const lists = (pattern: RegExp) =>
+    [...masked.matchAll(new RegExp(pattern.source, "g"))].filter(
+      (match) => !insideOption(blank, match.index ?? 0),
+    );
+  const entry = (listAt: number, close: string, text: string) =>
+    insertAt(host.source, listAt, listIsEmpty(masked, listAt, close) ? text : `${text}, `);
+  // An import left behind by a deleted call is the commonest unwired shape there is, and
+  // adding a second one declared the same name twice: a config that no longer parses,
+  // written after `doctor` recommended it. The binding that is there is reused, and a
+  // `tailess` that is already something else is not declared a second time.
+  const nameFor = (specifier: string) => {
+    const bound = bindingOf(masked, specifier);
+    if (bound) return { name: bound, bound: true };
+    return /(?<![\w$.])tailess\b/.test(blank) ? undefined : { name: "tailess", bound: false };
+  };
+  let after: string | null;
 
   if (host.kind === "vite") {
-    const list = soleMatch(masked, pluginsArray);
-    if (!list) return null;
-
-    // An import left behind by a deleted call is the commonest unwired shape there is,
-    // and adding a second one declared the same name twice: a config that no longer
-    // parses, written after `doctor` recommended it. The binding that is there is reused.
-    const bound = bindingOf(masked);
-    // A `tailess` that is already something else would be declared twice as well.
-    if (!bound && /(?<![\w$.])tailess\b/.test(maskLiterals(host.source, true))) return null;
-    const name = bound ?? "tailess";
-
+    const found = lists(pluginsArray);
+    const list = found.length === 1 ? found[0] : undefined;
+    const binding = nameFor("tailess/vite");
+    if (!list || !binding) return null;
     // Later position first, so the earlier index is still valid when it is used.
     const listAt = (list.index ?? 0) + list[0].length;
-    after = insertAt(
-      host.source,
-      listAt,
-      listIsEmpty(masked, listAt, "]") ? `${name}()` : `${name}(), `,
-    );
-
-    if (!bound) {
-      const cjs = isCommonJs(host.file, masked);
-      const importAt = cjs ? requireInsertPoint(masked) : importInsertPoint(masked);
-      if (importAt > listAt) return null;
-      const statement = cjs
-        ? 'const tailess = require("tailess/vite");'
-        : 'import tailess from "tailess/vite";';
-      // Leading, when nothing but trivia precedes the insertion point; trailing otherwise,
-      // so the new line follows the import it is placed after rather than splitting it.
-      const importText =
-        masked.slice(0, importAt).trim() === "" ? `${statement}${eol}` : `${eol}${statement}`;
-      after = insertAt(after, importAt, importText);
-    }
+    after = entry(listAt, "]", `${binding.name}()`);
+    if (!binding.bound) after = withImport(after, masked, host.file, eol, "tailess/vite", listAt);
   } else {
     // PostCSS: order matters, so tailess goes first — it has to write the candidate list
     // before Tailwind reads it.
-    const objects = countOf(masked, pluginsObject);
-    if (objects > 1) return null;
-    const object = objects === 1 ? soleMatch(masked, pluginsObject) : null;
-    const at = object ?? soleMatch(masked, pluginsArray);
-    if (!at) return null;
-    const listAt = (at.index ?? 0) + at[0].length;
-    const empty = listIsEmpty(masked, listAt, object ? "}" : "]");
-    after = insertAt(
-      host.source,
-      listAt,
-      object
-        ? `${eol}    "tailess/postcss": {}${empty ? "" : ","}`
-        : `"tailess/postcss"${empty ? "" : ", "}`,
-    );
+    const found = [...lists(pluginsObject), ...lists(pluginsArray)];
+    // A `"tailess/postcss": false` already there wins over a key added in front of it —
+    // the later duplicate is the one an object literal keeps — so the plugin would stay
+    // off after an edit that read as wiring it.
+    if (found.length !== 1 || /["']tailess\/postcss["']\s*:\s*false\b/.test(masked)) return null;
+    const list = found[0] as RegExpMatchArray;
+    const listAt = (list.index ?? 0) + list[0].length;
+    if (list[0].endsWith("{")) {
+      const empty = listIsEmpty(masked, listAt, "}");
+      after = insertAt(host.source, listAt, `${eol}    "tailess/postcss": {}${empty ? "" : ","}`);
+    } else {
+      // An array holds strings for Next.js and plugin instances for postcss-load-config,
+      // and each loader rejects the other's: a string put in front of
+      // `require("@tailwindcss/postcss")()` is "Invalid PostCSS Plugin found at:
+      // plugins[0]". The entries already there say which one reads it; an empty array
+      // says nothing, so it is left alone.
+      const head = masked.slice(listAt).trimStart();
+      if (/^["']/.test(head)) after = entry(listAt, "]", '"tailess/postcss"');
+      else if (!/^[\w$]/.test(head)) return null;
+      else if (isCommonJs(host.file, masked)) {
+        after = entry(listAt, "]", 'require("tailess/postcss")()');
+      } else {
+        const binding = nameFor("tailess/postcss");
+        if (!binding) return null;
+        after = entry(listAt, "]", `${binding.name}()`);
+        if (!binding.bound) {
+          after = withImport(after, masked, host.file, eol, "tailess/postcss", listAt);
+        }
+      }
+    }
   }
 
   // The point of the command is a config that works afterwards. Anything less is a hand
   // edit `doctor` describes, not a file this writes.
-  if (!wired(after)) return null;
-  if (host.kind === "vite" && !bindingOf(maskLiterals(after))) return null;
-
+  if (after === null || wiring(after, host.kind) !== "wired") return null;
   return { file: host.file, before: host.source, after };
+}
+
+/**
+ * `after` with `import tailess from "<specifier>"` added — or the `require` line, in a
+ * CommonJS config — or `null` when the only place for it is past `limit`, the list entry
+ * that uses it.
+ */
+function withImport(
+  after: string,
+  masked: string,
+  file: string,
+  eol: string,
+  specifier: string,
+  limit: number,
+): string | null {
+  const cjs = isCommonJs(file, masked);
+  const at = cjs ? requireInsertPoint(masked) : importInsertPoint(masked);
+  if (at > limit) return null;
+  const statement = cjs
+    ? `const tailess = require("${specifier}");`
+    : `import tailess from "${specifier}";`;
+  // Leading, when nothing but trivia precedes the insertion point; trailing otherwise, so
+  // the new line follows the import it is placed after rather than splitting it.
+  const text = masked.slice(0, at).trim() === "" ? `${statement}${eol}` : `${eol}${statement}`;
+  return insertAt(after, at, text);
 }
 
 /** Parse `text` as the file `file`, answering with the first syntax error or `null`. */
@@ -449,9 +583,30 @@ export async function runDoctor(cwd: string, json = false): Promise<number> {
     return done(2, { error: "no-config" });
   }
 
-  if (wired(host.source)) {
+  const state = wiring(host.source, pluginFor(basename(host.file), host.source));
+  if (state === "wired") {
     say(`[tailess] ${where(host.file)} calls the plugin. Nothing to do.`);
     return done(0, { host: host.kind, file: where(host.file), wired: true });
+  }
+
+  if (state === "misordered") {
+    // The ordering rule is the one this command prints for an unwired config, so passing
+    // a config that breaks it contradicted its own advice — and the build only says so in
+    // a log line nobody reads.
+    say(
+      `[tailess] ${where(host.file)} lists "tailess/postcss" after "@tailwindcss/postcss", ` +
+        "so Tailwind reads the candidate list before tailess has written it and no variant " +
+        "class on the page has CSS behind it. Move it first:",
+      true,
+    );
+    say(`\n${handEdit(host)}`, true);
+    return done(1, {
+      host: host.kind,
+      file: where(host.file),
+      wired: false,
+      order: "tailwind-first",
+      fixable: false,
+    });
   }
 
   const plan = planEdit(host);
@@ -467,19 +622,37 @@ export async function runDoctor(cwd: string, json = false): Promise<number> {
       : "\nThis config is not one `tailess init` can edit safely. Add it by hand:",
     true,
   );
-  say(
-    host.kind === "vite"
-      ? '\n  import tailess from "tailess/vite";\n  plugins: [tailwindcss(), tailess()]'
-      : '\n  plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} }' +
-          "\n\ntailess must come first: it writes the candidate list Tailwind then reads.",
-    true,
-  );
+  say(`\n${handEdit(host)}`, true);
   return done(1, {
     host: host.kind,
     file: where(host.file),
     wired: false,
     fixable: plan !== null,
   });
+}
+
+/**
+ * The lines to add by hand, in the shape this config is written in.
+ *
+ * A PostCSS list of plugin instances takes a call, not the string form: the string is
+ * what Next.js reads, and postcss-load-config rejects it.
+ */
+function handEdit(host: Exclude<Host, { kind: "unknown" }>): string {
+  const masked = maskLiterals(host.source);
+  const cjs = isCommonJs(host.file, masked);
+  if (host.kind === "vite") {
+    return cjs
+      ? '  const tailess = require("tailess/vite");\n  plugins: [tailwindcss(), tailess()]'
+      : '  import tailess from "tailess/vite";\n  plugins: [tailwindcss(), tailess()]';
+  }
+  const order = "\n\ntailess must come first: it writes the candidate list Tailwind then reads.";
+  const array = /\bplugins\s*:\s*\[\s*([^\s\]])/.exec(masked)?.[1];
+  if (array !== undefined && !/["']/.test(array)) {
+    return cjs
+      ? `  plugins: [require("tailess/postcss")(), require("@tailwindcss/postcss")()]${order}`
+      : `  import tailess from "tailess/postcss";\n  plugins: [tailess(), tailwindcss()]${order}`;
+  }
+  return `  plugins: { "tailess/postcss": {}, "@tailwindcss/postcss": {} }${order}`;
 }
 
 /** `tailess init` — write that edit, after showing it. */
@@ -505,9 +678,19 @@ export async function runInit(cwd: string, write: boolean, json = false): Promis
     return done(2, { error: "no-config" });
   }
 
-  if (wired(host.source)) {
+  const state = wiring(host.source, pluginFor(basename(host.file), host.source));
+  if (state === "wired") {
     say(`[tailess] ${where(host.file)} already calls the plugin. Nothing to do.`);
     return done(0, { file: where(host.file), wired: true, written: false });
+  }
+  if (state === "misordered") {
+    say(
+      `[tailess] ${where(host.file)} lists "tailess/postcss" after "@tailwindcss/postcss", ` +
+        "which is the same as not listing it. Nothing was written: move it first by hand " +
+        "— `npx tailess doctor` shows the line.",
+      true,
+    );
+    return done(2, { error: "misordered", file: where(host.file) });
   }
 
   const plan = planEdit(host);

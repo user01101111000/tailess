@@ -10,7 +10,7 @@ import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
 import { hasRule } from "../internal/selector.js";
 import { type Command, commands, jsonResult } from "./result.js";
-import { runDoctor, runInit, wired } from "./setup.js";
+import { pluginFor, runDoctor, runInit, wired } from "./setup.js";
 import { findBrokenAcross, probeList, utilitySentinel } from "./verify.js";
 
 /**
@@ -500,12 +500,15 @@ async function pluginLooksUnwired(cwd: string): Promise<boolean> {
       }
       if (postcss === undefined) continue;
       sawConfig = true;
-      if (wired(JSON.stringify(postcss))) return false;
+      if (wired(JSON.stringify(postcss), "postcss")) return false;
       continue;
     }
 
     sawConfig = true;
-    if (wired(text)) return false;
+    // Read as the plugin this file has to wire: a `tailess/postcss` beside
+    // `@tailwindcss/vite`, an import whose call was deleted, and a PostCSS entry after
+    // Tailwind's all passed as "mentions tailess" while nothing had CSS.
+    if (wired(text, pluginFor(entry.name, text))) return false;
     // A config that builds its plugin list somewhere else — `import base from
     // "./vite.base.js"`, the shape every monorepo and shared preset has — is one this
     // cannot see through, and concluding "unwired" there failed a correctly wired project
