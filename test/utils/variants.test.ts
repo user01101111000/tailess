@@ -178,6 +178,23 @@ describe("a boolean variant", () => {
   });
 });
 
+describe("class or className passed in the props, the cva and tv habit", () => {
+  it("is not applied, and says where extra classes go", () => {
+    // cva and tv both read `class`/`className` off the props; here extra classes are a
+    // second argument, and a props object built elsewhere slips past the types — so the
+    // class was dropped with nothing said.
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      const props = { tone: "danger", className: "mt-2" } as const;
+      expect(button(props as never)).not.toContain("mt-2");
+      expect(seen.some((m) => m.includes("className") && m.includes("second argument"))).toBe(true);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  });
+});
+
 describe("a compound rule naming a variant the recipe does not have", () => {
   it("never applies, as in cva and tailwind-variants, and says so once", () => {
     // Only the declared groups were checked, so a typo or a since-renamed group counted

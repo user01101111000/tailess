@@ -140,22 +140,24 @@ describe("the browser bundle", () => {
     // pass vacuously. And a custom `merge` returning a non-string put that value straight
     // into the class attribute.
     //
-    // Raised again to 14,500 for the release audit's `variants` guard: 13,645 -> 14,028,
-    // all of it inside that helper and none of it in `ss` + `cn`. A component's extra
-    // argument accepted an `ss` map, which the runtime expanded into prefixed classes the
-    // build could never see — the scanner reads the recipe, not the component's calls —
-    // so `button({}, { md: "w-auto" })` put `md:w-auto` on the element with no rule and
-    // no warning, and `check --strict` passed. The types refuse it now; the characters are
-    // the warning for the JavaScript and cast paths the types cannot reach.
+    // Raised again to 15,000 for the pre-announcement audit: 13,645 -> 14,659 chars,
+    // 6,141 gzipped. `ss` + `cn` went 5,690 -> 5,808, and that is the part to weigh:
+    // freezing the exported key lists the runtime itself reads (a caller's in-place
+    // `screenKeys.reverse()` made `between()` warn falsely and reordered `responsive()`),
+    // and ranking an undeclared key after every declared one rather than tied with the
+    // first. Everything else is in `variants`, and is warning text for failures that were
+    // silent: an `ss` map passed as a component's extra argument (the build reads the
+    // recipe, never the component's calls, so `md:w-auto` had no rule and `check --strict`
+    // passed), a compound rule naming a group the recipe does not declare (it applied to
+    // everything; cva and tv never apply it), and `class`/`className` in the props (cva
+    // and tv read them there; here they were dropped).
     //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 5,683 chars, which is the number worth watching, since it is what most projects
-    // actually pay. That figure was recorded as 5,170 and described as unchanged through
-    // several of the raises above; it was neither — nothing re-measured it. It is
-    // measured here now, along with the rest: `vars` on top costs 411 (6,094), and
-    // `variants` on top costs 2,908 (8,591).
-    expect(code.length).toBeLessThan(14_500);
+    // 5,808 chars (2,752 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 3,853 (9,661). Measured with the
+    // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
+    expect(code.length).toBeLessThan(15_000);
   });
 
   it("pulls in no Node builtins", async () => {

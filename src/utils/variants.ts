@@ -240,6 +240,16 @@ function optionKey(value: unknown): string | undefined {
 const warnedFlatExtends = new Set<string>();
 const warnedExtraMap = new Set<string>();
 const warnedStaleCompound = new Set<string>();
+const warnedClassProp = new Set<string>();
+
+/** Say so, once, when extra classes arrive in the props rather than after them. */
+function warnClassProp(name: string): void {
+  if (!firstTime(warnedClassProp, name)) return;
+  warn(
+    `variants(): props.${name} is not applied — extra classes are the second argument: ` +
+      `component(props, ${name}).`,
+  );
+}
 
 /** Say so, once, when a compound rule names a group the recipe does not declare. */
 function warnStaleCompound(keys: string[]): void {
@@ -556,6 +566,15 @@ export function variants(first: any, second?: any): any {
       for (const name of Object.keys(props)) {
         const key = optionKey(props[name]);
         if (key !== undefined) own(chosen, name, key);
+      }
+      // cva and tv read extra classes off the props; here they are a second argument,
+      // and a props object built elsewhere slips past the types, so the class was
+      // dropped without a word. Other unknown props — `children`, `onClick` — are the
+      // normal cost of forwarding a component's props, and stay quiet.
+      if (isDev) {
+        for (const name of ["class", "className"]) {
+          if (props[name] !== undefined && !names.includes(name)) warnClassProp(name);
+        }
       }
     }
     return chosen;

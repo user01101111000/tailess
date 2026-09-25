@@ -779,7 +779,8 @@ includes the inherited options. Slotted recipes extend the same way, gaining par
 #### Coming from `cva` or `tailwind-variants`
 
 Same shape, and the renamed keys are accepted as aliases — so a port is `cva(` ->
-`variants(` and nothing else. Every line below is verified against the current build.
+`variants(`, plus the two call-site differences marked below. Every line is verified
+against the current build.
 
 | `cva` / `tv` | tailess | |
 | --- | --- | --- |
@@ -788,12 +789,13 @@ Same shape, and the renamed keys are accepted as aliases — so a port is `cva(`
 | `compoundVariants` | `compound` | |
 | `class` / `className` in a compound rule | either | `className` is an alias; `class` wins if both are given |
 | `cva("base", { … })` | `variants("base", { … })` | the same call shape; `base` also works as a config key |
-| `button({ tone: "danger", class: "mt-2" })` | `button({ tone: "danger" }, "mt-2")` | extra classes are a second argument, like `cn` |
+| `button({ tone: "danger", class: "mt-2" })` | `button({ tone: "danger" }, "mt-2")` | **a difference:** extra classes are a second argument, like `cn`; `class`/`className` in the props is not applied, and warns in development |
 | `VariantProps<typeof button>` | `VariantProps<typeof button>` | unchanged |
 | `slots` | `slots` | returns a record of strings, not slot functions |
 | `extend` | `extend` | merges per option, so an inherited one is not dropped |
 | `{ intent: ["a", "b"] }` in a compound | same | |
 | `disabled?: boolean` | same | |
+| `tv`: an omitted boolean prop picks its `false` option | an omitted prop picks nothing, as in `cva` | **a difference:** add `defaults: { disabled: false }` to keep tv's behaviour — a `false` option or a `false` compound rule does not apply otherwise |
 
 ```diff
 - import { cva } from "class-variance-authority";
@@ -807,8 +809,8 @@ Same shape, and the renamed keys are accepted as aliases — so a port is `cva(`
   });
 ```
 
-That is the whole port — the renamed keys are accepted as written and the call shape is
-the same, which is why there is no codemod to run.
+Beyond the two marked differences, that is the whole port — the renamed keys are accepted
+as written and the call shape is the same, which is why there is no codemod to run.
 
 **What you gain.** A variant option can be an `ss` map, so it carries its own breakpoints
 and states — `lg: { base: "text-lg px-4", md: "px-6" }`, which a flat string cannot say.
