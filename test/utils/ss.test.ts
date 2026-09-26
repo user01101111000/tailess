@@ -82,6 +82,23 @@ describe("ss", () => {
     warn.mockRestore();
   });
 
+  it("says what is true of an unknown key, not that Tailwind lacks it", () => {
+    // `aria-checked` is a working Tailwind variant, and the warning called it "not a
+    // Tailwind breakpoint or state variant"; for "" it described a ":" prefix that the
+    // top level never emits.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(ss({ "aria-checked": "p-4" } as never)).toBe("aria-checked:p-4");
+    expect(ss({ "": "p-2" } as never)).toBe("p-2");
+    const messages = warn.mock.calls.map(([message]) => String(message));
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain(`"aria-checked" is not one of ss()'s keys`);
+    for (const message of messages) {
+      expect(message).not.toContain("not a Tailwind");
+      expect(message).not.toContain('":" prefix');
+    }
+    warn.mockRestore();
+  });
+
   it("does not warn for an unknown key with a falsy value", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     // @ts-expect-error "blank" is not a Tailwind breakpoint or state variant.

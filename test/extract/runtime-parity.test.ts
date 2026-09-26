@@ -295,6 +295,26 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   {
     src: `ss({ md: on("hover", on("focus", on("active", until("xl", aria("selected", "p-3"))))) })`,
   },
+  // Call spellings the pattern did not recognise: an optional call, and a comment
+  // between the name and its parenthesis. Each built a class nothing enumerated.
+  { src: `t.ss?.({ md: "p-4" })`, env: { t: { ss } } },
+  { src: `t.on?.("hover", "underline")`, env: { t: { on } } },
+  { src: `ss /* why */ ({ md: "p-4" })` },
+  // A comment after a key belonged to the key: `lg /* desktops */:p-3`.
+  { src: `ss({ lg /* desktops */: "p-3", md: "p-2" })` },
+  // A parenthesized state list is still a list.
+  { src: `on((["dark", "hover"]), "underline")` },
+  // Escapes the runtime decodes: each of these is a space, so the value is two classes.
+  { src: String.raw`ss({ md: "p-4\x20text-lg" })` },
+  { src: String.raw`ss({ md: "p-4 text-lg" })` },
+  { src: String.raw`ss({ md: "p-4\u{20}text-lg" })` },
+  { src: String.raw`ss({ md: "after:content-['→']" })` },
+  // A template literal decodes its escapes too.
+  { src: "ss({ md: `p-4\\ttext-lg` })" },
+  // A backslash line continuation is nothing at runtime — and with CRLF the string
+  // ended early, taking the next argument's classes with it.
+  { src: `ss({ md: "p-4 \\\r\ntext-lg" }, { lg: "p-6" })` },
+  { src: `ss({ md: "p-4 \\\ntext-lg" }, { lg: "p-6" })` },
 ];
 
 describe("what the runtime builds, the scanner finds", () => {
@@ -331,6 +351,9 @@ const typescriptCases: string[] = [
   `variants({ variants: { t: { a: "p-1" } }, compound: ([{ t: "a", class: { lg: "p-6" } }]) })({ t: "a" })`,
   `variants({ variants: { t: { a: "p-1" } }, compound: ([{ t: "a", class: { xl: "p-8" } }] as const) })({ t: "a" })`,
   `variants("flex", { variants: { t: { a: "p-1" } }, compoundVariants: [{ t: "a", class: { sm: "p-2" } }] as const })({ t: "a" })`,
+  // Type arguments on the call, and an angle-bracket assertion on a state list.
+  `variants<any>({ variants: { s: { a: { md: "p-4" } } } })({ s: "a" })`,
+  `on(<const>["dark", "hover"], "underline")`,
 ];
 
 describe("what the runtime builds from TypeScript, the scanner finds", () => {

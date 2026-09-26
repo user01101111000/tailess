@@ -506,6 +506,11 @@ cn("px-2 py-1", isActive && "bg-blue-500", "px-4");
 // → "py-1 bg-blue-500 px-4"   (px-2 dropped in favour of px-4)
 ```
 
+Its argument type is `clsx`'s own, so it accepts any object — a function included. A
+recipe handed over uncalled, `cn(button, className)`, type-checks and contributes
+nothing; call it — `button({ tone }, className)` takes the extra classes itself. `ss`
+refuses a function outright.
+
 ### `responsive` — mobile-first
 
 ```ts
@@ -1153,7 +1158,13 @@ tw({ md: "p-6" });                   // ✗ not found — nothing supplies md:p-
 
 import * as t from "tailess";
 t.ss({ md: "p-6" });                 // ✓ a namespace import is fine
+t.ss?.({ md: "p-6" });               // ✓ so is an optional call
+t["ss"]({ md: "p-6" });              // ✗ not found — an element access is not a name
 ```
+
+It reads a call's arguments as text, without a full JavaScript parser, so a regular
+expression holding a quote — `ss({ md: "p-4" }, s.replace(/"/g, "") && { lg: "p-6" })` —
+can hide the classes after it. Compute that value before the call.
 
 If you need one of those, put the literal somewhere the scanner can reach it — usually by
 writing the full class in a `match()` lookup, which needs no build integration at all

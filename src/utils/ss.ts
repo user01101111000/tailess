@@ -54,9 +54,9 @@ const warnedScopes = new Set<string>();
 
 function warnUnknownKey(key: string): void {
   warn(
-    `[tailess] ss(): "${key}" is not a Tailwind breakpoint or state variant. ` +
-      `It is still emitted as a "${key}:" prefix, but nothing validates it — ` +
-      `use withPrefix("${key}", ...) if that's intentional.`,
+    `[tailess] ss(): "${key}" is not one of ss()'s keys. It is emitted as written, but ` +
+      "nothing checks that Tailwind has that variant — declare it with configure({ keys }) " +
+      "if it is yours, or use withPrefix().",
   );
 }
 

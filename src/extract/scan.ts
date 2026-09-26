@@ -52,7 +52,18 @@ export const helperNames = [
 
 // Built from the list rather than written twice: the diagnostics ask the same
 // question about the same names, and two copies only have to disagree once.
-const callPattern = new RegExp(`(?<![\\w$])(${helperNames.join("|")})\\s*\\(`, "g");
+//
+// Between the name and its `(` a call may carry whitespace and block comments, an
+// optional-call `?.` and TypeScript type arguments: `t.ss?.(`, `ss /* why */ (`,
+// `variants<Props>(`. Each of those is a call the runtime makes, and requiring the paren
+// right after the name left every prefixed class it built unenumerated and unstyled.
+// The comment and the type arguments are bounded, so prose like "turn on <b>" in a
+// Markdown file cannot send each match on a walk to the end of the file.
+const callPattern = new RegExp(
+  `(?<![\\w$])(${helperNames.join("|")})(?:\\s|\\/\\*[\\s\\S]{0,200}?\\*\\/)*` +
+    "(?:\\?\\.\\s*)?(?:<(?:[^<>()]|<[^<>()]{0,100}>){0,200}>\\s*)?\\(",
+  "g",
+);
 
 /**
  * A second instance of {@link callPattern} for {@link outerCalls}.
@@ -101,7 +112,9 @@ function skipString(code: string, i: number, quote: string): number {
   while (i < code.length) {
     const c = code[i];
     if (c === "\\") {
-      i += 2;
+      // A line continuation is a backslash and a line break, and CRLF is one break:
+      // stepping over two characters left the LF behind to end the "string" as prose.
+      i += code[i + 1] === "\r" && code[i + 2] === "\n" ? 3 : 2;
       continue;
     }
     if (c === quote) return i + 1;
@@ -367,7 +380,7 @@ export function extractStrings(text: string): string[] {
     if (c === "`") {
       const end = skipTemplate(text, i);
       const inner = text.slice(i + 1, end - 1);
-      if (!inner.includes("${")) out.push(inner);
+      if (!inner.includes("${")) out.push(unescapeString(inner));
       i = end;
       continue;
     }
@@ -404,7 +417,23 @@ const controlEscapes: Record<string, string> = {
  * take a value.
  */
 function unescapeString(s: string): string {
-  return s.replace(/\\(.)/g, (_, ch: string) => controlEscapes[ch] ?? ch);
+  return s.replace(
+    /\\(?:x([\da-fA-F]{2})|u([\da-fA-F]{4})|u\{([\da-fA-F]{1,6})\}|(\r\n|[\s\S]))/g,
+    (_, x?: string, u?: string, braced?: string, ch?: string) => {
+      // `"p-4\x20text-lg"` is two classes at runtime, and read as `x20` it was one
+      // class that matched nothing — the same break as the whitespace escapes above.
+      const hex = x ?? u ?? braced;
+      if (hex !== undefined) {
+        const point = Number.parseInt(hex, 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : "";
+      }
+      // A line continuation contributes nothing to the string.
+      if (ch === "\n" || ch === "\r" || ch === "\r\n" || ch === " " || ch === " ") {
+        return "";
+      }
+      return controlEscapes[ch as string] ?? (ch as string);
+    },
+  );
 }
 
 /**
@@ -429,7 +458,14 @@ export function parseObject(text: string): Array<{ key: string; value: string }>
     if (entry === "" || entry.startsWith("...")) continue;
     const colon = topLevelColon(entry);
     if (colon === -1) continue;
-    const key = normalizeKey(entry.slice(0, colon).trim());
+    // Likewise a comment between the key and its colon: `lg /* desktops */: "p-3"` made
+    // the candidate `lg /* desktops */:p-3`.
+    const key = normalizeKey(
+      entry
+        .slice(0, colon)
+        .replace(/(?:\s|\/\*[\s\S]*?\*\/)+$/, "")
+        .trim(),
+    );
     if (key == null) continue;
     props.push({ key, value: entry.slice(colon + 1).trim() });
   }

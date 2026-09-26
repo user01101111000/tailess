@@ -32,7 +32,7 @@ async function bundleFor(mode: "production" | "development"): Promise<string> {
 /** A distinctive fragment of each warning, so a reworded message still matches. */
 const warnings = [
   "doesn't include tailess",
-  "not a Tailwind breakpoint",
+  "not one of ss()'s keys",
   "empty prefix",
   "contains whitespace",
   "empty range",
