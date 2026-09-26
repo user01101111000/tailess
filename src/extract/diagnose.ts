@@ -7,6 +7,7 @@ import {
   dictionaryKeys,
   extractStrings,
   helperNames,
+  inertCode,
   isArrayLiteral,
   maskLiterals,
   objectLiterals,
@@ -897,7 +898,10 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
     // beside tailess's `ss` is a file that imports the package, and its
     // `on(accessor, (c) => ({ open: c > 0 }))` was checked as a class map.
     const bare = importedNames(masked);
+    // Nor a call that does not run: in a comment, or in a README's code fence.
+    const inert = inertCode(code, file);
     for (const call of [...scanCalls(code), ...scanMatchCalls(code)]) {
+      if (call.at !== undefined && inert[call.at] === 1) continue;
       if (call.receiver === "" ? bare.has(call.name) : receivers.has(call.receiver)) {
         check(call, report);
       }

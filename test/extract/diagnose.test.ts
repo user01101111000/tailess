@@ -685,3 +685,47 @@ describe("a prefixed class the build cannot hand to Tailwind", () => {
     expect(kinds(`ss({ md: 'after:content-["x"]' })`)).toEqual([]);
   });
 });
+
+describe("a call that does not run", () => {
+  // Enumeration reads comments and docs on purpose — an extra candidate is free. The
+  // checks must not: each of these failed `check --strict` over a line that never runs.
+  const at = (file: string, code: string) => diagnose(code, file).map((d) => d.kind);
+  const live = `import { ss } from "tailess";\nexport const a = ss({ base: "flex", md: big ? "p-6" : "p-2" });\n`;
+
+  it("says nothing about one in a comment", () => {
+    expect(at("a.ts", `${live}// was: ss({ md: size });\n`)).toEqual([]);
+    expect(at("a.ts", `${live}/** Do not write \`ss({ md: size })\`. */\n`)).toEqual([]);
+    expect(at("a.ts", `${live}/* ss({ md: size }) */\n`)).toEqual([]);
+  });
+
+  it("says nothing about one in an HTML comment in markup", () => {
+    const vue =
+      `<script setup>\nimport { ss } from "tailess";\n</script>\n<template>\n` +
+      `  <!-- old: <div :class="ss({ md: props.size })"> -->\n` +
+      `  <div :class="ss({ base: 'flex', md: 'gap-2' })" />\n</template>\n`;
+    expect(at("App.vue", vue)).toEqual([]);
+  });
+
+  it("says nothing about one in a Markdown code fence or code span", () => {
+    for (const fence of ["```", "~~~"]) {
+      const md = `# ui\n\n${fence}ts\nimport { ss } from "tailess";\nss({ md: size });\n${fence}\n`;
+      expect(at("README.md", md), fence).toEqual([]);
+    }
+    const mdx =
+      `import { ss } from "tailess"\n\n<div className={ss({ base: "p-2", md: "p-4" })} />\n\n` +
+      "Never write `ss({ md: size })`.\n\n```tsx\nss({ md: size });\n```\n";
+    expect(at("docs.mdx", mdx)).toEqual([]);
+  });
+
+  it("still reports the same call where it runs", () => {
+    expect(at("a.ts", `${live}ss({ md: size });\n`)).toEqual(["dynamic-value"]);
+    // Inside a template's interpolation is code, not a string.
+    expect(at("a.ts", `${live}const c = \`x \${ss({ md: size })}\`;\n`)).toEqual(["dynamic-value"]);
+    const vue =
+      `<script setup>\nimport { ss } from "tailess";\n</script>\n` +
+      `<template><div :class="ss({ md: props.size })" /></template>\n`;
+    expect(at("App.vue", vue)).toEqual(["dynamic-value"]);
+    const mdx = `import { ss } from "tailess"\n\n<div className={ss({ md: size })} />\n`;
+    expect(at("docs.mdx", mdx)).toEqual(["dynamic-value"]);
+  });
+});

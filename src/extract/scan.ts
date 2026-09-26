@@ -17,6 +17,8 @@ export interface RawCall {
    * `socket.on(...)` is not a tailess call.
    */
   receiver: string;
+  /** Index of the call's `(` in the scanned text; see {@link inertCode}. */
+  at?: number;
 }
 
 /**
@@ -258,6 +260,56 @@ export function maskLiterals(code: string, alsoStrings = false): string {
     i += 1;
   }
   return out.join("");
+}
+
+/** Markdown-flavoured files, where a backtick opens inline code rather than a template. */
+const markdownFile = /\.(?:mdx?|markdown)$/i;
+/** Files whose markup can hold an HTML comment. */
+const markupFile = /\.(?:vue|svelte|astro|html?|mdx?|markdown)$/i;
+/** A fenced code block, ``` or ~~~, through its closing fence or the end of the file. */
+const fencedBlock = /^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\1[ \t]*$|(?![\s\S]))/gm;
+/** An inline code span on one line: `ss({ md: size })` in a sentence. */
+const codeSpan = /(`+)[^`\n][^\n]*?\1/g;
+
+/**
+ * One flag per character of `code`: set where nothing runs — a JavaScript comment, an
+ * HTML comment in a markup file, a fenced block or an inline code span in Markdown.
+ *
+ * Enumeration reads all of it on purpose, since an extra candidate is free. The
+ * diagnostics must not: `// was: ss({ md: size })`, a JSDoc "do not write
+ * `ss({ md: size })`", a commented-out Vue element or a README's code fence each failed
+ * `check --strict` and `diagnostics: "error"` on a line that never runs.
+ */
+export function inertCode(code: string, file?: string): Uint8Array {
+  const out = new Uint8Array(code.length);
+  const markdown = file !== undefined && markdownFile.test(file);
+  if (markdown) {
+    for (const m of code.matchAll(fencedBlock)) out.fill(1, m.index, m.index + m[0].length);
+    for (const m of code.matchAll(codeSpan)) out.fill(1, m.index, m.index + m[0].length);
+  }
+  if (file !== undefined && markupFile.test(file)) {
+    for (const m of code.matchAll(/<!--[\s\S]*?(?:-->|$)/g)) {
+      out.fill(1, m.index, m.index + m[0].length);
+    }
+  }
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    if (out[i] === 1) i += 1;
+    else if (c === "'" || c === '"') {
+      const end = skipString(code, i, c);
+      i = end === -1 ? i + 1 : end;
+    } else if (c === "`" && !markdown) i = skipTemplate(code, i);
+    else {
+      const end = c === "/" ? skipComment(code, i) : i;
+      if (end === i) i += 1;
+      else {
+        out.fill(1, i, end);
+        i = end;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -902,6 +954,7 @@ function callsMatching(code: string, pattern: RegExp): RawCall[] {
       name,
       args: splitArgs(readParen(code, open)),
       receiver: receiverBefore(code, match.index),
+      at: open,
     });
   }
   return calls;
