@@ -75,7 +75,6 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
  */
 export function createSidecar(cacheDir: string, scope?: string): Sidecar {
   const path = join(resolve(cacheDir), "tailess", ...(scope ? [scope] : []), "tailess.css");
-  let written: string | null = null;
   let serial = 0;
 
   /**
@@ -109,16 +108,16 @@ export function createSidecar(cacheDir: string, scope?: string): Sidecar {
   ): Promise<{ css: string; changed: boolean }> {
     const css = buildPrelude(classes);
 
-    // Confirm the file still holds this list rather than trusting `written` alone: cache
-    // directories get wiped between runs (`vite --force`, a clean script), and another
-    // writer pointed at the same file replaces it — either way a stale "already written"
-    // would leave the entry importing nothing, or someone else's classes.
-    const unchanged =
-      css === written && (await readFile(path, "utf8").catch(() => undefined)) === css;
-    if (unchanged) return { css, changed: false };
+    // The file is the only truth. Memory of having written it is stale when the cache
+    // directory was wiped (`vite --force`, a clean script) or another writer replaced it,
+    // and it is empty in a fresh instance — which postcss-cli and postcss-loader create
+    // for every rebuild. Rewriting identical bytes there bumped the mtime of a file
+    // Tailwind reported as a dependency, so the watcher rebuilt, forever.
+    if ((await readFile(path, "utf8").catch(() => undefined)) === css) {
+      return { css, changed: false };
+    }
 
     await write(css);
-    written = css;
     return { css, changed: true };
   }
 
