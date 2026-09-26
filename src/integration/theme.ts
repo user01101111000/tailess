@@ -9,7 +9,7 @@ import {
   stateKeys,
 } from "../constants.js";
 import type { Diagnostic } from "../extract/diagnose.js";
-import { importSpecifiers, readStylesheet, tailwindPrefixIn } from "./entry.js";
+import { importSpecifiers, maxDepth, readStylesheet, tailwindPrefixIn } from "./entry.js";
 
 /**
  * Breakpoints tailess ships keys for, checked against the ones the project's CSS
@@ -37,9 +37,6 @@ import { importSpecifiers, readStylesheet, tailwindPrefixIn } from "./entry.js";
  * inputs and risk being confidently wrong, a project with a `@config` anywhere in its
  * stylesheet chain gets no answer at all.
  */
-
-/** How many `@import` hops to follow. Matches {@link isTailwindEntry}'s budget. */
-const maxDepth = 3;
 
 /**
  * `@theme`, with or without a modifier (`inline`, `static`, `reference`).

@@ -7,6 +7,7 @@ import {
   importSpecifiers,
   isTailwindEntry,
   isTailwindSpecifier,
+  resolveWithNode,
 } from "../../src/integration/entry.js";
 
 let dir = "";
@@ -98,18 +99,69 @@ describe("isTailwindEntry", () => {
     expect(await isTailwindEntry(`@import "./a.css";`, join(dir, "entry.css"))).toBe(false);
   });
 
-  it("stops after a bounded number of hops", async () => {
-    // 5 hops deep, beyond the limit — better to under-inject than to walk forever.
-    await writeFile(join(dir, "l5.css"), `@import "tailwindcss";`);
-    for (let i = 4; i >= 1; i -= 1) {
+  /** `app.css` → l1 → … → l<hops>.css, the last of which imports Tailwind. */
+  async function chain(hops: number): Promise<boolean> {
+    await writeFile(join(dir, `l${hops}.css`), `@import "tailwindcss";`);
+    for (let i = hops - 1; i >= 1; i -= 1) {
       await writeFile(join(dir, `l${i}.css`), `@import "./l${i + 1}.css";`);
     }
-    expect(await isTailwindEntry(`@import "./l1.css";`, join(dir, "app.css"))).toBe(false);
+    return isTailwindEntry(`@import "./l1.css";`, join(dir, "app.css"));
+  }
+
+  it("follows a real layout's five hops", async () => {
+    // app → base → theme → tokens → Tailwind was one hop past the old limit of three,
+    // and got no injection and no warning.
+    expect(await chain(5)).toBe(true);
+  });
+
+  it("stops after a bounded number of hops", async () => {
+    // Beyond the limit — better to under-inject than to walk forever.
+    expect(await chain(12)).toBe(false);
   });
 
   it("ignores missing files and unresolvable bare specifiers", async () => {
     expect(await isTailwindEntry(`@import "./nope.css";`, join(dir, "app.css"))).toBe(false);
     expect(await isTailwindEntry(`@import "@acme/styles";`, join(dir, "app.css"))).toBe(false);
+  });
+
+  it("follows a bare or aliased import through the resolver it is given", async () => {
+    // A Vite alias (`@/styles/tw.css`) or a workspace package (`@acme/ui/styles.css`)
+    // between the app's stylesheet and Tailwind: never followed, so no injection.
+    await mkdir(join(dir, "styles"));
+    await writeFile(join(dir, "styles", "tw.css"), `@import "tailwindcss";`);
+    const resolveImport = async (specifier: string) =>
+      specifier.startsWith("@/") ? join(dir, specifier.slice(2)) : undefined;
+    const css = `@import "@/styles/tw.css";`;
+    expect(await isTailwindEntry(css, join(dir, "app.css"))).toBe(false);
+    expect(
+      await isTailwindEntry(css, join(dir, "app.css"), undefined, undefined, resolveImport),
+    ).toBe(true);
+  });
+
+  it("follows a workspace package's exports through Node's resolution", async () => {
+    // The shadcn/ui monorepo template: `@import "@workspace/ui/globals.css"`.
+    const pkg = join(dir, "node_modules", "@workspace", "ui");
+    await mkdir(join(pkg, "src"), { recursive: true });
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "@workspace/ui", exports: { "./globals.css": "./src/globals.css" } }),
+    );
+    await writeFile(join(pkg, "src", "globals.css"), `@import "tailwindcss";`);
+    const css = `@import "@workspace/ui/globals.css";`;
+    expect(
+      await isTailwindEntry(css, join(dir, "app.css"), undefined, undefined, resolveWithNode),
+    ).toBe(true);
+  });
+
+  it("never tries to follow a remote import", async () => {
+    let asked = 0;
+    const resolveImport = async () => {
+      asked += 1;
+      return undefined;
+    };
+    const css = `@import url("https://fonts.googleapis.com/css2?family=Inter");`;
+    await isTailwindEntry(css, join(dir, "app.css"), undefined, undefined, resolveImport);
+    expect(asked).toBe(0);
   });
 
   it("cannot follow imports without knowing the file, but still sees direct ones", async () => {

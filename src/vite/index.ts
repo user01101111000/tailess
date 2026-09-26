@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
-import { isTailwindEntry } from "../integration/entry.js";
+import { isTailwindEntry, resolveWithNode } from "../integration/entry.js";
 import { afterStatements, buildPrelude } from "../integration/inject.js";
 import { readOptions } from "../integration/options.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
@@ -35,6 +35,8 @@ export interface TailessViteOptions {
 /** The slice of Vite's transform context we use. */
 interface TransformContext {
   addWatchFile(file: string): void;
+  /** Vite's own resolver, aliases included; see {@link isTailwindEntry}. */
+  resolve?(source: string, importer?: string): Promise<{ id: string } | null>;
 }
 
 /** The slice of Vite's dev server we use. */
@@ -261,7 +263,14 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
         // Only a stylesheet Tailwind emits utilities into — directly, or through a
         // chain of relative `@import`s. Anywhere else the injection is dead weight,
         // and in a stylesheet Tailwind skips entirely it would leak into the output.
-        if (!(await isTailwindEntry(code, entry))) return null;
+        // Through Vite's own resolver first, so an alias (`@/styles/tailwind.css`) is
+        // followed the way the build will follow it; Node's for anything it declines.
+        const resolveImport = async (specifier: string, importer: string) => {
+          const resolved = await this.resolve?.(specifier, importer).catch(() => null);
+          const [path] = resolved?.id.split("?") ?? [];
+          return path || resolveWithNode(specifier, importer);
+        };
+        if (!(await isTailwindEntry(code, entry, undefined, undefined, resolveImport))) return null;
 
         entries.add(entry);
 

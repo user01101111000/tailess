@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { collect, normalizeExtensions } from "../extract/collect.js";
-import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
+import { isTailwindEntry, isTailwindSpecifier, resolveWithNode } from "../integration/entry.js";
 import { sourceLiterals } from "../integration/inject.js";
 import { readOptions } from "../integration/options.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
@@ -149,7 +149,7 @@ async function isTailwindStylesheet(root: Root, from: string | undefined): Promi
 
   // Hand the shared resolver just the import list to follow.
   const css = imports.map((specifier) => `@import "${specifier}";`).join("\n");
-  return isTailwindEntry(css, from);
+  return isTailwindEntry(css, from, undefined, undefined, resolveWithNode);
 }
 
 /**

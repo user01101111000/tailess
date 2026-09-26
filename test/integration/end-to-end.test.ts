@@ -926,3 +926,21 @@ describe("Tailwind imported inside a component's <style> block, through Vite", (
     expect(await plugin.transform.handler.call(call, `@import "tailwindcss";`, id)).toBeNull();
   });
 });
+
+describe("Tailwind reached through a workspace package, through PostCSS", () => {
+  // The shadcn/ui monorepo template: the app's globals.css holds only
+  // `@import "@workspace/ui/globals.css"`, and that file imports Tailwind. The entry test
+  // followed relative imports only, so the app's stylesheet got no injection.
+  it("injects into the app's stylesheet", async () => {
+    const pkg = join(dir, "node_modules", "@workspace", "ui");
+    await mkdir(join(pkg, "src"), { recursive: true });
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "@workspace/ui", exports: { "./globals.css": "./src/globals.css" } }),
+    );
+    await writeFile(join(pkg, "src", "globals.css"), `@import "tailwindcss";\n`);
+    const css = await compileWithPostcss(`@import "@workspace/ui/globals.css";\n`);
+    expect(css).toMatch(/--tailess:\s*1/);
+    expect(missingRules(css, expected)).toEqual([]);
+  });
+});

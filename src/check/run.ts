@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
 import { maskLiterals } from "../extract/scan.js";
-import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
+import { isTailwindEntry, resolveWithNode, tailwindPrefixIn } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
@@ -572,7 +572,8 @@ async function findEntries(roots: string[], ignore: readonly string[] = []): Pro
   const entries: string[] = [];
   for (const file of files) {
     const css = await readFile(file, "utf8").catch(() => undefined);
-    if (css !== undefined && (await isTailwindEntry(css, file))) entries.push(file);
+    if (css === undefined) continue;
+    if (await isTailwindEntry(css, file, undefined, undefined, resolveWithNode)) entries.push(file);
   }
   return entries;
 }
