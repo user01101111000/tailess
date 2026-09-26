@@ -1,5 +1,601 @@
 # tailess
 
+## 0.13.0
+
+### Minor Changes
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`35b2815`](https://github.com/user01101111000/tailess/commit/35b2815e45d9d985f8766577cb40f29fea071ba5) Thanks [@user01101111000](https://github.com/user01101111000)! - A component built by `variants` takes its caller's extra classes as a `ClassArg`, not an
+  `ss` map — and says so at runtime when a map gets through.
+  
+  `button({}, { md: "w-auto" })` and `card({}, { root: { md: "p-10" } })` type-checked,
+  built `md:w-auto` and `md:p-10` at runtime, and put them on the element with no CSS
+  behind them: the build reads the recipe and `ss(…)` calls, never the calls of the
+  component a recipe builds. Nothing warned, and `tailess check --strict` passed. Those
+  calls are now compile errors; `button({}, ss({ md: "w-auto" }))` is the spelling that
+  works, since that `ss` call is literal and the build reads it where it is written. A
+  map that arrives through plain JavaScript or a cast warns in development.
+  
+  `ClassArg` — every `SsArg` except a map — is exported for a wrapper component that
+  forwards its own `className`. Code this now rejects was already shipping unstyled
+  classes, which is why it is a type change in a minor rather than a major.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`352e7ca`](https://github.com/user01101111000/tailess/commit/352e7caece9e0298cc2a73f2910decb2ba410963) Thanks [@user01101111000](https://github.com/user01101111000)! - A runtime-built class with a double quote in it reaches Tailwind, and one with a `{`, `}`
+  or `\` — which cannot — is named by a new build check (`uncarried-class`) instead of
+  vanishing.
+  
+  `ss({ md: 'after:content-["x"]' })` was dropped from the candidate list, because
+  `@source inline("…")` cannot carry a `"` and Tailwind reads neither `\"` nor `\22` inside
+  it. Such classes now go in a single-quoted directive of their own. A `{`, `}` or `\`
+  genuinely cannot travel — Tailwind reads them as brace expansion or an escape — and a
+  prefixed class holding one was unstyled with no signal, since the literal in the source
+  (`after:content-['{']`) is not the class on the element (`md:after:content-['{']`). The
+  build check now names each one; eleven things are checked.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`9ffbbdf`](https://github.com/user01101111000/tailess/commit/9ffbbdf7af27d9ae0a3c5b9cfe2f2eb5bccfdc61) Thanks [@user01101111000](https://github.com/user01101111000)! - The dependency ranges now admit only versions tailess works with: `tailwindcss` 4.1 or
+  later, and `tailwind-merge` 3.7 or later.
+  
+  - **`peerDependencies.tailwindcss` is `^4.1.0`** (was `^4.0.0`). The plugins inject
+    `@source inline(…)`, which Tailwind parses from 4.1.0; on 4.0.x every build failed
+    with Tailwind's own "`@source` paths must be quoted", naming neither tailess nor the
+    version, and 29 of the typed keys have no rule there. `tailess check` now says so
+    outright — "tailess needs tailwindcss 4.1 or later, and this project has 4.0.17" —
+    instead of blaming a moved breakpoint.
+  - **`tailwind-merge` is `^3.7.0`** (was `^3.3.1`). Below 3.5.0 it does not know the
+    Tailwind 4.2 logical utilities, so `ss({ base: "mbs-2" }, { base: "mbs-1" })` kept
+    both and the earlier one won in the CSS; below 3.7.0 the same happened to
+    `bg-radial` / `bg-conic`. npm dedupes to whatever an app already locks, which is how
+    the old floor was reached in practice.
+
+### Patch Changes
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`35f7c93`](https://github.com/user01101111000/tailess/commit/35f7c93c113cd6029cc0ab1107dd30e27e1ce956) Thanks [@user01101111000](https://github.com/user01101111000)! - A source file saved with a UTF-8 byte order mark gets its build-time checks. The BOM sat in
+  front of the first-line import the checks are anchored to, so every check in the file —
+  the renamed-import one included — went quiet. Common with Windows editors.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`9dcd845`](https://github.com/user01101111000/tailess/commit/9dcd84591481c13273cf7aa7363e957506f0d99f) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check --css` naming a file that does not exist, or a folder, says so and exits 2
+  with `"error": "no-stylesheet"`; it printed Node's raw `ENOENT`/`EISDIR` under
+  `"error": "crashed"`. The `stylesheet` of an `unsupported-prefix` result and the `out` of
+  `emit --out --json` use forward slashes on every OS, like the other JSON paths. `--help`
+  lists a Tailwind `prefix()` among the reasons for exit 2.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`1ca4ce6`](https://github.com/user01101111000/tailess/commit/1ca4ce64f4ab5a9ca5d0795980fa3f79f43cec8d) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check` agrees with the build in three more places:
+  
+  - `--strict` fails on the stylesheet's own build-time checks — a `@theme` that removes a
+    breakpoint — which both plugins fail a `diagnostics: "error"` build on. It never ran
+    them, and exited 0. Notes (a variant or breakpoint the project added) are printed and
+    fail nothing, as in the build.
+  - `--ignore` applies to the search for entry stylesheets too, so a stale one under
+    `--content` can be left out; since a class passes when any entry has its rule, it used
+    to vouch for the app's broken classes. The README now says so, and recommends `--css`.
+  - The "plugin may not be running" guess reads configs the way `doctor` does, and counts
+    only real build configs: an `.npmrc` at a monorepo root was one, and failed a correctly
+    wired app under `--strict`. With no build config in the working directory, the nearest
+    one above each `--content` root answers.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`5495d4b`](https://github.com/user01101111000/tailess/commit/5495d4bd4e7e973e7af983b5b41333856f106e62) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check` no longer goes green because of a stylesheet that generates no
+  utilities.
+  
+  A class counted as broken only when *every* stylesheet under `--content` failed it, and a
+  stylesheet that generates nothing fails nothing. So a design-token file
+  (`@import "tailwindcss/theme"`), a v3 leftover (`@tailwind utilities`) or a reset file
+  beside the app's entry cleared every broken class in the project — the gate passed while
+  `md:p-4` had no rule in the real build. A stylesheet now vouches for a class only by
+  containing its rule, and one that generates no utilities at all has no say. When no
+  stylesheet generates any — `--css` pointed at a partial, or a `prefix(…)` hiding in an
+  imported file — the check exits 2 (`"error": "no-utilities"`) instead of passing.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`8f02532`](https://github.com/user01101111000/tailess/commit/8f02532877bf8eded1e0fb9bb497de1e4ee5e6a2) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check` resolves a stylesheet `@import` from a package the way Tailwind does,
+  including a style-only package and a scoped one.
+  
+  A project whose entry stylesheet imports `tw-animate-css` — which shadcn/ui's Tailwind
+  v4 setup does — could not be checked at all: the build resolved the import, and the
+  gate exited 2 with `Package subpath './package.json' is not defined by "exports"`,
+  because it looked the manifest up through the package's own exports map. A scoped
+  package (`@import "@acme/tokens"`) failed as `Cannot find module '@acme/package.json'`.
+  The package is now found on disk, and the `style` condition is followed on the root and
+  on a subpath (`@import "@acme/ui/theme"`).
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`7eca9c9`](https://github.com/user01101111000/tailess/commit/7eca9c99ae57ccc6c807435174d25197ed74b9fb) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check` compiles through Tailwind's own Node host (`@tailwindcss/node`, which
+  `@tailwindcss/postcss` and `@tailwindcss/vite` both run) when the project has it, so it
+  loads `@import`, `@plugin` and `@config` exactly as the build does.
+  
+  An ESM-only `@plugin` package — an exports map with only an `import` condition — made the
+  gate exit 2 with `could not resolve` while the build loaded it, and a TypeScript
+  `@config` or `@plugin` worked only on a Node that strips types natively, which excludes
+  the 20.19 floor. A project without `@tailwindcss/node` keeps the previous loaders.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`d63c3c2`](https://github.com/user01101111000/tailess/commit/d63c3c2922baa1e842f9e9d74f92ebd5681aa114) Thanks [@user01101111000](https://github.com/user01101111000)! - A `variants` component says so, in development, when `class` or `className` arrives in its
+  props — cva and tailwind-variants read them there, and here they were dropped without a
+  word; extra classes are the second argument. The migration table names this and the one
+  other call-site difference: tailwind-variants applies a boolean's `false` option when the
+  prop is omitted, tailess (like cva) does not — add `defaults: { disabled: false }` to keep
+  it. It used to say a port was the rename "and nothing else".
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`bb8990e`](https://github.com/user01101111000/tailess/commit/bb8990e82f6c9c6af77cc6b443b18c4bf479b114) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check`, `emit`, `doctor` and `init` write paths with forward slashes in `--json`
+  on every OS, as the documented contract shows; a Windows runner wrote `src\Card.tsx`. An
+  empty value for `--content`, `--css`, `--out`, `--extensions` or `--ignore` — what an unset
+  shell variable expands to — is now a usage error (exit 2) instead of silently scanning the
+  whole working directory or auto-detecting the stylesheet. `emit` names an unexpanded
+  wildcard the way `check` already did. The scanner no longer reads a TypeScript object type
+  (`{ … } as { md: string }`, `(x: { md: string }) => …`) as a bucket map and warns about its
+  `string`.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`ef926ae`](https://github.com/user01101111000/tailess/commit/ef926ae72192d6d0aea5d2f1e10d1613768c6c20) Thanks [@user01101111000](https://github.com/user01101111000)! - Smaller fixes to the CLI:
+  
+  - `tailess init` shows its diff in time proportional to the change. The old diff built a
+    table the square of the file's length: 6.7 s on a 10,000-line config, and out of memory
+    at 30,000 — where `--json` printed nothing at all.
+  - The line `init` adds matches the file: its indent, one entry per line in a list written
+    that way, its quote style, and no semicolon in a file without them.
+  - `tailess check src` says "unexpected argument src — for a directory, --content src"
+    rather than "unknown command src", and `doctor doctor` no longer rejects a word in the
+    list it prints.
+  - A flag on a command it does nothing for is an error: `init --content apps/web` wrote the
+    current directory's config, and `doctor --strict` was the same doctor.
+  - `--help --json` and `--version --json` print one JSON object.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`8197757`](https://github.com/user01101111000/tailess/commit/81977574001b8642af62024b53da387254c49c74) Thanks [@user01101111000](https://github.com/user01101111000)! - A cold scan no longer pays twice for files that never mention tailess. The build checks
+  masked every scanned file two or three times before learning it did not import the
+  package; they now skip such a file outright. On a 1,003-file project (308 using tailess)
+  the checks take 29 ms instead of 99 ms in 0.12.1.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`1dafd89`](https://github.com/user01101111000/tailess/commit/1dafd897859ddb4e3033e4fd174a61efa4ddb8fe) Thanks [@user01101111000](https://github.com/user01101111000)! - The build reads a `variants` compound list written with a TypeScript assertion or in
+  parentheses.
+  
+  `compound: [ … ] as const`, `compoundVariants: [ … ] satisfies ReadonlyArray<…>` and
+  `compound: ([ … ])` each lost every compound class from the candidate list, because the
+  scanner only unwrapped text that started with `[` and ended with `]`. The runtime still
+  applied the classes, so they reached the element with no CSS, and no check said so.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`522aa90`](https://github.com/user01101111000/tailess/commit/522aa9048bb20ce3dc4d6eace72aece7d98a1d18) Thanks [@user01101111000](https://github.com/user01101111000)! - The README's `tailess.d.ts` for declaring your own keys adds to the package's types
+  instead of replacing them.
+  
+  Copied as printed, the file had no import or export, so TypeScript read it as a global
+  script and `declare module "tailess"` became an ambient declaration that shadowed the
+  package: every `import { ss } from "tailess"` failed with "has no exported member". The
+  snippet now starts with `export {};`, says why, and a test compiles it verbatim against
+  the built declarations.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`75edbd8`](https://github.com/user01101111000/tailess/commit/75edbd86ee5310fd4229b1b9a9b18143376f0431) Thanks [@user01101111000](https://github.com/user01101111000)! - The build reads cva's one-argument call with an `ss` map — `variants({ base: "flex",
+  md: "p-4" })`, no `variants` key — as the base it is. The runtime already did; the scanner
+  took the object for a config, read only its `base` key, and every breakpoint in it had no
+  CSS.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`9dc8c62`](https://github.com/user01101111000/tailess/commit/9dc8c62b9137dec7e59a6ed331d2ed111b877c72) Thanks [@user01101111000](https://github.com/user01101111000)! - The build reads both branches of a ternary in `data()` values and in `on()` state
+  stacks, whatever the branches are.
+  
+  - `data("level", open ? 1 : 2, …)`, `data("active", on ? true : false, …)` and
+    `data("state", open ? "open" : null, …)` each left one branch — or both — with no CSS:
+    only string literals were read, and a number or boolean only when it was the whole
+    argument.
+  - `on(["dark", cond ? "hover" : "focus"], …)` enumerated `dark:hover:focus:`, a stack
+    the runtime never builds, instead of `dark:hover:` and `dark:focus:`; and
+    `on(cond ? ["dark", "hover"] : "focus", …)` enumerated three single states instead of
+    one stack and one state.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`f9f090a`](https://github.com/user01101111000/tailess/commit/f9f090a6efb04b2991a7a6644cb5fbb8571fffe8) Thanks [@user01101111000](https://github.com/user01101111000)! - The build follows helpers composed up to six deep, not two.
+  
+  `ss({ dark: on("hover", data("state", "open", aria("selected", "bg-blue-50"))) })` and
+  `on("focus", on("hover", until("md", withPrefix("[&>li]", "p-2"))))` lost the one class
+  the runtime builds — the innermost stack — because following nested calls stopped at the
+  third helper; the scanner emitted prefixes glued to the inner helper's arguments instead,
+  and `tailess check` passed. The bound still keeps a chain linear: a 5,000-call file scans
+  in the same time as before.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`dc28631`](https://github.com/user01101111000/tailess/commit/dc28631e539a092a2351f2135ac4772fd3f2d5a8) Thanks [@user01101111000](https://github.com/user01101111000)! - A built recipe's definition is a snapshot all the way down. Compound rules, defaults and
+  every `ss` map inside an option or a base were still the caller's own objects, so writing
+  to one after building changed the recipe, made a child built later disagree with its
+  parent, and could build classes that were never in the source.
+  
+  `component.slots` is each part's own classes, frozen — `{ root: "rounded-lg border
+  dark:border-neutral-800", … }`. It was the internal list the component spreads on every
+  call: `ss(card.slots.root)` read a map inside it as a clsx dictionary, and a write the
+  types allowed corrupted every later render. The parts are read-only in the types too.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`bacf827`](https://github.com/user01101111000/tailess/commit/bacf82709c1a03a919c29fab585cd43b089319f5) Thanks [@user01101111000](https://github.com/user01101111000)! - The build-time checks reach more of the files they should, and stay quiet where they
+  cannot be right:
+  
+  - A renamed helper is reported in a re-export (`export { ss as tw } from "tailess"` — the
+    worst place for it, since every importing file loses its classes), a CommonJS
+    destructuring (`const { ss: tw } = require("tailess")`), and an import that does not
+    start its line (`"use client"; import …`, minified code). A type-only rename, which
+    binds nothing callable, is no longer reported.
+  - Files that bind the package with `const t = require("tailess")` or `await import()` get
+    the source checks; they were silently off.
+  - Two conflicting utilities in one string are not reported in a project that calls
+    `configure({ merge })`: the check can only run the default merge, and it failed
+    `check --strict` on the README's own `extendTailwindMerge` recipe.
+  - The README says the checks need a direct import from `"tailess"`, not a local barrel.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`2669758`](https://github.com/user01101111000/tailess/commit/2669758608c28c4e0347445b993a382f7080df7e) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess doctor` and `tailess init` find the config your build actually uses, and stop
+  failing working projects:
+  
+  - PostCSS configs in `package.json`'s `postcss` key and every `.postcssrc` spelling
+    (`.yml`, `.yaml`, `.js`, `.cjs`, `.mjs`, `.ts`) are read. They exited 2 — "no
+    postcss.config here" — on wired, working projects. JSON and YAML configs are read but
+    never edited, and the line to add is printed in their own syntax.
+  - Astro, Nuxt and SolidStart configs are read for `vite.plugins`, instead of exiting 2 with
+    advice about monorepos. `init` says what to add rather than editing them.
+  - A plugin list built in a local preset (`plugins: sharedPlugins()` from `./vite.shared`) is
+    followed. It failed a working build, and `init` then registered the plugin twice. A
+    preset that cannot be read is reported as such, not as unwired.
+  - Of two Vite configs, the one Vite loads is read. A Vite project that compiles Tailwind
+    through `postcss.config` is answered for that file, as the README recommends.
+  - A config that never loads Tailwind's own plugin gets a note: nothing compiles Tailwind
+    there, which `doctor` used to call healthy.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`134ba22`](https://github.com/user01101111000/tailess/commit/134ba2274975ab53d8df2ae6e2d6c4f4750e5a8f) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess doctor`, `tailess init` and `check --strict` read a config the way its loader
+  does, rather than looking for the plugin's name:
+  
+  - A PostCSS config that imports or requires `tailess/postcss` and never lists it, or lists
+    it as `false`, is not wired. Nor is one that lists it after `@tailwindcss/postcss`:
+    `doctor` exits 1 and says to move it first, and `init` leaves it for you to reorder. All
+    three built with no variant CSS and passed both gates.
+  - `init` adds `require("tailess/postcss")()` — or an import and a call — to a PostCSS list
+    of plugin instances, the README's own form. It used to add the string, which
+    postcss-load-config rejects ("Invalid PostCSS Plugin found at: plugins[0]").
+  - A Vite `tailess()` counts only in the config's own `plugins`, not in
+    `build.rollupOptions.plugins` or `css.postcss.plugins` — and `init` no longer writes it
+    there when the top-level list is a variable. The first lost every variant class in dev
+    with nothing printed; the second failed the build.
+  - `tailess/postcss` beside `@tailwindcss/vite` is not wired, as the README says.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`0b25d3b`](https://github.com/user01101111000/tailess/commit/0b25d3bf5d264f3d53422889f8a373c58df8025d) Thanks [@user01101111000](https://github.com/user01101111000)! - The build check for a bucket the scanner cannot read now fires inside `variants()` and
+  inside nested maps, as the README promises for everything under a prefixed key.
+  
+  `variants({ variants: { size: { lg: { md: size } } } })`, a `base: { md: size }`, a
+  compound `class: { md: size }`, a slot's `{ md: size }` and `ss({ dark: { md: size } })`
+  were all silent: the recipe helper had no case in the diagnostics, and a value that was
+  itself a map was skipped rather than walked. Each built a prefixed class with no rule.
+  An unprefixed value — `base: size`, a slot or option set to a variable — stays quiet, as
+  in `ss`.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`3a47203`](https://github.com/user01101111000/tailess/commit/3a472031e514169b1c312d332ce93b6ef8fa770a) Thanks [@user01101111000](https://github.com/user01101111000)! - The "a bucket the scanner cannot read" check reads each part of a value that becomes a
+  class. A literal anywhere in the value used to vouch for all of it, so
+  `ss({ md: cond ? size : "p-2" })`, `ss({ md: [size, "flex"] })`, `ss({ md: size ?? "p-2" })`
+  and a shorthand `ss({ base: "p-1", md })` each built a class nothing enumerated and said
+  nothing. The part that cannot be read is named in the message.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`c5ba894`](https://github.com/user01101111000/tailess/commit/c5ba89411162b1d8107bfe1a396a9e16894ef9c0) Thanks [@user01101111000](https://github.com/user01101111000)! - Both plugins warn when an `extensions` list matches no files, not only a `content` one.
+  `extensions: ["*.tsx"]` — a glob where a name belongs — left `content` at its default and
+  every prefixed class unstyled, with the marker present and nothing printed.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`66cee3f`](https://github.com/user01101111000/tailess/commit/66cee3f767d7ea5cea316e63551ba649cf71e7b7) Thanks [@user01101111000](https://github.com/user01101111000)! - `resetWarnings` is exported from `tailess`, as the 0.12.0 changelog said it was. It clears
+  the once-per-process memo behind the development warnings, for a test that asserts on the
+  same warning twice; `configure({ onWarn })` still clears it for you.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`d541580`](https://github.com/user01101111000/tailess/commit/d541580ec82dc3e0dd97302d87be6dfe9c667552) Thanks [@user01101111000](https://github.com/user01101111000)! - `extend` says so when it cannot inherit. Given a plain config object — a shared
+  `{ base, variants }` — it inherited nothing while the prop types said its variants were
+  there; that is now a type error, and a dev warning when a cast gets it through. A slotted
+  recipe extending a flat one (only reachable through a cast) spread the parent's `ss`-map
+  options by slot name and kept its groups as props; it now warns and inherits none of it,
+  the same as the opposite direction already did.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`6d8f653`](https://github.com/user01101111000/tailess/commit/6d8f653eb5a53063de4703ca56585c385ee6a26e) Thanks [@user01101111000](https://github.com/user01101111000)! - Both plugins and `tailess check` find the stylesheet Tailwind compiles when it is reached
+  through a workspace package — the shadcn/ui monorepo template's
+  `@import "@workspace/ui/globals.css"` — and the Vite plugin through an alias as well
+  (`@import "@/styles/tailwind.css"`). They followed only relative `@import`s, three hops
+  deep, so such an app's stylesheet got no injection: every runtime-built class unstyled,
+  and the dev warning told the reader to add a plugin that was already there. Relative
+  chains are now followed eight hops deep.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`ca7628d`](https://github.com/user01101111000/tailess/commit/ca7628d7921b06b1698024d54be879c77f23ca28) Thanks [@user01101111000](https://github.com/user01101111000)! - Event handlers, jQuery and inline lookup objects no longer fail `tailess check` or draw
+  build-time warnings.
+  
+  - `stream.on("end", …)`, `socket.on("message", …)` and `$(el).on("click", …)` were read
+    as tailess's `on()`, so the strings inside the handler became `end:animate-spin` and
+    `click:hidden` — and `check` exited 1 on healthy code, saying the classes had no rule.
+    Through a receiver, `on()` now enumerates only stacks of the Tailwind states it
+    accepts, so `t.on("hover", …)` through a namespace import still works.
+  - `ss("rounded", { primary: "bg-blue-600", danger: "bg-red-600" }[tone])` is a lookup
+    that picks one value, but its keys were read as variants (`primary:bg-blue-600`) and,
+    inside `on()`, as a clsx dictionary with a bucket key.
+  - A call through an expression — `$(el).on(…)`, `getSocket().on(…)` — had no identifier
+    before its dot and was checked as a bare call.
+  - In a file that imports tailess, every bare call with a helper's name was checked, so
+    Solid's `on(accessor, (c) => ({ open: c > 0 }))` beside `import { ss }` was reported.
+    A bare call is now checked only under a name the file imports from `"tailess"`.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`93513e3`](https://github.com/user01101111000/tailess/commit/93513e37bf4140bbcc0b844bf8114af07348eb9f) Thanks [@user01101111000](https://github.com/user01101111000)! - A framework's own build output no longer fails the build-time checks. SolidStart 1's
+  `.vinxi/build` and Qwik's `server/` hold minified bundles with
+  `import{ss as s}from"tailess"`, and each helper there was reported as a renamed import, so
+  `check --strict` and `diagnostics: "error"` went red after a successful build (SolidStart
+  on the first one). `.vinxi`, `.nitro`, `.react-router`, `.tanstack` and `.angular` are
+  skipped by default, and a file a bundler wrote — a source-map comment, or a minified line —
+  is not checked, only scanned.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`8d83f8f`](https://github.com/user01101111000/tailess/commit/8d83f8fff8ac75e431f7164ae8d4eb9719690c5d) Thanks [@user01101111000](https://github.com/user01101111000)! - The exported key lists (`screenKeys`, `maxScreenKeys`, `containerKeys`, `maxContainerKeys`,
+  `stateKeys`) and `screens` are frozen. They are the lists the runtime itself reads, so a
+  JavaScript caller's in-place `screenKeys.reverse()` made `between("sm", "lg", …)` warn
+  that its range was empty and changed the order `responsive()` emits. The types already
+  said `readonly`; now the values agree.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`bc4e30c`](https://github.com/user01101111000/tailess/commit/bc4e30cd9d144f8cb42d17fad05ca9ab2156c8f7) Thanks [@user01101111000](https://github.com/user01101111000)! - The documented CI gate is `npx tailess check --strict`, and the example's `npm run check`
+  is that command.
+  
+  The README gave `- run: npx tailess check` as the gate and the example's `verify` script
+  ran `tailess check --content src`; both exit 0 with the plugin deleted from the config,
+  because the check compiles the stylesheet with the candidates the plugin *would* inject
+  and only warns that no config calls it. CI's negative test passed `--strict`, so it proved
+  a different command from the one the docs tell people to run. The README now says why
+  `--strict` is the CI setting, the example script uses it, and CI runs the script itself.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`2362934`](https://github.com/user01101111000/tailess/commit/2362934ffa05e937b74a328c4969066f688e5044) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess init --write` no longer turns a working config into one Vite cannot load. Three
+  shapes did, after exiting 0 and with `doctor` calling the result wired:
+  
+  - An `import tailess from "tailess/vite"` already in the file — left behind by a deleted or
+    commented-out call — got a second one ("Identifier `tailess` has already been
+    declared"). The existing binding is reused now, `import { default as tw }` included.
+  - A CommonJS `vite.config.cjs` (or a `.js` one written with `require`) got an ESM
+    `import` on line 1. It gets `const tailess = require("tailess/vite");` now.
+  - An import carrying `with { type: "json" }` or `assert { … }`, or TypeScript's
+    `import x = require()`, was split in two by the new line.
+  
+  The edit is also parsed with the project's own Vite before it is written, and refused if
+  the config parsed before and would not after.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`e068c1b`](https://github.com/user01101111000/tailess/commit/e068c1b2ea88a0365d1436cfca404ebd2cf31618) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check --json` prints one JSON object on stdout even when a Tailwind plugin prints
+  while it loads.
+  
+  Compiling runs the project's `@plugin`s inside the CLI, and daisyUI 5 prints its banner
+  with `console.log` — so on every daisyUI project stdout was the banner and then the JSON,
+  and `tailess check --json | jq -e .ok` failed to parse on a passing run. Under `--json`,
+  anything a plugin prints now goes to stderr while the stylesheets compile.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`5f24aaa`](https://github.com/user01101111000/tailess/commit/5f24aaac83c7b3951dea4ec72efc11609071e2fc) Thanks [@user01101111000](https://github.com/user01101111000)! - A stylesheet that `@import`s a web font before Tailwind — Google Fonts' own snippet,
+  `@import url("https://fonts.googleapis.com/…"); @import "tailwindcss";` — keeps the font.
+  Both plugins put their injection at the very top, and its marker rule then stood ahead of
+  the font's `@import`, which CSS ignores after a rule: the font vanished from dev and
+  production CSS with only a minifier warning. The injection now goes after the file's
+  leading `@charset`, `@import`, `@layer` and other block-less statements.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`93513e3`](https://github.com/user01101111000/tailess/commit/93513e37bf4140bbcc0b844bf8114af07348eb9f) Thanks [@user01101111000](https://github.com/user01101111000)! - A `variants()` recipe over 20,000 characters is read however its argument list opens.
+  Only the object-first spelling got the larger limit, so a recipe opening with a comment,
+  or in the cva form with a template-literal, shared-constant or `ss()` base, was dropped
+  whole — every responsive and state class unstyled, with `check` green.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`658c54c`](https://github.com/user01101111000/tailess/commit/658c54c1108337ecfcae3fed572b73c79a7e980b) Thanks [@user01101111000](https://github.com/user01101111000)! - The build reads a helper call whose arguments run past 20,000 characters, when they
+  plainly start as code.
+  
+  A `variants()` recipe the size of a tailwind-variants port — a dozen variants, each
+  option an `ss` map per part — is one call, and past 20,000 characters the scanner
+  dropped it whole: every responsive and state class in it reached the element with no
+  CSS, `tailess check` reported "nothing to check", and nothing warned. The cap exists for
+  prose ("turn it on (or off"), whose `(` never opened a call; an argument list that starts
+  with an object, an array or a string now gets a far larger one.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`aa1ad67`](https://github.com/user01101111000/tailess/commit/aa1ad672e923fa8c65536a7a28c692ec128312a2) Thanks [@user01101111000](https://github.com/user01101111000)! - The README's recipe for publishing a component library styles every class in the
+  consumer, not only the prefixed ones.
+  
+  `tailess emit` writes the classes tailess *builds* — `md:p-4`, `dark:hover:bg-black`.
+  The literals — `base` classes, flat variant options, `match` values, plain `className`
+  strings — are left to Tailwind's scan, which in an app reads your source and in a
+  consumer never reads `node_modules`. Shipping only the emitted file, as the recipe said,
+  left every one of them unstyled in every consumer, with nothing warning in either build.
+  The recipe now ships a `styles.css` at the package root that also names the bundle as a
+  source (`@source "./dist"`), so the consumer's single `@import` covers both — built end
+  to end in a new test.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`fdab551`](https://github.com/user01101111000/tailess/commit/fdab551848d88f9f27f4db8e7851f8842ca4cb26) Thanks [@user01101111000](https://github.com/user01101111000)! - The scanner follows symlinked and junctioned folders and files, as Tailwind's own scanner
+  does. A `shared/` folder linked into an app had its literal classes styled by Tailwind and
+  every tailess-built one unstyled, with `tailess check` green. A link back up the tree ends,
+  and a folder reached through two links is read once.
+  
+  A file edited within two seconds of being scanned is read again on the next scan rather
+  than trusted on its mtime and size. On NTFS most back-to-back rewrites keep the same mtime,
+  and FAT's resolution is two seconds, so a same-length edit — a formatter, a codemod — kept
+  the old classes until the dev server restarted.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`60ae238`](https://github.com/user01101111000/tailess/commit/60ae23877929548ba610c14430ac515ab41f40e4) Thanks [@user01101111000](https://github.com/user01101111000)! - The build-time checks no longer report a call that does not run: one in a `//` or block
+  comment (a JSDoc "do not write `ss({ md: size })`"), in an HTML comment in a `.vue`,
+  `.svelte`, `.astro` or `.html` file, or in a Markdown code fence or code span. Each of
+  these failed `tailess check --strict` and `diagnostics: "error"` builds on working code.
+  Class enumeration still reads them, since an extra candidate costs nothing.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`f16f38e`](https://github.com/user01101111000/tailess/commit/f16f38e6b6445ca9df4d7527682504407f3d317d) Thanks [@user01101111000](https://github.com/user01101111000)! - `configure()` reaches every copy of tailess in the process. The ES module and CommonJS
+  builds each kept their own settings, so an ESM app rendering a CommonJS component library
+  configured only its own copy: the library's `cn` ran the default merge, a declared key
+  warned as unknown, and warnings skipped the configured `onWarn`. The scanner's cache and the
+  build-time warning memo are shared the same way between the CommonJS entries, so
+  `clearCache()` from `tailess/build` reaches the plugins' cache.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`48ecfb9`](https://github.com/user01101111000/tailess/commit/48ecfb92a540d301ef1d31a730441e57788fabc5) Thanks [@user01101111000](https://github.com/user01101111000)! - A source directory named `build`, `out`, `coverage` or `dist` is scanned.
+  
+  Those names were skipped at any depth, so a Next.js route at `app/build/page.tsx` or a
+  feature folder at `src/coverage/` lost every runtime-built class while Tailwind still
+  styled the literals on the same page — and `tailess check`, reading the same walk, passed.
+  They are now skipped only where a build writes them: at the top of a scanned directory,
+  or beside a `package.json`. A name listed in `ignore` is still skipped wherever it is.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`5423060`](https://github.com/user01101111000/tailess/commit/5423060b5b5eb150e7c3dce2d1b2acc46b4ec5ca) Thanks [@user01101111000](https://github.com/user01101111000)! - Overlapping content roots — `src` and `src/components`, or the project and one of its
+  folders — read each file once. A file reached twice was counted twice, and every
+  diagnostic in it was reported twice, in the build output and in `check --json`.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`29c3de5`](https://github.com/user01101111000/tailess/commit/29c3de571a9e6260787fa8238854cf06a6dca029) Thanks [@user01101111000](https://github.com/user01101111000)! - Both plugins check their options when created, since they often come from an untyped
+  `postcss.config.mjs`, `.postcssrc.json` or `vite.config.js`. `diagnostics: "ERROR"` (or
+  `true`) used to behave as `"warn"` — a CI gate that never failed — and now throws, naming
+  the option. So do an empty `cacheDir`, which put the generated stylesheet in the project
+  root, and a list option that is not a list of strings. A single string where a list belongs
+  is read as a list of one: `content: "src"` used to crash the build with "options.roots.map
+  is not a function", and `ignore: "src"` skipped the directories `s`, `r` and `c`.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`8e8d10f`](https://github.com/user01101111000/tailess/commit/8e8d10f6c14ad4539a898a98146e0611d7e81649) Thanks [@user01101111000](https://github.com/user01101111000)! - The plugins' types work in two more setups:
+  
+  - `tailess/postcss` exports `TailessPostcssPlugin`, the type its call returns. A typed
+    `postcss.config.ts` in a `composite` project, or a package exporting the plugin, failed to
+    emit declarations: "has or is using private name 'Plugin'".
+  - Under `moduleResolution: node10` the subpath entries resolve to the CommonJS declarations,
+    which say what `require()` really returns. Without `esModuleInterop`, the spelling that
+    type-checked — `import tailess from "tailess/postcss"` — crashed at runtime, and the one
+    that runs — `import tailess = require("tailess/postcss")` — was a type error.
+  
+    The trade-off: node10 cannot tell a CommonJS build from an ESM one, so a config compiled
+    with `module: "ESNext"` — which loads the ESM entry, where the default import runs — now
+    needs `allowSyntheticDefaultImports` (or `esModuleInterop`) under TypeScript 5.x to accept
+    `import tailess from "tailess/vite"`. Vite's node10 templates set it; TypeScript 6 has it
+    on always.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`f828f0a`](https://github.com/user01101111000/tailess/commit/f828f0a87639dafa52b1a588ec503b80b3209c9c) Thanks [@user01101111000](https://github.com/user01101111000)! - The PostCSS plugin warns when `content` matches no files, as the Vite plugin always has
+  and as the README says both do — including the note that a glob is not expanded.
+  
+  A v3-style `content: ["src/**/*.tsx"]` under Next.js or the PostCSS CLI scanned nothing,
+  and every prefixed class went unstyled with no warning, while the stylesheet still carried
+  the marker that keeps the runtime's own "plugin not wired" check quiet. The warning now
+  lives in one place both plugins call.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`f394393`](https://github.com/user01101111000/tailess/commit/f39439358d6823cdc3218fe654a33d8473b310a8) Thanks [@user01101111000](https://github.com/user01101111000)! - Two `tailess/postcss` instances with different `content`, `extensions` or `ignore` in one
+  working directory — a monorepo root running two apps' pipelines, a multi-compiler build —
+  no longer share one generated stylesheet. Each got the other's candidate list, concurrently
+  and again on a rebuild, with the marker present and nothing printed. Each configuration now
+  writes its own file, and a refresh checks the file still holds its list rather than
+  trusting that it wrote it last.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`df6f4cc`](https://github.com/user01101111000/tailess/commit/df6f4cc17f0a9d2bdda06f6bc0ce34b5a16ab45a) Thanks [@user01101111000](https://github.com/user01101111000)! - The PostCSS plugin reports `@import "tailwindcss" prefix(tw)` written in the entry
+  stylesheet itself, and fails the build over it under `diagnostics: "error"`.
+  
+  It rebuilt each `@import` as its bare specifier before the theme check read it, so the
+  prefix on the entry's own import was dropped — only a prefix one file deeper was reported.
+  Every Next.js or PostCSS project with a Tailwind prefix got a fully unstyled app and none
+  of the promised build output, and a CI gate on `diagnostics: "error"` stayed green. The
+  Vite plugin, which hands the whole stylesheet to the check, already reported it.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`ec174b2`](https://github.com/user01101111000/tailess/commit/ec174b20ce7a46921db381a77cee598b25ca72a3) Thanks [@user01101111000](https://github.com/user01101111000)! - The "Your Tailwind CSS doesn't include tailess' generated classes" check no longer fires
+  in component tests. jsdom and happy-dom — under Vitest or Jest — load no stylesheet, so the
+  marker could never be there, and every test file of a correctly wired project printed the
+  whole message. A document with no stylesheet at all is now skipped; a page whose CSS lacks
+  the marker still warns.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`8647267`](https://github.com/user01101111000/tailess/commit/864726752a67a05bedfbeb64fecaca0fe992c3d2) Thanks [@user01101111000](https://github.com/user01101111000)! - `has('[data-state="open"]', …)`, `supports('font-family: "Inter"', …)` and the like no
+  longer warn in development or at build time. The plugin has carried a class holding `"`
+  since the double-quote fix, but the unusable-value check still called every `"` unusable,
+  so working code failed `tailess check --strict` and `diagnostics: "error"` builds. It now
+  reports only what really cannot be carried: `{`, `}`, `\`, `;`, an unclosed quote, or both
+  kinds of quote. A quoted `nth` position (`nthOfType('"2n"', …)`) — a selector the browser
+  discards — keeps a warning of its own.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`a7c8b27`](https://github.com/user01101111000/tailess/commit/a7c8b27c7cb5c6e8d620d31880e52123728ca758) Thanks [@user01101111000](https://github.com/user01101111000)! - The README's Requirements table states the Node floor `engines` enforces — 20.19 — rather
+  than the Node 18 it promised before 0.12.0 raised it. On Node 18, yarn 1 and
+  `npm --engine-strict` refuse the install outright.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`0ce5897`](https://github.com/user01101111000/tailess/commit/0ce5897e354ef7667b910ba49ee262281d5ef898) Thanks [@user01101111000](https://github.com/user01101111000)! - Four regressions in `variants()` from this release's own fixes. A recipe whose map
+  contains itself no longer throws `RangeError` at import — the snapshot keeps the cycle and
+  `ss` cuts it with one warning. `button(props, props.className)` no longer warns that
+  `className` was dropped, since it was passed on. An extra `{ base: "mt-2" }` or `{}` is no
+  longer reported as getting no CSS: it builds no prefixed class. And the one-argument
+  overload refuses any config-shaped object — `{ extend, base }` compiled and rendered the
+  base alone, inheriting nothing.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`346a2b4`](https://github.com/user01101111000/tailess/commit/346a2b43018d9c4c586ef6af25ad5ac6f74be3a0) Thanks [@user01101111000](https://github.com/user01101111000)! - The scanner finds more of the calls the runtime makes, so fewer classes land unstyled:
+  an optional call (`t.ss?.(…)`), a comment between a helper's name and its parenthesis,
+  TypeScript type arguments (`variants<Props>(…)`), and a comment between a key and its
+  colon (`lg /* desktops */: "p-3"`). String values decode `\xHH`, `\uHHHH` and `\u{…}`
+  escapes and backslash line continuations the way the runtime does — a CRLF continuation
+  used to end the string early and drop the next argument's classes — and template literals
+  decode their escapes too. The unknown-key warning no longer calls a working Tailwind
+  variant such as `aria-checked` "not a Tailwind breakpoint or state variant"; it says the
+  key is not one of `ss()`'s and points to `configure({ keys })`.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`10e088f`](https://github.com/user01101111000/tailess/commit/10e088fc84584802cb86c679914abdf242c27d55) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess check` — and the exported `hasRule` / `selectorFor` — find a class with
+  characters outside ASCII the way Tailwind writes it.
+  
+  Every character past ASCII was escaped, while Tailwind (like `CSS.escape`) writes it as it
+  is. So `data("state", "geöffnet", …)` or `has("[lang='日本']", …)` failed the gate on
+  working code, and a broken class with an arrow or a checkmark in its `content` passed,
+  because its utility "did not resolve" either. Control characters are hex-escaped, as
+  `CSS.escape` does.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`5f8895f`](https://github.com/user01101111000/tailess/commit/5f8895f0edb6ff16362e5e40026889bb057f3309) Thanks [@user01101111000](https://github.com/user01101111000)! - `ss` cuts a map that contains itself where the cycle closes, and says so once. The depth
+  bound only slowed a cycle down: a map reaching itself from two keys walked 2¹⁰ paths, from
+  four keys 4¹⁰ — around nine seconds for one call, in production too — and warned once per
+  path on every call. A map shared by two keys, which is not a cycle, is emitted under both.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`03a92fa`](https://github.com/user01101111000/tailess/commit/03a92fa2276b84b6b7cfff9305a2d70f83d3ad62) Thanks [@user01101111000](https://github.com/user01101111000)! - The build check for an `ss` map written where a flat class value goes now reads
+  `responsive()`'s breakpoints and `match()`'s options, and the README no longer claims the
+  types refuse it.
+  
+  `responsive("p-2", { md: { hover: "p-4" } })` builds `md:hover` and
+  `match(size, { sm: { md: "p-4" } })` builds `md`. Neither is a utility, so `tailess
+  check` skipped both as junk, the runtime said nothing, and the element shipped unstyled.
+  The README said the types refuse an `ss` map handed to a helper; they cannot — a `clsx`
+  dictionary is any object — so the build check is what catches it, and now it does there
+  too. A real dictionary, `{ md: { hidden: !open } }`, stays quiet.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`ad41287`](https://github.com/user01101111000/tailess/commit/ad41287219c79d501650c536481aaad47e32d326) Thanks [@user01101111000](https://github.com/user01101111000)! - A `variants` compound rule that names a group the recipe does not declare never applies,
+  and says so once in development. cva and tailwind-variants differ here: they match such a
+  rule against whatever props are passed, so a port that keys a rule on an undeclared prop
+  loses those classes — the warning names the rule.
+  
+  Only the declared groups were checked against a rule, so a typo (`sizee: "lg"`) or a
+  group renamed since the rule was written counted as met, and the rule's classes landed on
+  every instance meeting its other conditions. The types refuse such a key in a literal
+  config; this is for plain JavaScript, casts and configs built at runtime.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`0381826`](https://github.com/user01101111000/tailess/commit/0381826b5d31375b1e4dde3fba2598f0b75c6106) Thanks [@user01101111000](https://github.com/user01101111000)! - `diagnostics: "error"` no longer fails a build over a theme note about CSS that works.
+  
+  Following "Keys your own CSS adds" — `--breakpoint-3xl`, a `@custom-variant`, the keys
+  declared — under the `diagnostics: "error"` the README recommends for CI failed the
+  production build, with a message saying `ss({ "3xl": … })` "will not compile" to a
+  project where it compiled. A moved breakpoint width failed it too, on a note that itself
+  said the classes are fine. Those three cases are now marked `informational` on the
+  `Diagnostic` (a new optional field in `tailess/build`), printed in every mode, and never
+  counted as a failure; the message says to declare the key or use `withPrefix`. A removed
+  breakpoint — classes with no rule — still fails the build.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`a9e256a`](https://github.com/user01101111000/tailess/commit/a9e256ab581df6ea34d2d6b1bc600b5e92052e62) Thanks [@user01101111000](https://github.com/user01101111000)! - Type fixes:
+  
+  - `ss` and `variants` accept `readonly` class lists — `["flex", "gap-2"] as const`, a
+    `readonly string[]` prop — which the runtime already read like any other list.
+  - A recipe's props must be an object. With no variants they were typed `{}`, which a string
+    satisfies, so `bare(className)` compiled and the class was dropped.
+  - A mistake in a recipe's `compound` rules is reported with the mistake in it —
+    "'tones' does not exist … Did you mean to write 'tone'?" — at the rule. Every such error
+    read "'variants' does not exist in type 'SsInput'", because `variants(base)` was the last
+    overload TypeScript tried.
+  - The README states the TypeScript floor: 5.0, for `const` type parameters.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`a165e3d`](https://github.com/user01101111000/tailess/commit/a165e3df57d12621542febd63ed67fd35df0a3a6) Thanks [@user01101111000](https://github.com/user01101111000)! - A key nobody declared never ties with the first key `configure({ keys })` declares; it is
+  emitted after every declared key, in the order written. The first declared key's rank was
+  exactly the one every undeclared key got, so the two kept their written order — and across
+  nested buckets that reach the same variants, which padding survived the merge depended on
+  how the object literal was typed. The README's emission-order sentence now names every
+  family, containers and declared keys included.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`33f9402`](https://github.com/user01101111000/tailess/commit/33f94029e98b2b2d44247f44d607d5c48232ac24) Thanks [@user01101111000](https://github.com/user01101111000)! - The literal-underscore warning no longer advises a spelling that fails. It said to use
+  `withPrefix` for a real `\_`, and the class that builds — `withPrefix("has-[.my\_class]", …)`
+  — carries a backslash, which the scanner cannot hand to Tailwind, so it was unstyled with
+  `check --strict` green. The warning now points at a class written out in `String.raw`, which
+  Tailwind's own scan reads and compiles; and the build check names a prefixed class whose
+  backslash or brace is in the prefix — `withPrefix`, `data()` — not only in the class.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`3993b3e`](https://github.com/user01101111000/tailess/commit/3993b3eb5ed14a27595da1781cc2674c06eafa84) Thanks [@user01101111000](https://github.com/user01101111000)! - A slotted option that names a part the recipe does not have is a type error even when it
+  also names one that exists: `{ root: "p-2", titel: "text-xl" }` compiled, and `text-xl`
+  reached no part. Parts inherited through `extend` still count.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`3ba5795`](https://github.com/user01101111000/tailess/commit/3ba5795f303be19cbf4dd7b728640be2a085594b) Thanks [@user01101111000](https://github.com/user01101111000)! - `variants()` types the same with `strictNullChecks` off — TypeScript's default — as with
+  it on. A regression from 0.11.0.
+  
+  The "was a parent recipe passed to `extend`?" check asked it of a type parameter that
+  defaults to `undefined`, and without `strictNullChecks` `undefined` is assignable to every
+  object type, so every recipe in such a project inherited `Record<string, …>` as its
+  variants. Boolean and numeric variant props stopped compiling (`{ disabled: true }`,
+  `{ cols: 2 }`), a misspelt variant compiled, and the README's
+  `ComponentProps<"button"> & VariantProps<typeof button>` rejected `onClick` and
+  `tabIndex`. The published declarations are now compiled in the suite under three sets of
+  compiler options.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`4b42948`](https://github.com/user01101111000/tailess/commit/4b42948cf3c6a090a7729de1a587b715f6de9658) Thanks [@user01101111000](https://github.com/user01101111000)! - The Vite plugin handles `@import "tailwindcss"` written in a Vue or Svelte `<style>` block,
+  or in an inline `<style>` in `index.html`. Tailwind compiles those, but the plugin read
+  only the path before `?`, saw `App.vue`, and skipped it — every runtime-built class
+  unstyled, with nothing printed. It now uses the same test Tailwind's own plugin does.
+
+- [#72](https://github.com/user01101111000/tailess/pull/72) [`1103f3d`](https://github.com/user01101111000/tailess/commit/1103f3debd0eca305c48791bb59dc90bfd25fa29) Thanks [@user01101111000](https://github.com/user01101111000)! - `postcss --watch` and webpack's watch mode settle after an edit. postcss-cli reloads the
+  config for every rebuild and postcss-loader re-evaluates it per build, so each rebuild got
+  a fresh plugin, which rewrote the class list even when the file already held it. The
+  rewrite touched a file Tailwind reports as a dependency, the watcher rebuilt, and did it
+  again — about 12 rebuilds a second for as long as it ran (the README's object-form config
+  under postcss-cli; any form under webpack). The file is now written only when its bytes
+  differ.
+
 ## 0.12.1
 
 ### Patch Changes
