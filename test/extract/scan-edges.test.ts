@@ -19,7 +19,7 @@ describe("escapes", () => {
   it("does not let an escaped quote end the string early", () => {
     // The escaped quote stays inside the argument rather than closing it...
     expect(scanCalls(`on("hover", "a\\"b")`)).toEqual([
-      { name: "on", args: ['"hover"', '"a\\"b"'], receiver: "" },
+      { name: "on", args: ['"hover"', '"a\\"b"'], receiver: "", at: 2 },
     ]);
     // ...so a following key is still seen. (The lone `"` is not a class — it does not
     // close — so it is dropped as unbalanced, deliberately.)
