@@ -2,7 +2,7 @@
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
 import { isTailwindEntry } from "../integration/entry.js";
-import { buildPrelude } from "../integration/inject.js";
+import { afterStatements, buildPrelude } from "../integration/inject.js";
 import { readOptions } from "../integration/options.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
@@ -280,9 +280,11 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
         // `cacheDir` pointed at another volume), and there is nothing to import if
         // the write failed. Inline the list instead: still correct, it just loses
         // the mtime signal that makes Tailwind rebuild in dev.
-        if (specifier === null) return { code: `${css}${code}`, map: null };
-
-        return { code: `@import "${specifier}";\n${code}`, map: null };
+        const injection = specifier === null ? css : `@import "${specifier}";\n`;
+        // After the file's own leading `@import`s: see `afterStatements`.
+        const at = afterStatements(code);
+        const head = at === 0 ? "" : `${code.slice(0, at)}\n`;
+        return { code: `${head}${injection}${code.slice(at)}`, map: null };
       },
     },
   };

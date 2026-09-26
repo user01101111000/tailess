@@ -400,7 +400,7 @@ describe("Vite integration", () => {
   }
 
   const sidecarOf = async (code: string): Promise<string> => {
-    const specifier = /@import "([^"]+)"/.exec(code)?.[1] ?? "";
+    const specifier = /@import "([^"]*tailess\.css)"/.exec(code)?.[1] ?? "";
     return readFile(join(dir, specifier), "utf8");
   };
 
@@ -408,8 +408,8 @@ describe("Vite integration", () => {
     const { run } = makePlugin();
     const result = await run(`@import "tailwindcss";`, entryId());
 
-    expect(result?.code).toMatch(/^@import "[^"]*tailess\.css";\n/);
-    expect(result?.code.endsWith(`@import "tailwindcss";`)).toBe(true);
+    // After the file's own `@import`: a rule ahead of an `@import` voids it in CSS.
+    expect(result?.code).toMatch(/^@import "tailwindcss";\n@import "[^"]*tailess\.css";\n$/);
 
     const sidecar = await sidecarOf(result?.code ?? "");
     expect(sidecar).toContain("@source inline(");
@@ -535,7 +535,7 @@ describe("Vite integration", () => {
     // "already written" flag would leave the entry importing a missing file.
     const { run } = makePlugin();
     const first = await run(`@import "tailwindcss";`, entryId());
-    const specifier = /@import "([^"]+)"/.exec(first?.code ?? "")?.[1] ?? "";
+    const specifier = /@import "([^"]*tailess\.css)"/.exec(first?.code ?? "")?.[1] ?? "";
     await rm(join(dir, specifier));
 
     const second = await run(`@import "tailwindcss";`, entryId());
@@ -563,7 +563,7 @@ describe("Vite integration", () => {
     expect(result?.code).not.toMatch(/@import "[^"]*tailess\.css"/);
     expect(result?.code).toContain("@source inline(");
     expect(result?.code).toMatch(/--tailess:\s*1/);
-    expect(result?.code.endsWith(`@import "tailwindcss";`)).toBe(true);
+    expect(result?.code.startsWith(`@import "tailwindcss";\n`)).toBe(true);
     expect(warn).toHaveBeenCalled();
 
     // And the inlined CSS still compiles to every rule.
@@ -856,5 +856,38 @@ describe("a runtime-built class with a double quote in it", () => {
     } finally {
       await rm(project, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a remote @import ahead of Tailwind's", () => {
+  // Google Fonts' own snippet. CSS ignores an `@import` that follows a rule, and the
+  // injection carries one — the marker — so prepending it dropped the font from dev and
+  // production CSS alike, with nothing but a minifier warning about `--tailess`.
+  const font = `@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");`;
+  const entry = `${font}\n@import "tailwindcss";\n`;
+
+  /** The font import survived, and no rule reached the output ahead of it. */
+  function keptFirst(css: string): void {
+    const at = css.indexOf("@import url(");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(css.slice(0, at)).not.toContain("{");
+    expect(missingRules(css, expected)).toEqual([]);
+  }
+
+  it("keeps the font through the PostCSS plugin", async () => {
+    keptFirst(await compileWithPostcss(entry));
+  });
+
+  it("keeps the font through the Vite plugin", async () => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const from = join(dir, "index.css");
+    const result = await plugin.transform.handler.call({ addWatchFile: () => {} }, entry, from);
+    expect(result?.code.startsWith(`${font}\n@import "tailwindcss";\n@import "`)).toBe(true);
+    const compiled = await postcss([tailwindcss({ base: dir, optimize: false })]).process(
+      result?.code ?? "",
+      { from },
+    );
+    keptFirst(compiled.css);
   });
 });

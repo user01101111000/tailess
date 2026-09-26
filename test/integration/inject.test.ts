@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildPrelude, markerRule, sourceLiterals } from "../../src/integration/inject.js";
+import {
+  afterStatements,
+  buildPrelude,
+  markerRule,
+  sourceLiterals,
+} from "../../src/integration/inject.js";
 
 describe("sourceLiterals", () => {
   it("returns nothing for no candidates", () => {
@@ -34,6 +39,36 @@ describe("sourceLiterals", () => {
       '"md:p-4"',
       `'md:after:content-["x"]'`,
     ]);
+  });
+});
+
+describe("afterStatements", () => {
+  const font = `@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");`;
+
+  it("is 0 when the stylesheet opens with anything but a statement", () => {
+    expect(afterStatements("")).toBe(0);
+    expect(afterStatements(".a { color: red }")).toBe(0);
+    expect(afterStatements("@layer base { .a {} }")).toBe(0);
+    expect(afterStatements("@theme { --color-x: red; }")).toBe(0);
+  });
+
+  it("steps over every leading @import, @charset and statement-form @layer", () => {
+    const css = `@charset "utf-8";\n${font}\n@layer theme, base;\n@import "tailwindcss";\n.a {}`;
+    expect(css.slice(afterStatements(css))).toBe("\n.a {}");
+  });
+
+  it("reads a quoted URL's semicolons as part of the URL", () => {
+    // `wght@400;700` ended the statement there, and the injection split the URL.
+    expect(afterStatements(font)).toBe(font.length);
+  });
+
+  it("steps over comments and Tailwind's own statements", () => {
+    const css = `/* fonts */\n@plugin "x";\n@source "../ui";\n${font}\n@theme { }`;
+    expect(css.slice(afterStatements(css))).toBe("\n@theme { }");
+  });
+
+  it("stops at an unterminated statement rather than swallowing the file", () => {
+    expect(afterStatements(`@import "tailwindcss";\n@import "x"`)).toBe(22);
   });
 });
 

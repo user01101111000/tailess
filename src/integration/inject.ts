@@ -46,6 +46,48 @@ export function sourceLiterals(classes: readonly string[]): string[] {
 }
 
 /**
+ * Where a stylesheet's leading block-less statements end: comments, `@charset`,
+ * `@import`, `@layer a, b;`, `@namespace`, and Tailwind's own `@source`, `@plugin` or
+ * `@config`. The injection goes there rather than at offset 0.
+ *
+ * CSS ignores an `@import` that follows a rule, and the injection carries one — the
+ * marker. Prepended, it pushed a font's `@import url("https://fonts…")` behind
+ * `:root{--tailess:1}`, and the font vanished from dev and production CSS alike.
+ */
+export function afterStatements(css: string): number {
+  let end = 0;
+  let i = 0;
+  for (;;) {
+    while (i < css.length) {
+      if (/\s/.test(css[i] as string)) i += 1;
+      else if (css.startsWith("/*", i)) {
+        const close = css.indexOf("*/", i + 2);
+        if (close === -1) return end;
+        i = close + 2;
+      } else break;
+    }
+    if (css[i] !== "@") return end;
+    let depth = 0;
+    let j = i + 1;
+    for (; j < css.length; j += 1) {
+      const c = css[j];
+      if (c === '"' || c === "'") {
+        // A font URL's query is full of `;` — `wght@400;700` — inside the quotes.
+        let k = j + 1;
+        while (k < css.length && css[k] !== c && css[k] !== "\n") k += css[k] === "\\" ? 2 : 1;
+        j = k;
+      } else if (c === "(") depth += 1;
+      else if (c === ")") depth -= 1;
+      else if (c === "{") return end;
+      else if (c === ";" && depth <= 0) break;
+    }
+    if (j >= css.length) return end;
+    end = j + 1;
+    i = end;
+  }
+}
+
+/**
  * Build the CSS to prepend to a Tailwind stylesheet: the marker rule plus a
  * `@source inline(...)` directive for every class tailess builds at runtime.
  */

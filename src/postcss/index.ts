@@ -66,7 +66,10 @@ interface AtRule {
 interface Root {
   /** Only ever read to spot Tailwind's banner — see {@link ranAfterTailwind}. */
   first?: { type: string; text?: string } | undefined;
+  /** Read for the leading statements the injection has to follow; see {@link inject}. */
+  nodes: ReadonlyArray<{ type: string; nodes?: unknown }>;
   prepend(...nodes: Array<Rule | AtRule>): void;
+  insertAfter(index: number, nodes: Array<Rule | AtRule>): unknown;
   walkAtRules(callback: (rule: AtRule) => false | undefined): void;
 }
 interface Helpers {
@@ -85,6 +88,25 @@ interface Helpers {
     decl(defaults: { prop: string; value: string }): Declaration;
   };
 }
+/**
+ * Put `nodes` after the stylesheet's leading block-less statements — comments,
+ * `@charset`, `@import`, `@layer a, b;` and the like — or first when there are none.
+ *
+ * CSS ignores an `@import` that follows a rule, and the injection carries one: the
+ * marker. Prepended, it pushed a font's `@import url("https://fonts…")` behind
+ * `:root{--tailess:1}`, and the font vanished from the built CSS.
+ */
+function inject(root: Root, nodes: Array<Rule | AtRule>): void {
+  let last = -1;
+  for (const [index, node] of root.nodes.entries()) {
+    if (node.type === "comment" || (node.type === "atrule" && node.nodes === undefined)) {
+      last = index;
+    } else break;
+  }
+  if (last === -1) root.prepend(...nodes);
+  else root.insertAfter(last, nodes);
+}
+
 /**
  * The plugin a call to `tailessPostcss()` returns.
  *
@@ -287,7 +309,7 @@ const tailessPostcss = Object.assign(
         if (specifier !== null) {
           try {
             await sidecar.refresh(classes);
-            root.prepend(helpers.postcss.atRule({ name: "import", params: `"${specifier}"` }));
+            inject(root, [helpers.postcss.atRule({ name: "import", params: `"${specifier}"` })]);
           } catch {
             inline = true;
           }
@@ -296,12 +318,12 @@ const tailessPostcss = Object.assign(
         if (inline) {
           const marker = helpers.postcss.rule({ selector: ":root" });
           marker.append(helpers.postcss.decl({ prop: "--tailess", value: "1" }));
-          root.prepend(
+          inject(root, [
             marker,
             ...sourceLiterals(classes).map((chunk) =>
               helpers.postcss.atRule({ name: "source", params: `inline(${chunk})` }),
             ),
-          );
+          ]);
         }
 
         const parent = from ?? "";
