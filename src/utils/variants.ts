@@ -282,13 +282,24 @@ function warnStaleCompound(keys: string[]): void {
  * component, so every one of them lands on the element with no rule behind it.
  */
 function warnExtraMap(value: unknown, where: string): void {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return;
-  const keys = Object.keys(value).join(", ");
+  // `{ base: "mt-2" }` and `{}` build no prefixed class, and a literal `mt-2` is one
+  // Tailwind styles itself — so they work, and saying "those classes get no CSS" was false.
+  if (!prefixes(value)) return;
+  const keys = Object.keys(value as object).join(", ");
   if (!firstTime(warnedExtraMap, `${where}:${keys}`)) return;
   warn(
     `variants(): ${where} got an ss map ({ ${keys} }). The build never reads a ` +
       `component's call, so those classes get no CSS. Wrap the map in ss().`,
   );
+}
+
+/** Whether `value` is an `ss` map that builds a prefixed class: a key other than `base`, at any depth. */
+function prefixes(value: unknown, seen = new Set<object>()): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || seen.has(value))
+    return false;
+  seen.add(value);
+  const map = value as Record<string, unknown>;
+  return Object.keys(map).some((key) => key !== "base" || prefixes(map[key], seen));
 }
 
 /**
@@ -351,15 +362,27 @@ function snapshot(config: Record<string, unknown>): Record<string, unknown> {
   return extend === undefined ? copy : Object.freeze({ ...copy, extend });
 }
 
-/** `value` copied, with every plain object and array in it frozen. */
-function frozen(value: unknown): unknown {
-  if (Array.isArray(value)) return Object.freeze(value.map(frozen));
+/**
+ * `value` copied, with every plain object and array in it frozen.
+ *
+ * Each copy is registered before its contents are, so a map that contains itself gets a
+ * copy that contains itself — which `ss` cuts, with one warning — rather than recursing
+ * until `RangeError` took the whole module import down with it.
+ */
+function frozen(value: unknown, copies = new Map<object, unknown>()): unknown {
   if (value === null || typeof value !== "object") return value;
+  if (copies.has(value)) return copies.get(value);
+  const list = Array.isArray(value);
   const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return value;
-  const out: Record<string, unknown> = {};
+  if (!list && proto !== Object.prototype && proto !== null) return value;
+  const out: Record<string, unknown> | unknown[] = list ? [] : {};
+  copies.set(value, out);
   for (const key of Object.keys(value))
-    own(out, key, frozen((value as Record<string, unknown>)[key]));
+    own(
+      out as Record<string, unknown>,
+      key,
+      frozen((value as Record<string, unknown>)[key], copies),
+    );
   return Object.freeze(out);
 }
 
@@ -509,9 +532,24 @@ type KnownParts<V, S> = {
 // A config object is refused by the base overload by type rather than by excess-property
 // checking, so a config held in a variable cannot land there either.
 
+/**
+ * An object with any key only a config has. Testing for `variants` alone let
+ * `variants({ extend: button, base: "font-medium" })` through as base classes — `base` is
+ * an `ss` key too — and the runtime, which reads an object without `variants` the same
+ * way, rendered `font-medium` and inherited nothing.
+ */
+type ConfigShaped =
+  | { variants: unknown }
+  | { extend: unknown }
+  | { slots: unknown }
+  | { compound: unknown }
+  | { compoundVariants: unknown }
+  | { defaults: unknown }
+  | { defaultVariants: unknown };
+
 /** `cva`'s one-argument call: base classes and nothing else. */
 export function variants<const B extends SsArg>(
-  base: B extends { variants: unknown } ? never : B,
+  base: B extends ConfigShaped ? never : B,
 ): VariantComponent<Empty>;
 /**
  * `cva`'s own call shape: the base classes first, everything else second.
@@ -613,7 +651,10 @@ export function variants(first: any, second?: any): any {
   const slots = resolved.slots;
 
   /** The option each variant resolves to for one call, defaults included. */
-  const pick = (props?: Record<string, unknown>): Record<string, string | undefined> => {
+  const pick = (
+    props?: Record<string, unknown>,
+    forwarded: readonly unknown[] = [],
+  ): Record<string, string | undefined> => {
     // Spread would let an explicitly-`undefined` prop erase a default, and
     // `{ size: undefined }` is what a component writes when it forwards an optional
     // prop it did not receive.
@@ -629,10 +670,15 @@ export function variants(first: any, second?: any): any {
       // cva and tv read extra classes off the props; here they are a second argument,
       // and a props object built elsewhere slips past the types, so the class was
       // dropped without a word. Other unknown props — `children`, `onClick` — are the
-      // normal cost of forwarding a component's props, and stay quiet.
+      // normal cost of forwarding a component's props, and stay quiet. So does one that
+      // was passed on as the extra argument too — `button(p, p.className)` is the
+      // natural wrapper, and it works.
       if (isDev) {
         for (const name of ["class", "className"]) {
-          if (props[name] !== undefined && !names.includes(name)) warnClassProp(name);
+          const value = props[name];
+          if (value !== undefined && !names.includes(name) && !forwarded.includes(value)) {
+            warnClassProp(name);
+          }
         }
       }
     }
@@ -670,7 +716,7 @@ export function variants(first: any, second?: any): any {
   if (slots) {
     const slotNames = Object.keys(slots);
     const component = (props?: Record<string, unknown>, extra?: Record<string, SsArg>) => {
-      const chosen = pick(props);
+      const chosen = pick(props, extra === undefined ? [] : Object.values(extra));
       const parts: Record<string, SsArg[]> = {};
       for (const slot of slotNames) own(parts, slot, [...(slots[slot] as SsArg[])]);
 
@@ -718,7 +764,7 @@ export function variants(first: any, second?: any): any {
   }
 
   const component = (props?: Record<string, unknown>, ...rest: SsArg[]): string => {
-    const chosen = pick(props);
+    const chosen = pick(props, rest);
     const parts: SsArg[] = [...resolved.base];
     for (const name of names) {
       const value = chosen[name];

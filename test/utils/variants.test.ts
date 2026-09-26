@@ -902,3 +902,65 @@ describe("cva's own call shape", () => {
     expect(extractClasses(cva)).toEqual(extractClasses(own));
   });
 });
+
+describe("regressions the release-candidate audit found in its own fixes", () => {
+  /** Run `fn` collecting the warnings it prints. */
+  function collect(fn: () => unknown): { value: unknown; seen: string[] } {
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      return { value: fn(), seen };
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  }
+
+  it("builds a recipe whose map contains itself, rather than throwing on import", () => {
+    // The deep snapshot recursed with no guard, so a self-referencing option, base or
+    // slot map threw `RangeError` from `variants()` itself — taking the module down.
+    const option: Record<string, unknown> = { base: "p-2" };
+    option.md = option;
+    const base: Record<string, unknown> = { base: "flex" };
+    base.lg = base;
+    const { value, seen } = collect(() => [
+      variants({ variants: { size: { lg: option } } } as never)({ size: "lg" } as never),
+      variants({ base, variants: { size: { sm: "p-1" } } } as never)(),
+      variants(base as never, { variants: { size: { sm: "p-1" } } })(),
+      (
+        variants({
+          slots: { root: base },
+          variants: { size: { sm: {} } },
+        } as never)() as unknown as { root: string }
+      ).root,
+    ]);
+    expect(value).toEqual(["p-2", "flex", "flex", "flex"]);
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it("stays quiet when props.className is also passed on as the extra argument", () => {
+    // `<button {...p} className={button(p, p.className)} />` is the natural wrapper, and
+    // the class does reach the output; the warning threw under a CI `onWarn`.
+    const props = { tone: "danger" as const, className: "mt-2" };
+    const { value, seen } = collect(() => button(props, props.className));
+    expect(value).toContain("mt-2");
+    expect(seen).toEqual([]);
+    expect(collect(() => button({ className: "mt-2" } as never)).seen).toHaveLength(1);
+  });
+
+  it("says nothing about an extra map that builds no prefixed class", () => {
+    // `{ base: "mt-2" }` and `{}` work — `mt-2` is a literal Tailwind styles itself.
+    expect(collect(() => button({}, { base: "mt-2" } as never)).seen).toEqual([]);
+    expect(collect(() => button({}, {} as never)).seen).toEqual([]);
+    expect(collect(() => button({}, { base: { md: "mt-3" } } as never)).seen).toHaveLength(1);
+  });
+
+  it("refuses at compile time a config that lacks variants but is still a config", () => {
+    // Read as base classes (`base` is an ss key too), it inherited nothing at runtime.
+    // @ts-expect-error `extend` makes this a config, and a config needs `variants`.
+    variants({ extend: button, base: "font-medium" });
+    // @ts-expect-error likewise `defaults`.
+    variants({ base: "p-2", defaults: {} });
+    // A plain ss map is still base classes.
+    expect(variants({ base: "p-2", md: "p-4" })()).toBe("p-2 md:p-4");
+  });
+});
