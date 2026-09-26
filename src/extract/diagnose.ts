@@ -864,6 +864,7 @@ const configureMerge = /\bconfigure\s*\(\s*\{[\s\S]{0,2000}?\bmerge\s*:/;
  */
 export function configuresMerge(source: string): boolean {
   const code = source.startsWith("﻿") ? source.slice(1) : source;
+  if (!code.includes("tailess")) return false;
   const masked = maskLiterals(code);
   return anyTailessImport.test(masked) && configureMerge.test(masked);
 }
@@ -902,7 +903,9 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
   // import matched nothing and every check in the file went quiet, the renamed-import
   // one included.
   const code = source.startsWith("﻿") ? source.slice(1) : source;
-  if (bundled(code)) return [];
+  // Every check needs the file to import tailess, by that name — and most scanned files
+  // never mention it. Masking each of them twice first doubled the cost of a cold scan.
+  if (!code.includes("tailess") || bundled(code)) return [];
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;
