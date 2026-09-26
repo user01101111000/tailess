@@ -181,12 +181,21 @@ describe("the browser bundle", () => {
     // "an unclosed quote or both kinds", and a quoted `nth` position, which the old rule
     // caught by accident, got a check of its own rather than going silent.
     //
+    // Raised to 16,250 for the audit's last round: 15,724 -> 16,006 chars (6,686 gzipped).
+    // +220 in `variants`, for four regressions its own earlier fixes caused: a recipe map
+    // that contains itself threw `RangeError` at import (the snapshot had no cycle guard),
+    // `button(props, props.className)` warned that `className` was dropped, an extra
+    // `{ base: "mt-2" }` was said to get no CSS, and the one-argument overload took a config
+    // without `variants` as base classes. +34 in `ss` + `cn`: the integration check told
+    // every jsdom and happy-dom test file that a correctly wired build was not. +28 in the
+    // arbitrary-value helpers, whose underscore advice pointed at a spelling that is dropped.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 6,089 chars (2,857 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 4,394 (10,483). Measured with the
+    // 6,123 chars (2,874 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 4,614 (10,737). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
-    expect(code.length).toBeLessThan(16_000);
+    expect(code.length).toBeLessThan(16_250);
   });
 
   it("pulls in no Node builtins", async () => {

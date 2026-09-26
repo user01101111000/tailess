@@ -105,6 +105,29 @@ describe("integration check", () => {
     expect(warn).toHaveBeenCalledOnce();
   });
 
+  it("stays quiet in a DOM that loaded no stylesheet at all", async () => {
+    // jsdom and happy-dom under Vitest or Jest load no CSS, so the marker cannot be there
+    // however the build is wired — and every component test file, in a project wired
+    // correctly, printed the whole "add the integration" message.
+    const { document } = setupDom("");
+    vi.stubGlobal("document", { ...document, styleSheets: { length: 0 } });
+    const withPrefix = await loadWithPrefix();
+
+    withPrefix("md", "text-lg");
+    await vi.runAllTimersAsync();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("still warns on a page whose stylesheets lack the marker", async () => {
+    const { document } = setupDom("");
+    vi.stubGlobal("document", { ...document, styleSheets: { length: 2 } });
+    const withPrefix = await loadWithPrefix();
+
+    withPrefix("md", "text-lg");
+    await vi.runAllTimersAsync();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
   it("does nothing on the server, where there is no document", async () => {
     vi.stubGlobal("document", undefined);
     vi.stubGlobal("window", undefined);
