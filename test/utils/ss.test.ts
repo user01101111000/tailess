@@ -268,6 +268,27 @@ describe("ss, nested buckets", () => {
     }
   });
 
+  it("drops buckets nested past the scanner's depth, and says so once", () => {
+    // The scanner stops at the same depth. A level the runtime emitted past it would be a
+    // class with no CSS behind it, so the runtime drops it too — out loud.
+    const seen: string[] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation((m: string) => {
+      seen.push(m);
+    });
+    let map: Record<string, unknown> = { base: "deepest" };
+    for (let level = 12; level > 0; level -= 1) map = { base: `p-${level}`, hover: map };
+    const once = ss(map as Parameters<typeof ss>[0]);
+    ss(map as Parameters<typeof ss>[0]);
+    warn.mockRestore();
+
+    expect(once.split(" ")).toContain("p-1");
+    expect(once).toContain("hover:p-2");
+    expect(once).not.toContain("deepest");
+    const deep = seen.filter((m) => m.includes("deep and were dropped"));
+    expect(deep).toHaveLength(1);
+    expect(deep[0]).toContain("more than 10 deep");
+  });
+
   it("still emits one map shared by two keys, which is not a cycle", () => {
     const states = { base: "p-2", hover: "underline" };
     expect(ss({ md: states, lg: states })).toBe(

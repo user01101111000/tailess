@@ -945,6 +945,82 @@ describe("Tailwind reached through a workspace package, through PostCSS", () => 
   });
 });
 
+describe("Tailwind reached through an import only a resolver can follow, through Vite", () => {
+  // `@import "@/styles/tailwind.css"` is an alias only Vite knows, and a workspace package
+  // is one Node finds. Either way the entry test used to see a bare specifier it could not
+  // follow, and the app's stylesheet got no injection.
+  const transform = (resolve: (source: string) => Promise<{ id: string } | null>) => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    return (code: string) =>
+      plugin.transform.handler.call(
+        { addWatchFile: () => {}, resolve },
+        code,
+        join(dir, "app.css"),
+      );
+  };
+
+  it("follows an alias through Vite's own resolver", async () => {
+    await mkdir(join(dir, "styles"), { recursive: true });
+    const target = join(dir, "styles", "tailwind.css");
+    await writeFile(target, `@import "tailwindcss";\n`);
+    const run = transform(async (source) =>
+      source === "@/styles/tailwind.css" ? { id: `${target}?inline` } : null,
+    );
+    const result = await run(`@import "@/styles/tailwind.css";\n`);
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+  });
+
+  it("falls back to Node's resolution when Vite's resolver fails", async () => {
+    const pkg = join(dir, "node_modules", "@workspace", "ui");
+    await mkdir(pkg, { recursive: true });
+    await writeFile(join(pkg, "globals.css"), `@import "tailwindcss";\n`);
+    const run = transform(() => Promise.reject(new Error("resolver down")));
+    const result = await run(`@import "@workspace/ui/globals.css";\n`);
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+  });
+
+  it("leaves a stylesheet alone when no resolver finds the import", async () => {
+    const run = transform(async () => null);
+    expect(await run(`@import "@nowhere/missing.css";\n`)).toBeNull();
+  });
+});
+
+describe("a theme that removes a breakpoint, through Vite", () => {
+  // The PostCSS plugin's theme check has its own tests; the Vite one runs the same check
+  // in its transform, and nothing exercised it there.
+  const run = (diagnostics: "warn" | "error") => {
+    const plugin = tailessVite({ content: [dir], diagnostics });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    return plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }\n`,
+      join(dir, "index.css"),
+    );
+  };
+
+  // Each finding prints once per process, so each case starts from a clean slate.
+  beforeEach(clearReported);
+
+  const said = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.map((call) => String(call[0])).join("\n");
+
+  it('fails the build under diagnostics: "error", naming the key', async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(run("error")).rejects.toThrow(/1 build-time diagnostic/);
+    expect(said(warn)).toMatch(/removes the "md" breakpoint/);
+    warn.mockRestore();
+  });
+
+  it("warns and still injects by default", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await run("warn");
+    expect(said(warn)).toMatch(/removes the "md" breakpoint/);
+    warn.mockRestore();
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+  });
+});
+
 describe("a quoted value in a helper's selector or query", () => {
   it("builds a class Tailwind generates a rule for, so nothing warns about it", async () => {
     // `has('[data-state="open"]', …)` is the usual spelling. Since the plugin carries a

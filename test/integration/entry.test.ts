@@ -138,6 +138,25 @@ describe("isTailwindEntry", () => {
     ).toBe(true);
   });
 
+  it("treats a resolver that throws as one that found nothing", async () => {
+    // A plugin resolver can reject; the transform must not fail the stylesheet over it.
+    await writeFile(join(dir, "tw.css"), `@import "tailwindcss";`);
+    const failing = () => Promise.reject(new Error("resolver down"));
+    const css = `@import "@acme/ui/styles.css";\n@import "./tw.css";`;
+    expect(await isTailwindEntry(css, join(dir, "app.css"), undefined, undefined, failing)).toBe(
+      true,
+    );
+    expect(
+      await isTailwindEntry(
+        `@import "@acme/ui/styles.css";`,
+        join(dir, "app.css"),
+        8,
+        undefined,
+        failing,
+      ),
+    ).toBe(false);
+  });
+
   it("follows a workspace package's exports through Node's resolution", async () => {
     // The shadcn/ui monorepo template: `@import "@workspace/ui/globals.css"`.
     const pkg = join(dir, "node_modules", "@workspace", "ui");
