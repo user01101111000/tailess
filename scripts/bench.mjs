@@ -12,7 +12,7 @@
  * `tailwind-merge` keeps its own cache, so a cold first call is much slower and is not
  * what a rendering app pays.
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -87,6 +87,13 @@ try {
           `export const b${i} = on(["dark", "hover"], "bg-black");\n`,
       ),
     ),
+  );
+  // Backdated: the scanner rereads a file changed within two seconds of the last read
+  // (an mtime that close cannot vouch for the content), and a project's files were not
+  // all written a moment ago. Measured fresh, the warm rescan was a second cold scan.
+  const old = new Date(Date.now() - 60_000);
+  await Promise.all(
+    Array.from({ length: files }, (_, i) => utimes(join(dir, `C${i}.tsx`), old, old)),
   );
   await scan("cold scan", [dir], { cold: true });
   await scan("warm rescan", [dir], { cold: false });

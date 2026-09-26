@@ -32,7 +32,7 @@ async function bundleFor(mode: "production" | "development"): Promise<string> {
 /** A distinctive fragment of each warning, so a reworded message still matches. */
 const warnings = [
   "doesn't include tailess",
-  "not a Tailwind breakpoint",
+  "not one of ss()'s keys",
   "empty prefix",
   "contains whitespace",
   "empty range",
@@ -43,7 +43,9 @@ const warnings = [
   "letters, digits",
   "was given an empty",
   "positions count from 1",
-  "cannot appear in a class name",
+  "which the build cannot carry",
+  "not a config object",
+  "names a recipe without slots",
 ];
 
 describe("the browser bundle", () => {
@@ -140,14 +142,60 @@ describe("the browser bundle", () => {
     // pass vacuously. And a custom `merge` returning a non-string put that value straight
     // into the class attribute.
     //
+    // Raised again to 15,000 for the pre-announcement audit: 13,645 -> 14,659 chars,
+    // 6,141 gzipped. `ss` + `cn` went 5,690 -> 5,808, and that is the part to weigh:
+    // freezing the exported key lists the runtime itself reads (a caller's in-place
+    // `screenKeys.reverse()` made `between()` warn falsely and reordered `responsive()`),
+    // and ranking an undeclared key after every declared one rather than tied with the
+    // first. Everything else is in `variants`, and is warning text for failures that were
+    // silent: an `ss` map passed as a component's extra argument (the build reads the
+    // recipe, never the component's calls, so `md:w-auto` had no rule and `check --strict`
+    // passed), a compound rule naming a group the recipe does not declare (it applied to
+    // everything; cva and tv never apply it), and `class`/`className` in the props (cva
+    // and tv read them there; here they were dropped).
+    //
+    // Raised again to 15,500 for six more defects from the same audit: 14,659 -> 15,468
+    // chars, 6,141 -> 6,466 gzipped. Four are in `variants` (+533). The snapshot was one
+    // level deep, so a write to a compound rule, a default or an `ss` map inside an option
+    // still changed a built recipe — the fix the 13,500 raise paid for, half done.
+    // `component.slots` handed out the arrays every call spreads, which read as clsx
+    // dictionaries through `ss` and which one write corrupted for good. And `extend`
+    // inherited nothing, silently, from a plain config object (typed as inheriting its
+    // variants) and from a flat recipe under a slotted one (whose `ss`-map options were
+    // spread by slot name).
+    //
+    // The fifth is the one that moves `ss` + `cn`, 5,808 -> 6,003 (2,752 -> 2,811 gzipped):
+    // the depth bound slowed a cycle rather than stopping it, so a map reaching itself from
+    // four keys walked 4¹⁰ paths — nine seconds for one call, in production too — and warned
+    // once per path on every call. It is cut where it closes now, and said once. The render
+    // path costs the same, measured over a million calls. And 6,003 -> 6,077 for keeping the
+    // settings on `globalThis`: an ESM app with a CommonJS component library loads both
+    // builds, and `configure()` from the app never reached the library's copy.
+    //
+    // Raised again to 16,000 for the release-candidate audit: 15,468 -> 15,724 chars
+    // (6,552 gzipped). +12 in `ss` + `cn` for an unknown-key warning that called working
+    // Tailwind variants (`aria-checked`) "not a Tailwind variant". +244 in the helpers that
+    // take an arbitrary value (`has`, `supports`, `nth`…): once the plugin carried a lone
+    // `"` in a single-quoted `@source inline`, the check still called `[data-state="open"]`
+    // unusable — a warning on working code that failed `--strict` — so the rule became
+    // "an unclosed quote or both kinds", and a quoted `nth` position, which the old rule
+    // caught by accident, got a check of its own rather than going silent.
+    //
+    // Raised to 16,250 for the audit's last round: 15,724 -> 16,006 chars (6,686 gzipped).
+    // +220 in `variants`, for four regressions its own earlier fixes caused: a recipe map
+    // that contains itself threw `RangeError` at import (the snapshot had no cycle guard),
+    // `button(props, props.className)` warned that `className` was dropped, an extra
+    // `{ base: "mt-2" }` was said to get no CSS, and the one-argument overload took a config
+    // without `variants` as base classes. +34 in `ss` + `cn`: the integration check told
+    // every jsdom and happy-dom test file that a correctly wired build was not. +28 in the
+    // arbitrary-value helpers, whose underscore advice pointed at a spelling that is dropped.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 5,683 chars, which is the number worth watching, since it is what most projects
-    // actually pay. That figure was recorded as 5,170 and described as unchanged through
-    // several of the raises above; it was neither — nothing re-measured it. It is
-    // measured here now, along with the rest: `vars` on top costs 411 (6,094), and
-    // `variants` on top costs 2,908 (8,591).
-    expect(code.length).toBeLessThan(14_000);
+    // 6,123 chars (2,874 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 4,614 (10,737). Measured with the
+    // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
+    expect(code.length).toBeLessThan(16_250);
   });
 
   it("pulls in no Node builtins", async () => {

@@ -19,10 +19,10 @@ describe("escapes", () => {
   it("does not let an escaped quote end the string early", () => {
     // The escaped quote stays inside the argument rather than closing it...
     expect(scanCalls(`on("hover", "a\\"b")`)).toEqual([
-      { name: "on", args: ['"hover"', '"a\\"b"'], receiver: "" },
+      { name: "on", args: ['"hover"', '"a\\"b"'], receiver: "", at: 2 },
     ]);
-    // ...so a following key is still seen. (The `"` class itself can't travel
-    // through `@source inline("…")`, so it is dropped — deliberately.)
+    // ...so a following key is still seen. (The lone `"` is not a class — it does not
+    // close — so it is dropped as unbalanced, deliberately.)
     expect(extractClasses(`ss({ md: "a\\"b", lg: "grid" })`)).toEqual(["lg:grid"]);
   });
 
@@ -108,6 +108,49 @@ describe("malformed input stays contained", () => {
     // to lose — and 20k of prose must not become candidates.
     const code = `on(${"word ".repeat(6000)}`;
     expect(extractClasses(code)).toEqual([]);
+  });
+
+  it("reads a real call over the cap in full, which a design system's recipe can be", () => {
+    // The cap is for prose, whose `(` never opened a call. A recipe is one call whose
+    // config is plainly code, and one of tailwind-variants' size passed 20k characters:
+    // every prefixed class in it was dropped, `check` found "nothing to check", and the
+    // build shipped them all unstyled.
+    const options = Array.from(
+      { length: 400 },
+      (_, i) =>
+        `o${i}: { base: "p-${i % 12}", md: "px-${i % 9}", hover: "bg-neutral-${(i % 9) + 1}00" }`,
+    ).join(",\n");
+    const code = `variants({ variants: { size: {\n${options}\n} } })`;
+    expect(code.length).toBeGreaterThan(20_000);
+    const classes = extractClasses(code);
+    expect(classes).toContain("md:px-0");
+    expect(classes).toContain("hover:bg-neutral-900");
+
+    const entries = Array.from({ length: 1300 }, (_, i) => `"max-md": "gap-${i % 12}"`);
+    const map = `ss({ ${entries.join(", ")}, lg: "grid" })`;
+    expect(map.length).toBeGreaterThan(20_000);
+    expect(extractClasses(map)).toContain("lg:grid");
+  });
+
+  it("reads a large recipe however its argument list opens", () => {
+    // Only the object-first spelling got the larger cap. A comment first, and the cva
+    // form with a template-literal, shared-constant or `ss()` base, were each dropped
+    // whole past 20,000 characters.
+    const options = Array.from(
+      { length: 700 },
+      (_, i) => `o${i}: { base: "p-${i % 12}", md: "px-${i % 9}" }`,
+    ).join(",\n");
+    const config = `{ variants: { size: {\n${options}\n} } }`;
+    for (const opening of [
+      `\n  // the design system's button\n  ${config}`,
+      `\`inline-flex items-center\`, ${config}`,
+      `base, ${config}`,
+      `ss({ base: "flex" }), ${config}`,
+    ]) {
+      const code = `variants(${opening})`;
+      expect(code.length).toBeGreaterThan(20_000);
+      expect(extractClasses(code), opening.slice(0, 30)).toContain("md:px-8");
+    }
   });
 
   it("still emits what a call held when the file simply ends mid-edit", () => {

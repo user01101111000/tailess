@@ -84,8 +84,16 @@ describe("a selector that cannot become a class", () => {
   it("warns about a character no class name can carry", () => {
     // The candidate list is written into a stylesheet, so these are dropped there
     // while the runtime still puts the class on the element.
-    expect(warnings(() => has('input[value="x"]', "p-2"))).toHaveLength(1);
+    expect(warnings(() => has(`[title="it's"]`, "p-2"))).toHaveLength(1);
+    expect(warnings(() => has('input[value="x]', "p-2"))).toHaveLength(1);
     expect(warnings(() => notHas("a;b", "p-3"))).toHaveLength(1);
+  });
+
+  it("stays quiet about a quoted attribute value, which the build does carry", () => {
+    // `[data-state="open"]` is the usual way to write it, and the class it builds goes
+    // into a single-quoted `@source inline`; the warning called it unusable.
+    expect(warnings(() => has('[data-state="open"]', "p-2"))).toEqual([]);
+    expect(warnings(() => has('input[value="x"]', "p-2"))).toEqual([]);
   });
 
   it("warns about an unclosed quote, which would poison the candidate list", () => {
@@ -113,6 +121,11 @@ describe("a selector that cannot become a class", () => {
     const seen = warnings(() => has(".my_class", "p-10"));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain("underscore");
+    // The advice has to be one that works. `withPrefix("has-[.my\_class]", …)` built a
+    // class the scanner drops (it cannot carry a backslash), so it was unstyled with the
+    // gate green; a String.raw literal is one Tailwind's own scan reads, and compiles.
+    expect(seen[0]).not.toContain("withPrefix");
+    expect(seen[0]).toContain("String.raw");
     expect(warnings(() => inside(".side_bar", "p-11"))).toHaveLength(1);
     expect(warnings(() => notHas("[data-x=a_b]", "p-12"))).toHaveLength(1);
   });

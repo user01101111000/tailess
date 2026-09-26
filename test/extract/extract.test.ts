@@ -295,10 +295,14 @@ describe("extractClasses", () => {
   });
 
   it("drops candidates that would break the @source inline directive", () => {
-    // Braces trigger Tailwind's brace expansion; a double quote would close the
-    // string; a backslash or semicolon would break out of the declaration.
+    // Braces trigger Tailwind's brace expansion; a backslash or semicolon would break
+    // out of the declaration; both kinds of quote cannot share one string.
     expect(extractClasses(`ss({ md: "content-['{}'] a\\\\b" })`)).toEqual([]);
-    expect(extractClasses(`ss({ md: 'content-["x"]' })`)).toEqual([]);
+    expect(extractClasses(`ss({ md: \`content-["x'"]\` })`)).toEqual([]);
+  });
+
+  it("keeps a candidate with a double quote, which goes in a single-quoted directive", () => {
+    expect(extractClasses(`ss({ md: 'after:content-["x"]' })`)).toEqual(['md:after:content-["x"]']);
   });
 
   it("returns nothing for source with no tailess calls", () => {

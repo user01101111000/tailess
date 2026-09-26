@@ -101,4 +101,24 @@ describe("what a build does about them", () => {
   it("does not fail a clean build", () => {
     expect(() => reportDiagnostics([], root, "error")).not.toThrow();
   });
+
+  it("prints a note about working CSS but never fails the build over it", () => {
+    // An added breakpoint, a custom variant, a moved width: the README calls these
+    // informational, and a project that declared its keys the documented way could not
+    // build under the documented CI setting because of them.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const note: FileDiagnostic = {
+      kind: "theme-drift",
+      message: 'your theme adds the "3xl" breakpoint',
+      file: join(root, "src", "app.css"),
+      informational: true,
+    };
+    expect(() => reportDiagnostics([note], root, "error")).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Beside a real one, only the real one counts.
+    expect(() => reportDiagnostics([note, ...one], root, "error")).toThrow(
+      /1 build-time diagnostic,/,
+    );
+    warn.mockRestore();
+  });
 });

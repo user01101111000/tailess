@@ -1,9 +1,10 @@
 /// <reference types="node" />
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { collect, isScannable, normalizeExtensions } from "../extract/collect.js";
-import { isTailwindEntry } from "../integration/entry.js";
-import { buildPrelude } from "../integration/inject.js";
-import { type DiagnosticMode, reportDiagnostics } from "../integration/report.js";
+import { isTailwindEntry, resolveWithNode } from "../integration/entry.js";
+import { afterStatements, buildPrelude } from "../integration/inject.js";
+import { readOptions } from "../integration/options.js";
+import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
@@ -34,6 +35,8 @@ export interface TailessViteOptions {
 /** The slice of Vite's transform context we use. */
 interface TransformContext {
   addWatchFile(file: string): void;
+  /** Vite's own resolver, aliases included; see {@link isTailwindEntry}. */
+  resolve?(source: string, importer?: string): Promise<{ id: string } | null>;
 }
 
 /** The slice of Vite's dev server we use. */
@@ -69,6 +72,15 @@ const passthroughQuery = /[?&](?:raw|url)(?:&|$)/;
 
 const cssFile = /\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)$/;
 
+/**
+ * A stylesheet that is not a file of its own: a Vue or Svelte `<style>` block
+ * (`App.vue?vue&type=style&index=0&lang.css`) or an inline `<style>` in `index.html`
+ * (`index.html?html-proxy&index=0.css`). Tailwind compiles an `@import "tailwindcss"`
+ * written in either, so the same test it uses decides it here — reading only the path
+ * before `?` skipped them, and every runtime-built class went unstyled, silently.
+ */
+const styleBlock = /&lang\.css(?:&|$)|[?&]index=\d+\.css$/;
+
 /** Coalesce bursts of file-system events (editors save in several steps). */
 const debounceMs = 25;
 
@@ -103,7 +115,8 @@ const debounceMs = 25;
 // gets the plugin creator itself rather than a namespace object Vite would reject.
 // Adding a named export back would also make Rollup's CJS writer warn on every
 // build, since it cannot tell which shape a mixed entry was meant to have.
-function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
+function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
+  const options = readOptions<TailessViteOptions>(given, "tailess/vite");
   let root = process.cwd();
   let sidecar = createSidecar(join(root, "node_modules", ".vite"));
 
@@ -138,7 +151,6 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
   const roots = (): string[] => contentRoots ?? [root];
 
   let warnedAboutSidecar = false;
-  let warnedAboutEmptyScan = false;
 
   /**
    * Re-scan and refresh the sidecar, returning the files that were read and
@@ -166,23 +178,10 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
     // runtime equivalents only fire once the offending line renders in a browser.
     reportDiagnostics(diagnostics, root, options.diagnostics);
 
-    // An explicit `content` that matches nothing is always a mistake — a wrong path,
-    // or an extension list that excludes the project's own files. Left quiet it looks
-    // exactly like a project that uses no tailess at all, right up until the page
-    // renders unstyled.
-    if (files.length === 0 && options.content?.length && !warnedAboutEmptyScan) {
-      warnedAboutEmptyScan = true;
-      // Naming the glob case explicitly: `content` was glob-shaped in Tailwind v3,
-      // so it is the first thing a reader reaches for, and "matched no files" on its
-      // own reads like a wrong path rather than a wrong kind of path.
-      const glob = scanned.some((path) => path.includes("*"))
-        ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
-        : "";
-      console.warn(
-        `[tailess] the "content" option matched no files, so no variant class will ` +
-          `have CSS. Scanned: ${scanned.join(", ")}. Paths are resolved against Vite's ` +
-          `root (${root}).${glob}`,
-      );
+    // An explicit `content` or `extensions` that matches nothing is always a mistake;
+    // see `reportEmptyScan`, which the PostCSS plugin shares.
+    if (files.length === 0 && (options.content?.length || options.extensions !== undefined)) {
+      reportEmptyScan(scanned, `Vite's root (${root})`, options.extensions);
     }
 
     try {
@@ -258,13 +257,20 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
       async handler(code, id) {
         if (passthroughQuery.test(id)) return null;
         const [file = ""] = id.split("?");
-        if (!cssFile.test(file)) return null;
+        if (!cssFile.test(file) && !styleBlock.test(id)) return null;
 
         const entry = resolve(file);
         // Only a stylesheet Tailwind emits utilities into — directly, or through a
         // chain of relative `@import`s. Anywhere else the injection is dead weight,
         // and in a stylesheet Tailwind skips entirely it would leak into the output.
-        if (!(await isTailwindEntry(code, entry))) return null;
+        // Through Vite's own resolver first, so an alias (`@/styles/tailwind.css`) is
+        // followed the way the build will follow it; Node's for anything it declines.
+        const resolveImport = async (specifier: string, importer: string) => {
+          const resolved = await this.resolve?.(specifier, importer).catch(() => null);
+          const [path] = resolved?.id.split("?") ?? [];
+          return path || resolveWithNode(specifier, importer);
+        };
+        if (!(await isTailwindEntry(code, entry, undefined, undefined, resolveImport))) return null;
 
         entries.add(entry);
 
@@ -292,9 +298,11 @@ function tailess(options: TailessViteOptions = {}): TailessVitePlugin {
         // `cacheDir` pointed at another volume), and there is nothing to import if
         // the write failed. Inline the list instead: still correct, it just loses
         // the mtime signal that makes Tailwind rebuild in dev.
-        if (specifier === null) return { code: `${css}${code}`, map: null };
-
-        return { code: `@import "${specifier}";\n${code}`, map: null };
+        const injection = specifier === null ? css : `@import "${specifier}";\n`;
+        // After the file's own leading `@import`s: see `afterStatements`.
+        const at = afterStatements(code);
+        const head = at === 0 ? "" : `${code.slice(0, at)}\n`;
+        return { code: `${head}${injection}${code.slice(at)}`, map: null };
       },
     },
   };

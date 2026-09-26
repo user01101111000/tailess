@@ -18,12 +18,14 @@ async function main(): Promise<number> {
   const asJson = argv.includes("--json");
   try {
     const parsed = parse(argv);
+    // `--json` promises one object on stdout, and these two were the paths that broke it.
     if (parsed === "help") {
-      console.log(help);
+      console.log(asJson ? jsonResult(commandIn(argv), 0, { help }) : help);
       return 0;
     }
     if (parsed === "version") {
-      console.log(await version());
+      const number = await version();
+      console.log(asJson ? jsonResult(commandIn(argv), 0, { version: number }) : number);
       return 0;
     }
     return await run(parsed);

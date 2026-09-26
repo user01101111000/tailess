@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSidecar, importSpecifier } from "../../src/integration/sidecar.js";
@@ -42,6 +42,38 @@ describe("sidecar", () => {
     await rm(sidecar.path);
     expect((await sidecar.refresh(["md:flex"])).changed).toBe(true);
     expect(await readFile(sidecar.path, "utf8")).toContain("md:flex");
+  });
+
+  it("rewrites when another writer replaced the file", async () => {
+    // Two instances pointed at one cache: the second's list stood, and the first's
+    // rebuild trusted its own memory of having written, so its classes never came back.
+    const first = createSidecar(dir);
+    const second = createSidecar(dir);
+    await first.refresh(["md:flex"]);
+    await second.refresh(["lg:grid"]);
+    expect((await first.refresh(["md:flex"])).changed).toBe(true);
+    expect(await readFile(first.path, "utf8")).toContain("md:flex");
+  });
+
+  it("leaves a file that already holds the list alone, even from a new instance", async () => {
+    // postcss-cli reloads the config for every rebuild, and postcss-loader re-evaluates it
+    // per build, so each rebuild gets a fresh plugin — and a fresh sidecar. Rewriting
+    // identical bytes bumped the mtime of a file Tailwind reported as a dependency, the
+    // watcher saw a change, and the next rebuild did it again: forever, about 12 a second.
+    const first = createSidecar(dir);
+    await first.refresh(["md:flex"]);
+    const before = (await stat(first.path)).mtimeMs;
+    await new Promise((settle) => setTimeout(settle, 30));
+
+    const second = createSidecar(dir);
+    expect((await second.refresh(["md:flex"])).changed).toBe(false);
+    expect((await stat(second.path)).mtimeMs).toBe(before);
+    expect((await second.refresh(["md:flex", "lg:grid"])).changed).toBe(true);
+  });
+
+  it("puts a scoped sidecar in a directory of its own, under the same file name", () => {
+    expect(createSidecar(dir, "abc").path).toBe(join(dir, "tailess", "abc", "tailess.css"));
+    expect(createSidecar(dir).path).toBe(join(dir, "tailess", "tailess.css"));
   });
 
   it("never leaves a half-written file when refreshes overlap", async () => {

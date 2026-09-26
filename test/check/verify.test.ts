@@ -152,4 +152,23 @@ describe("asking whether a stylesheet has a rule for a class", () => {
     // A leading digit is a hex escape, trailing space and all.
     expect(hasRule(".\\32 xl\\:flex { }", "2xl:flex")).toBe(true);
   });
+
+  it("finds a class with characters outside ASCII, which Tailwind leaves bare", async () => {
+    // Every non-ASCII character was escaped, where Tailwind (and CSS.escape) write it as
+    // it is: a German attribute value, a CJK selector, an arrow in `content` all read as
+    // missing — failing working code, and letting a broken one pass because its utility
+    // "did not resolve" either.
+    const classes = [
+      "data-[state=geöffnet]:p-3",
+      "has-[[lang='日本']]:p-5",
+      "md:after:content-['→']",
+      "before:content-['✓']",
+      "font-['Noto_Sans_日本']",
+      "after:content-['🎉']",
+    ];
+    const css = await build(`@import "tailwindcss";`, classes);
+    expect(classes.filter((cls) => !hasRule(css, cls))).toEqual([]);
+    // And a longer name is still a longer name when it continues past ASCII.
+    expect(hasRule(".geö { }", "ge")).toBe(false);
+  });
 });

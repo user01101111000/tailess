@@ -17,6 +17,8 @@ export interface RawCall {
    * `socket.on(...)` is not a tailess call.
    */
   receiver: string;
+  /** Index of the call's `(` in the scanned text; see {@link inertCode}. */
+  at?: number;
 }
 
 /**
@@ -52,7 +54,18 @@ export const helperNames = [
 
 // Built from the list rather than written twice: the diagnostics ask the same
 // question about the same names, and two copies only have to disagree once.
-const callPattern = new RegExp(`(?<![\\w$])(${helperNames.join("|")})\\s*\\(`, "g");
+//
+// Between the name and its `(` a call may carry whitespace and block comments, an
+// optional-call `?.` and TypeScript type arguments: `t.ss?.(`, `ss /* why */ (`,
+// `variants<Props>(`. Each of those is a call the runtime makes, and requiring the paren
+// right after the name left every prefixed class it built unenumerated and unstyled.
+// The comment and the type arguments are bounded, so prose like "turn on <b>" in a
+// Markdown file cannot send each match on a walk to the end of the file.
+const callPattern = new RegExp(
+  `(?<![\\w$])(${helperNames.join("|")})(?:\\s|\\/\\*[\\s\\S]{0,200}?\\*\\/)*` +
+    "(?:\\?\\.\\s*)?(?:<(?:[^<>()]|<[^<>()]{0,100}>){0,200}>\\s*)?\\(",
+  "g",
+);
 
 /**
  * A second instance of {@link callPattern} for {@link outerCalls}.
@@ -72,6 +85,17 @@ const outerCallPattern = new RegExp(callPattern.source, "g");
  */
 const maxArgsLength = 20_000;
 
+/**
+ * The same, for an argument list that plainly starts as code — an object, an array or
+ * a string, which prose after "on (" does not.
+ *
+ * A design system's recipe is one `variants({ … })` call, and one the size of a
+ * tailwind-variants port passes 20k characters. Under the prose cap its every prefixed
+ * class was dropped, silently: `check` saw "nothing to check" and the build shipped the
+ * lot unstyled.
+ */
+const maxCodeArgsLength = 1_000_000;
+
 /** How deep a template may nest inside its own interpolations. See {@link skipTemplate}. */
 const maxTemplateNesting = 64;
 
@@ -90,7 +114,9 @@ function skipString(code: string, i: number, quote: string): number {
   while (i < code.length) {
     const c = code[i];
     if (c === "\\") {
-      i += 2;
+      // A line continuation is a backslash and a line break, and CRLF is one break:
+      // stepping over two characters left the LF behind to end the "string" as prose.
+      i += code[i + 1] === "\r" && code[i + 2] === "\n" ? 3 : 2;
       continue;
     }
     if (c === quote) return i + 1;
@@ -236,6 +262,56 @@ export function maskLiterals(code: string, alsoStrings = false): string {
   return out.join("");
 }
 
+/** Markdown-flavoured files, where a backtick opens inline code rather than a template. */
+const markdownFile = /\.(?:mdx?|markdown)$/i;
+/** Files whose markup can hold an HTML comment. */
+const markupFile = /\.(?:vue|svelte|astro|html?|mdx?|markdown)$/i;
+/** A fenced code block, ``` or ~~~, through its closing fence or the end of the file. */
+const fencedBlock = /^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\1[ \t]*$|(?![\s\S]))/gm;
+/** An inline code span on one line: `ss({ md: size })` in a sentence. */
+const codeSpan = /(`+)[^`\n][^\n]*?\1/g;
+
+/**
+ * One flag per character of `code`: set where nothing runs — a JavaScript comment, an
+ * HTML comment in a markup file, a fenced block or an inline code span in Markdown.
+ *
+ * Enumeration reads all of it on purpose, since an extra candidate is free. The
+ * diagnostics must not: `// was: ss({ md: size })`, a JSDoc "do not write
+ * `ss({ md: size })`", a commented-out Vue element or a README's code fence each failed
+ * `check --strict` and `diagnostics: "error"` on a line that never runs.
+ */
+export function inertCode(code: string, file?: string): Uint8Array {
+  const out = new Uint8Array(code.length);
+  const markdown = file !== undefined && markdownFile.test(file);
+  if (markdown) {
+    for (const m of code.matchAll(fencedBlock)) out.fill(1, m.index, m.index + m[0].length);
+    for (const m of code.matchAll(codeSpan)) out.fill(1, m.index, m.index + m[0].length);
+  }
+  if (file !== undefined && markupFile.test(file)) {
+    for (const m of code.matchAll(/<!--[\s\S]*?(?:-->|$)/g)) {
+      out.fill(1, m.index, m.index + m[0].length);
+    }
+  }
+  let i = 0;
+  while (i < code.length) {
+    const c = code[i];
+    if (out[i] === 1) i += 1;
+    else if (c === "'" || c === '"') {
+      const end = skipString(code, i, c);
+      i = end === -1 ? i + 1 : end;
+    } else if (c === "`" && !markdown) i = skipTemplate(code, i);
+    else {
+      const end = c === "/" ? skipComment(code, i) : i;
+      if (end === i) i += 1;
+      else {
+        out.fill(1, i, end);
+        i = end;
+      }
+    }
+  }
+  return out;
+}
+
 /**
  * Read a parenthesized argument list; `open` points at the `(`. Returns the text
  * between the parens.
@@ -244,12 +320,19 @@ export function maskLiterals(code: string, alsoStrings = false): string {
  * dev server caught mid-keystroke, and its finished calls should keep their
  * styles. Running past {@link maxArgsLength} yields nothing instead — that much
  * text is not an argument list, so the `(` belonged to something else and
- * whatever follows would only add noise.
+ * whatever follows would only add noise. An argument list that starts as code gets
+ * {@link maxCodeArgsLength} instead, since a large one is a real recipe.
  */
-function readParen(code: string, open: number): string {
-  const capped = open + 1 + maxArgsLength;
-  const limit = Math.min(code.length, capped);
+function readParen(code: string, open: number, recipe = false): string {
   const start = open + 1;
+  const first = skipTrivia(code, start);
+  // A recipe is the one call that grows past the prose cap, and it opens however its
+  // author likes — a comment, a template-literal or shared-constant base, an `ss()` call —
+  // so a `variants(` always gets the larger cap. Testing only for `{ [ ' "` read the
+  // object-first spelling and dropped every other one past 20,000 characters, whole.
+  const startsAsCode = recipe || "{['\"`".includes(code[first] ?? " ");
+  const capped = start + (startsAsCode ? maxCodeArgsLength : maxArgsLength);
+  const limit = Math.min(code.length, capped);
   let i = start;
   let depth = 1;
   while (i < limit) {
@@ -277,7 +360,9 @@ function readParen(code: string, open: number): string {
     }
     i += 1;
   }
-  return i === capped ? "" : code.slice(start, i);
+  // `>=`, not `===`: a template skipped as a whole can jump past the cap, and an
+  // unterminated one used to carry the rest of the file into a single call.
+  return i >= capped ? "" : code.slice(start, i);
 }
 
 /**
@@ -350,7 +435,7 @@ export function extractStrings(text: string): string[] {
     if (c === "`") {
       const end = skipTemplate(text, i);
       const inner = text.slice(i + 1, end - 1);
-      if (!inner.includes("${")) out.push(inner);
+      if (!inner.includes("${")) out.push(unescapeString(inner));
       i = end;
       continue;
     }
@@ -387,7 +472,23 @@ const controlEscapes: Record<string, string> = {
  * take a value.
  */
 function unescapeString(s: string): string {
-  return s.replace(/\\(.)/g, (_, ch: string) => controlEscapes[ch] ?? ch);
+  return s.replace(
+    /\\(?:x([\da-fA-F]{2})|u([\da-fA-F]{4})|u\{([\da-fA-F]{1,6})\}|(\r\n|[\s\S]))/g,
+    (_, x?: string, u?: string, braced?: string, ch?: string) => {
+      // `"p-4\x20text-lg"` is two classes at runtime, and read as `x20` it was one
+      // class that matched nothing — the same break as the whitespace escapes above.
+      const hex = x ?? u ?? braced;
+      if (hex !== undefined) {
+        const point = Number.parseInt(hex, 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : "";
+      }
+      // A line continuation contributes nothing to the string.
+      if (ch === "\n" || ch === "\r" || ch === "\r\n" || ch === " " || ch === " ") {
+        return "";
+      }
+      return controlEscapes[ch as string] ?? (ch as string);
+    },
+  );
 }
 
 /**
@@ -412,7 +513,14 @@ export function parseObject(text: string): Array<{ key: string; value: string }>
     if (entry === "" || entry.startsWith("...")) continue;
     const colon = topLevelColon(entry);
     if (colon === -1) continue;
-    const key = normalizeKey(entry.slice(0, colon).trim());
+    // Likewise a comment between the key and its colon: `lg /* desktops */: "p-3"` made
+    // the candidate `lg /* desktops */:p-3`.
+    const key = normalizeKey(
+      entry
+        .slice(0, colon)
+        .replace(/(?:\s|\/\*[\s\S]*?\*\/)+$/, "")
+        .trim(),
+    );
     if (key == null) continue;
     props.push({ key, value: entry.slice(colon + 1).trim() });
   }
@@ -560,13 +668,24 @@ export function objectLiterals(text: string): string[] {
       if (frames.pop() === true) calls -= 1;
     } else if (c === "{" && brackets === 0 && calls === 0) {
       const end = matchBrace(text, i);
-      out.push(text.slice(i, end));
+      // `{ primary: "bg-blue-600", danger: "bg-red-600" }[tone]` is a lookup that picks
+      // one value, not a map: its keys are discriminants, and reading them as variants
+      // put `primary:bg-blue-600` in the candidate list for `check` to fail. The values
+      // are string literals, which the sweep over this text already reads.
+      if (!lookupFollows(text, end)) out.push(text.slice(i, end));
       i = end;
       continue;
     }
     i += 1;
   }
   return out;
+}
+
+/** True when the object literal ending at `end` is indexed straight away: `{…}[key]`. */
+function lookupFollows(text: string, end: number): boolean {
+  let j = end;
+  while (j < text.length && /\s/.test(text[j] as string)) j += 1;
+  return text[j] === "[" || (text[j] === "?" && text[j + 1] === "." && text[j + 2] === "[");
 }
 
 /** The identifier immediately before the `(` at `i`, or `""` for a grouping paren. */
@@ -633,7 +752,10 @@ export function dictionaryKeys(text: string, bare: boolean, shorthand = true): s
 
     if (c === "{") {
       const end = matchBrace(text, i);
-      if (foreign === 0 && (regions > 0 || bare)) collectKeys(text.slice(i, end), out, shorthand);
+      // `{ sm: "underline" }[size]` is a lookup whose result is one of its values, not a
+      // dictionary whose keys become classes.
+      const dictionary = foreign === 0 && (regions > 0 || bare) && !lookupFollows(text, end);
+      if (dictionary) collectKeys(text.slice(i, end), out, shorthand);
       i = end;
       continue;
     }
@@ -691,6 +813,7 @@ const leadingTrivia = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 const declaredKey = {
   slots: /^(?:slots|["']slots["'])\s*(?::|$)/,
   extend: /^(?:extend|["']extend["'])\s*(?::|$)/,
+  variants: /^(?:variants|["']variants["'])\s*(?::|$)/,
 } as const;
 
 /**
@@ -732,6 +855,60 @@ export function isArrayLiteral(text: string): boolean {
 }
 
 /**
+ * Every `[ … ]` group in `text` outside strings and comments, in source order.
+ *
+ * What `on(cond ? ["dark", "hover"] : "focus", …)` needs: each list is one stack of
+ * states, and each string outside a list is a state of its own.
+ */
+export function arrayLiterals(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"') {
+      const end = skipString(text, i, c);
+      if (end !== -1) {
+        i = end;
+        continue;
+      }
+    } else if (c === "`") {
+      i = skipTemplate(text, i);
+      continue;
+    } else {
+      const j = skipComment(text, i);
+      if (j !== i) {
+        i = j;
+        continue;
+      }
+    }
+    if (c === "[") {
+      const end = matchBrace(text, i);
+      out.push(text.slice(i, end));
+      i = end;
+      continue;
+    }
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * The inside of the array literal `text` holds, or `text` itself if it holds none.
+ *
+ * A list is not only ever written `[ … ]`: `[ … ] as const`, `[ … ] satisfies
+ * ReadonlyArray<…>` and `([ … ])` are ordinary TypeScript, and testing for text that
+ * starts and ends with a bracket dropped every entry of all three.
+ */
+export function arrayBody(text: string): string {
+  const t = text.trim();
+  let open = 0;
+  while (t[open] === "(" || (t[open] !== undefined && /\s/.test(t[open] as string))) open += 1;
+  if (t[open] !== "[") return t;
+  const end = matchBrace(t, open);
+  return t.slice(open + 1, t[end - 1] === "]" ? end - 1 : end);
+}
+
+/**
  * Scan source code for tailess helper calls (bare or as a method, e.g. `st.ss`)
  * and return each with its raw top-level arguments. Nested calls are found too,
  * since the search covers the argument text as well.
@@ -753,27 +930,48 @@ export function isArrayLiteral(text: string): boolean {
  * broken layout they cannot debug.
  */
 export function scanCalls(code: string): RawCall[] {
+  return callsMatching(code, callPattern);
+}
+
+/**
+ * `match(` — which is not in {@link helperNames}: its options are literals Tailwind
+ * reads itself, so there is nothing to enumerate, and a renamed `match` loses nothing.
+ * Only the diagnostics read it, for an `ss` map written where a class value goes.
+ */
+const matchPattern = /(?<![\w$])(match)\s*\(/g;
+
+/** Every `match(…)` call, for the diagnostics. See {@link matchPattern}. */
+export function scanMatchCalls(code: string): RawCall[] {
+  return callsMatching(code, matchPattern);
+}
+
+function callsMatching(code: string, pattern: RegExp): RawCall[] {
   const calls: RawCall[] = [];
-  callPattern.lastIndex = 0;
-  for (let match = callPattern.exec(code); match !== null; match = callPattern.exec(code)) {
+  pattern.lastIndex = 0;
+  for (let match = pattern.exec(code); match !== null; match = pattern.exec(code)) {
     const name = match[1];
     if (name === undefined) continue;
     // The pattern ends at the `(`, so the match's last character is the paren.
     const open = match.index + match[0].length - 1;
     calls.push({
       name,
-      args: splitArgs(readParen(code, open)),
+      args: splitArgs(readParen(code, open, name === "variants")),
       receiver: receiverBefore(code, match.index),
+      at: open,
     });
   }
   return calls;
 }
 
-/** `foo` in `foo.ss(`, at the end of the text before the name. */
-const memberReceiver = /([A-Za-z_$][\w$]*)\s*\.\s*$/;
+/**
+ * `foo` in `foo.ss(`, at the end of the text before the name — or the `)` / `]` that
+ * ends an expression, as in `$(el).on(` or `items[0].on(`, which no import can name.
+ */
+const memberReceiver = /([A-Za-z_$][\w$]*|[)\]])\s*\??\.\s*$/;
 
 /**
- * The identifier a call was reached through, or `""` when it was called bare.
+ * The identifier a call was reached through, `")"` or `"]"` when it was reached through
+ * an expression, or `""` when it was called bare.
  *
  * The lookback is bounded: an identifier and a dot are a few characters, and this runs
  * once per matched call across every file in the project.
@@ -803,7 +1001,7 @@ export function outerCalls(code: string): RawCall[] {
     const name = match[1];
     if (name === undefined) continue;
     const open = match.index + match[0].length - 1;
-    const args = readParen(code, open);
+    const args = readParen(code, open, name === "variants");
     calls.push({ name, args: splitArgs(args), receiver: receiverBefore(code, match.index) });
     // Resume past this call's own arguments; the recursion reaches what is inside
     // them through this call rather than beside it.

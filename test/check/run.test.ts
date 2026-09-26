@@ -93,8 +93,42 @@ describe("parsing the command line", () => {
     expect(() => parse(["--content", "--css"])).toThrow(/needs a path/);
   });
 
+  it("refuses an empty value, which is what an unset variable expands to", () => {
+    // `--content "$SRC_DIR"` with the variable unset scanned the whole working directory
+    // and passed, and `--css ""` quietly went back to auto-detecting.
+    for (const flag of ["--content", "--css", "--out", "--extensions", "--ignore"]) {
+      expect(() => parse(["emit", flag, ""])).toThrow(/needs a/);
+      expect(() => parse(["emit", flag, " , "])).toThrow(/needs a/);
+    }
+    expect(parse(["--content", "src,"])).toMatchObject({ content: ["src"] });
+  });
+
   it("refuses an option it does not know", () => {
     expect(() => parse(["--bogus"])).toThrow(/unknown option/);
+  });
+
+  it("calls a word after the command an argument, not an unknown command", () => {
+    // "unknown command doctor. Expected one of: check, emit, init, doctor." rejected the
+    // very word it listed.
+    expect(() => parse(["doctor", "doctor"])).toThrow(/^unexpected argument doctor$/);
+    expect(() => parse(["check", "src"])).toThrow(
+      /unexpected argument src — for a directory, --content src/,
+    );
+    expect(() => parse(["src"])).toThrow(/unknown command src/);
+  });
+
+  it("refuses a flag on a command it does nothing for", () => {
+    // Each was accepted and ignored: `init --content apps/web` wrote the current
+    // directory's config, and `doctor --strict` was the same doctor.
+    expect(() => parse(["doctor", "--strict"])).toThrow(/--strict does not apply to doctor/);
+    expect(() => parse(["init", "--content", "apps/web"])).toThrow(
+      /--content does not apply to init/,
+    );
+    expect(() => parse(["check", "--write"])).toThrow(/--write does not apply to check/);
+    expect(() => parse(["emit", "--out", "a.css", "--css", "b.css"])).toThrow(/--css/);
+    expect(parse(["init", "--write", "--json"])).toMatchObject({ command: "init", write: true });
+    expect(parse(["emit", "--out", "a.css", "--content", "src"])).toMatchObject({ out: "a.css" });
+    expect(parse(["doctor", "--json"])).toMatchObject({ command: "doctor", json: true });
   });
 
   it("reads the subcommand, and treats a bare invocation as check", () => {
@@ -206,11 +240,11 @@ describe("the check itself", () => {
     // amount of comparing generated CSS can notice it.
     await writeFile(
       join(dir, "a.tsx"),
-      `import { ss, has } from "tailess";\nss({ md: "p-4" });\nhas('input[type="x"]', "p-2");`,
+      `import { ss, has } from "tailess";\nss({ md: "p-4" });\nhas('input[type="x]', "p-2");`,
     );
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
     const { code, output } = await check();
-    expect(output).toContain("cannot appear in a class name");
+    expect(output).toContain("which the build cannot carry");
     // Printed, but not fatal on its own — the exit code still reflects the classes.
     expect(code).toBe(0);
   });
@@ -354,6 +388,53 @@ describe("the check itself", () => {
     expect(parsed.stylesheets).toEqual(["a.css"]);
   });
 
+  it("writes paths with forward slashes, on every OS", async () => {
+    // The contract above shows `Card.tsx`; one folder down, a Windows runner wrote
+    // `src\Card.tsx` and a CI script matching on the path broke there alone.
+    await mkdir(join(dir, "src"));
+    await writeFile(
+      join(dir, "src", "Card.tsx"),
+      `import { ss } from "tailess";\nss({ md: "p-4" });\nss({ base: "p-4 p-2" });`,
+    );
+    await writeFile(
+      join(dir, "src", "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    const parsed = JSON.parse((await check({ json: true })).output);
+    expect(parsed.broken[0].files).toEqual(["src/Card.tsx"]);
+    expect(parsed.diagnostics[0]).toMatchObject({ file: "src/Card.tsx" });
+    expect(parsed.stylesheets).toEqual(["src/a.css"]);
+
+    // The paths on the exits that are not a report: a refused prefix, and emit's file.
+    await writeFile(join(dir, "src", "a.css"), `@import "tailwindcss" prefix(tw);`);
+    const prefixed = JSON.parse((await check({ json: true })).output);
+    expect(prefixed).toMatchObject({ error: "unsupported-prefix", stylesheet: "src/a.css" });
+    vi.restoreAllMocks();
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const target = join(dir, "out", "candidates.json");
+    await run({ ...base(dir), command: "emit", json: true, out: target });
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ out: "out/candidates.json" });
+  });
+
+  it("says a --css that is not a file is not a file, rather than crashing", async () => {
+    // Node's raw "ENOENT: … open '…'" under `"error": "crashed"` read as a bug in the gate.
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await mkdir(join(dir, "styles"));
+    for (const css of ["missing.css", "styles"]) {
+      const prose = await check({ css });
+      expect(prose.code).toBe(2);
+      expect(prose.output).toContain(`--css ${css} is not a file`);
+      expect(prose.output).not.toMatch(/ENOENT|EISDIR/);
+      vi.restoreAllMocks();
+      const { code, output } = await check({ css, json: true });
+      expect(code).toBe(2);
+      expect(JSON.parse(output)).toMatchObject({ ok: false, error: "no-stylesheet", css });
+      vi.restoreAllMocks();
+    }
+  });
+
   it("says why it could not run, in JSON too", async () => {
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
     const { code, output } = await check({ json: true });
@@ -405,10 +486,14 @@ describe("the check itself", () => {
     expect(output).toContain("sidebar-open:p-4");
   });
 
-  it("says which module it could not resolve, rather than Tailwind's own error", async () => {
+  it("says which module it could not resolve", async () => {
+    // Through Tailwind's Node host this is its resolver's message, which is the one the
+    // build itself prints; through the bare compiler it is this file's. Both name it.
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "./missing.cjs";`);
-    await expect(check()).rejects.toThrow(/could not resolve "\.\/missing\.cjs"/);
+    await expect(check()).rejects.toThrow(
+      /could not resolve "\.\/missing\.cjs"|Can't resolve '\.\/missing\.cjs'/,
+    );
   });
 
   it("passes a class that works in one of several stylesheets", async () => {
@@ -420,6 +505,238 @@ describe("the check itself", () => {
       `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
     );
     await writeFile(join(dir, "b.css"), `@import "tailwindcss";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+});
+
+describe("plugins and configs the real build loads", () => {
+  it("loads an ESM-only @plugin package", async () => {
+    // An exports map with only an `import` condition: resolved with `require`
+    // conditions, the gate exited 2 with "could not resolve" while the build worked.
+    const pkg = join(dir, "node_modules", "esm-only-plugin");
+    await mkdir(pkg, { recursive: true });
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "esm-only-plugin",
+        type: "module",
+        exports: { ".": { import: "./index.js" } },
+      }),
+    );
+    await writeFile(
+      join(pkg, "index.js"),
+      `export default function ({ addUtilities }) { addUtilities({ ".esm-util": { color: "red" } }); }\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "esm-util" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "esm-only-plugin";`);
+    const { code, output } = await check();
+    expect(output).not.toContain("could not resolve");
+    expect(code).toBe(0);
+  });
+
+  it("loads a TypeScript @config the way Tailwind does, not only where Node strips types", async () => {
+    await writeFile(
+      join(dir, "tailwind.config.ts"),
+      `const config: { theme: { extend: { screens: Record<string, string> } } } = {\n` +
+        `  theme: { extend: { screens: { tablet: "40rem" } } },\n};\nexport default config;\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" }, withPrefix("tablet", "p-6"))`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@config "./tailwind.config.ts";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+});
+
+describe("--json while a Tailwind plugin prints", () => {
+  it("keeps stdout to the one JSON object, and sends the plugin's output to stderr", async () => {
+    // daisyUI prints a banner with console.log while it loads; inside the CLI that is
+    // stdout, so `tailess check --json | jq -e .ok` failed to parse on a passing run.
+    await writeFile(
+      join(dir, "noisy.mjs"),
+      `console.log("/*! banner at import */");\nexport default function () { console.log("banner at run"); }\n`,
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@plugin "./noisy.mjs";`);
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void stdout.push(String(m)));
+    vi.spyOn(console, "info").mockImplementation((m) => void stdout.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation((m) => void stderr.push(String(m)));
+    vi.spyOn(console, "warn").mockImplementation((m) => void stderr.push(String(m)));
+    const code = await run({ ...base(dir), json: true });
+    expect(code).toBe(0);
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0] as string)).toMatchObject({ ok: true, code: 0 });
+    expect(stderr.join("\n")).toContain("banner at import");
+  });
+});
+
+describe("a stylesheet that generates no utilities", () => {
+  // The app's own entry removes `md`, so `md:p-4` has no rule in the real build. Each of
+  // the stylesheets below generated no utilities at all, and a class counted as broken
+  // only when *every* stylesheet failed it — so one of them next to the app's entry, or
+  // passed as --css, vouched for everything and the gate went green.
+  async function app() {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "p-4", hover: "underline" })`);
+    await writeFile(
+      join(dir, "src", "app.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+  }
+
+  it("cannot vouch for a class when it sits beside the real entry", async () => {
+    for (const [name, css] of [
+      ["tokens.css", `@import "tailwindcss/theme";`],
+      ["legacy.css", `@tailwind utilities;`],
+    ]) {
+      await rm(join(dir, "src"), { recursive: true, force: true });
+      await app();
+      await writeFile(join(dir, "src", name as string), css as string);
+      clearCache();
+      const { code, output } = await check();
+      expect(code, name).toBe(1);
+      expect(output).toContain("md:p-4");
+    }
+  });
+
+  it("is nothing to check when it is the only stylesheet", async () => {
+    await app();
+    await writeFile(
+      join(dir, "src", "reset.css"),
+      `html { margin: 0; }\n@import "tailwindcss/theme";`,
+    );
+    const { code, output } = await check({ css: join(dir, "src", "reset.css"), json: true });
+    expect(code).toBe(2);
+    expect(JSON.parse(output)).toMatchObject({ ok: false, code: 2, error: "no-utilities" });
+  });
+
+  it("is nothing to check when its prefix hides in an import", async () => {
+    // prefix() read off the entry alone missed this one, which the plugin itself warns
+    // about: `hover:underline` has no rule either, only `tw:hover:underline` would.
+    await app();
+    await writeFile(join(dir, "src", "tw.css"), `@import "tailwindcss" prefix(tw);`);
+    await writeFile(join(dir, "src", "main.css"), `@import "./tw.css";`);
+    const { code } = await check({ css: join(dir, "src", "main.css") });
+    expect(code).toBe(2);
+  });
+
+  it("still passes a split entry whose partials generate the utilities", async () => {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "src", "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "src", "theme.css"), `@import "tailwindcss/theme.css";`);
+    await writeFile(join(dir, "src", "utilities.css"), `@import "tailwindcss/utilities.css";`);
+    await writeFile(
+      join(dir, "src", "app.css"),
+      `@import "./theme.css";\n@import "./utilities.css";`,
+    );
+    const { code } = await check({ css: join(dir, "src", "app.css") });
+    expect(code).toBe(0);
+  });
+});
+
+describe("a Tailwind older than the plugins can drive", () => {
+  it("says which version it needs, rather than blaming the stylesheet", async () => {
+    // `@source inline(…)` parses from 4.1.0. On 4.0.x the build died with Tailwind's
+    // "`@source` paths must be quoted." — naming neither tailess nor the version — and
+    // `check` put 29 missing keys down to a moved breakpoint.
+    const tw = join(dir, "node_modules", "tailwindcss");
+    await mkdir(tw, { recursive: true });
+    await writeFile(
+      join(tw, "package.json"),
+      JSON.stringify({ name: "tailwindcss", version: "4.0.17", main: "index.js" }),
+    );
+    await writeFile(join(tw, "index.js"), "exports.compile = async () => ({ build: () => '' });");
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    // Thrown, like every "nothing could be checked" failure: the binary turns it into
+    // exit 2 and prints the message.
+    await expect(check()).rejects.toThrow(/tailwindcss 4\.1 or later.*4\.0\.17/);
+  });
+});
+
+describe("code that only looks like a tailess call", () => {
+  it("passes event handlers and inline lookups, which are healthy code", async () => {
+    // Each of these failed the gate: `end:animate-spin` from an EventEmitter handler,
+    // `click:hidden` from jQuery, `primary:bg-blue-600` from an inline lookup object —
+    // "3 of 3 runtime-built classes reach the element with no rule".
+    await writeFile(
+      join(dir, "stream.ts"),
+      `stream.on("end", () => el.classList.remove("animate-spin"));\n` +
+        `socket.on("message", () => el.classList.add("hidden"));\n`,
+    );
+    await writeFile(
+      join(dir, "menu.ts"),
+      `import { ss } from "tailess";\n` +
+        `$("#menu").on("click", () => $("#nav").toggleClass("hidden flex"));\n` +
+        `export const pill = (tone) => ss("rounded", { primary: "bg-blue-600", danger: "bg-red-600" }[tone]);\n` +
+        `export const pad = (k) => ss({ md: { a: "p-2", b: "p-4" }[k] });\n`,
+    );
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    const { code, output } = await check({ strict: true });
+    expect(output).not.toContain("no rule");
+    expect(code).toBe(0);
+  });
+});
+
+describe("stylesheets imported from packages", () => {
+  /** A package in the project's own node_modules, with a manifest and one stylesheet. */
+  async function pkg(name: string, manifest: object, file: string, css: string) {
+    const root = join(dir, "node_modules", ...name.split("/"));
+    await mkdir(join(root, file, ".."), { recursive: true });
+    await writeFile(join(root, "package.json"), JSON.stringify({ name, ...manifest }));
+    await writeFile(join(root, file), css);
+  }
+
+  it("follows a style-only export whose manifest is not itself exported", async () => {
+    // tw-animate-css's shape, which shadcn/ui's Tailwind v4 stylesheet imports: the
+    // package's exports map lists "." with a `style` condition and nothing else — not
+    // `./package.json`. The real build resolved it; the gate reached for the manifest
+    // through that exports map, got ERR_PACKAGE_PATH_NOT_EXPORTED, and exited 2.
+    await pkg(
+      "tw-animate-like",
+      { exports: { ".": { style: "./dist/animate.css" } } },
+      "dist/animate.css",
+      "@utility animate-wiggle { rotate: 3deg; }",
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4", hover: "animate-wiggle" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "tw-animate-like";`);
+    const { code, output } = await check();
+    expect(output).not.toContain("not defined by");
+    expect(code).toBe(0);
+  });
+
+  it("finds a scoped package, rather than looking for @scope/package.json", async () => {
+    await pkg(
+      "@acme/tokens",
+      { exports: { ".": { style: "./tokens.css" }, "./package.json": "./package.json" } },
+      "tokens.css",
+      "@theme { --color-brand: #123456; }",
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "text-brand" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "@acme/tokens";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+
+  it("follows a style condition on a subpath export", async () => {
+    await pkg(
+      "@acme/ui",
+      { exports: { "./theme": { style: "./css/theme.css", default: "./index.js" } } },
+      "css/theme.css",
+      "@theme { --color-accent: #abcdef; }",
+    );
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "bg-accent" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "@acme/ui/theme";`);
+    const { code } = await check();
+    expect(code).toBe(0);
+  });
+
+  it("still reads a package's top-level style field when there is no exports map", async () => {
+    await pkg("old-style", { style: "main.css" }, "main.css", "@theme { --color-old: #000; }");
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "text-old" })`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";\n@import "old-style";`);
     const { code } = await check();
     expect(code).toBe(0);
   });
@@ -494,6 +811,12 @@ describe("tailess emit", () => {
     const { code, output } = await emit();
     expect(code).toBe(2);
     expect(output).toContain("nothing to emit");
+  });
+
+  it("names the glob case, as check does", async () => {
+    const { code, output } = await emit({ content: [join(dir, "**", "*.tsx")] });
+    expect(code).toBe(2);
+    expect(output).toContain("Wildcards are not expanded");
   });
 });
 
@@ -661,7 +984,88 @@ describe("tailess emit --json", () => {
   });
 });
 
+describe("the stylesheet's own build-time checks", () => {
+  it("fails --strict on a @theme that removes a breakpoint, as the build does", async () => {
+    // Both plugins run this check and fail a `diagnostics: "error"` build on it; the gate
+    // documented as covering both never ran it, and exited 0 with `diagnostics: []`.
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-2xl: initial; }`,
+    );
+    const lax = await check({ json: true });
+    expect(lax.code).toBe(0);
+    expect(JSON.parse(lax.output).diagnostics).toEqual([
+      expect.objectContaining({ kind: "theme-drift", file: "a.css" }),
+    ]);
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(1);
+    expect(output).toContain('removes the "2xl" breakpoint');
+  });
+
+  it("does not fail --strict on a note: a variant the project adds works", async () => {
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@custom-variant midnight (&:where(.midnight, .midnight *));`,
+    );
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(0);
+    expect(output).toContain('"midnight" variant');
+  });
+});
+
+describe("which stylesheets vouch for a class", () => {
+  it("leaves out a stylesheet under an --ignore'd directory", async () => {
+    // A stale entry anywhere under --content vouched for the app's broken classes, since
+    // a class only has to work in one stylesheet — and --ignore did not reach the search.
+    await mkdir(join(dir, "legacy"));
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(
+      join(dir, "app.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    await writeFile(join(dir, "legacy", "old.css"), `@import "tailwindcss";`);
+    expect((await check({ json: true })).code).toBe(0);
+    const { code, output } = await check({ json: true, ignore: ["legacy"] });
+    expect(code).toBe(1);
+    expect(JSON.parse(output).stylesheets).toEqual(["app.css"]);
+  });
+});
+
 describe("the unwired-plugin guess", () => {
+  it("counts only build configs, not every *rc and *.config.* file", async () => {
+    // A monorepo root has an .npmrc and an eslint config and no build config: that "had a
+    // config" which wired nothing, and --strict failed a correctly wired app.
+    await writeFile(join(dir, ".npmrc"), "save-exact=true\n");
+    await writeFile(join(dir, "eslint.config.js"), "export default [];\n");
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(0);
+    expect(output).not.toContain("may not be running");
+  });
+
+  it("reads the app's config from a monorepo root, above each --content root", async () => {
+    const app = join(dir, "apps", "web");
+    await mkdir(join(app, "src"), { recursive: true });
+    await writeFile(join(dir, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+    await writeFile(join(app, "src", "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(app, "src", "a.css"), `@import "tailwindcss";`);
+    const config = (plugins: string) =>
+      `import tailwindcss from "@tailwindcss/vite";\nimport tailess from "tailess/vite";\nexport default { plugins: [${plugins}] };\n`;
+
+    await writeFile(join(app, "vite.config.ts"), config("tailwindcss(), tailess()"));
+    const wired = await check({ strict: true, content: [join(app, "src")] });
+    expect(wired.code).toBe(0);
+    expect(wired.output).not.toContain("may not be running");
+
+    await writeFile(join(app, "vite.config.ts"), config("tailwindcss()"));
+    const unwired = await check({ strict: true, content: [join(app, "src")] });
+    expect(unwired.code).toBe(1);
+    expect(unwired.output).toContain("may not be running");
+  });
+
   it("abstains when the config builds its plugin list somewhere it cannot follow", async () => {
     // `vite.base.js` is not a `*.config.*`, so the heuristic could not see the wiring and
     // concluded there was none — failing a correctly wired monorepo or preset under
@@ -687,6 +1091,31 @@ describe("the unwired-plugin guess", () => {
       join(dir, "vite.config.ts"),
       `import { defineConfig } from "vite";\nexport default defineConfig({ plugins: [] });\n`,
     );
+    await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
+    await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
+
+    const { code, output } = await check({ strict: true });
+    expect(code).toBe(1);
+    expect(output).toContain("may not be running");
+  });
+
+  it.each([
+    [
+      "listed after Tailwind's",
+      `export default { plugins: { "@tailwindcss/postcss": {}, "tailess/postcss": {} } };\n`,
+    ],
+    [
+      "imported and never listed",
+      `import tailess from "tailess/postcss";\nimport tailwindcss from "@tailwindcss/postcss";\nexport default { plugins: [tailwindcss()] };\n`,
+    ],
+    [
+      "switched off",
+      `export default { plugins: { "tailess/postcss": false, "@tailwindcss/postcss": {} } };\n`,
+    ],
+  ])("catches a PostCSS plugin %s, which only names tailess", async (_, config) => {
+    // Every one of these builds with no variant CSS and no error, and each passed
+    // `--strict` because the file mentioned "tailess/postcss".
+    await writeFile(join(dir, "postcss.config.mjs"), config);
     await writeFile(join(dir, "a.tsx"), `import { ss } from "tailess";\nss({ md: "p-4" });`);
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
 

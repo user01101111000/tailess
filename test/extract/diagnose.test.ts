@@ -17,7 +17,7 @@ import { diagnose } from "../../src/extract/diagnose.js";
  * `has`, `inside` and `between` are ordinary identifiers, so without this a file that has
  * never heard of the package would be told one of its classes is unstyled.
  */
-const importsThem = `import { ss, cn, on, until, between, data, aria, withPrefix, supports, notSupports, group, peer, container, has, notHas, inside, nth, nthLast, variants } from "tailess";\n`;
+const importsThem = `import { ss, cn, on, until, between, data, aria, withPrefix, supports, notSupports, group, peer, container, has, notHas, inside, nth, nthLast, nthOfType, nthLastOfType, responsive, match, variants } from "tailess";\n`;
 
 /** Diagnose `code` as the body of a file that imports the helpers. */
 const diag = (code: string, file?: string) => diagnose(importsThem + code, file);
@@ -178,6 +178,36 @@ export function Presence() {
     expect(kinds(`emitter.on("change", { first: true, last: false })`)).toEqual([]);
   });
 
+  it("says nothing about a call through an expression, which reads as bare otherwise", () => {
+    // `$(x).on(…)` has no identifier before its dot, so it was taken for a bare `on`: a
+    // jQuery toggle in a file importing `ss` was told "hidden" never reaches the element.
+    expect(kinds(`$("#menu").on("click", () => $("#nav").toggleClass("hidden flex"))`)).toEqual([]);
+    expect(kinds(`getSocket().on("presence", { base: "x", md: "y" })`)).toEqual([]);
+    expect(kinds(`items[0].on("hover", { base: "underline" })`)).toEqual([]);
+  });
+
+  it("says nothing about a bare call to a helper the file imported from elsewhere", () => {
+    // Solid's `on` beside tailess's `ss`: the file imports the package, so every bare
+    // `on(…)` was checked as ours, and the accessor's `{ open, active }` became a bucket
+    // map given class names.
+    const solid = `import { createMemo, on } from "solid-js";
+import { ss } from "tailess";
+const state = createMemo(on(() => props.count, (c) => ({ open: c > 0, active: c > 5 })));
+export const cls = ss({ md: "p-4" });`;
+    expect(diagnose(solid, "src/Counter.tsx")).toEqual([]);
+    // Named in the import, it is ours again.
+    const ours = `import { ss, on } from "tailess";\non("hover", { base: "underline" });`;
+    expect(diagnose(ours, "src/a.ts").map((d) => d.kind)).toEqual(["bucket-as-dictionary"]);
+    const required = `const { on } = require("tailess");\non("hover", { base: "underline" });`;
+    expect(diagnose(required, "src/a.cjs").map((d) => d.kind)).toEqual(["bucket-as-dictionary"]);
+  });
+
+  it("reads an inline lookup as its values, not as a bucket map", () => {
+    // `{ … }[tone]` picks one value at runtime. Taking it for a map named its keys as
+    // variants — `primary:bg-blue-600` — and warned that on() was given a dictionary.
+    expect(kinds(`on("hover", { sm: "underline", lg: "font-bold" }[size])`)).toEqual([]);
+  });
+
   it("still reports a call through a namespace import, which really is ours", () => {
     const code = `import * as tl from "tailess";\ntl.on("hover", { base: "underline" });`;
     expect(diagnose(code, "src/app.ts").map((d) => d.kind)).toEqual(["bucket-as-dictionary"]);
@@ -195,8 +225,15 @@ describe("a feature query the build cannot enumerate", () => {
     // The candidate list is written into a stylesheet, so these are dropped there
     // while the runtime still puts the class on the element.
     expect(kinds(`supports("display: grid;", "grid")`)).toEqual(["unusable-query"]);
-    expect(kinds(`supports('(font-family: "My Font")', "italic")`)).toEqual(["unusable-query"]);
+    expect(kinds(`supports('(content: "it\\'s")', "italic")`)).toEqual(["unusable-query"]);
     expect(kinds(`notSupports("display: grid;", "flex")`)).toEqual(["unusable-query"]);
+  });
+
+  it("says nothing about a double-quoted string, which the build carries", () => {
+    // Reported, this failed `--strict` over working code: the class goes into a
+    // single-quoted `@source inline`, and Tailwind generates its rule.
+    expect(kinds(`supports('(font-family: "My Font")', "italic")`)).toEqual([]);
+    expect(kinds(`has('input[type="text"]', "p-4")`)).toEqual([]);
   });
 
   it("reports an empty query", () => {
@@ -233,7 +270,7 @@ describe("a feature query the build cannot enumerate", () => {
     // The one failure `tailess check` cannot catch either: the candidate is dropped
     // before it ever reaches the compiler, so nothing downstream can find it missing.
     // Only `supports` used to say so, which left seven helpers with no build check.
-    expect(kinds(`has('input[type="text"]', "p-4")`)).toEqual(["unusable-query"]);
+    expect(kinds(`has('input[type="text]', "p-4")`)).toEqual(["unusable-query"]);
     expect(kinds(`notHas("[title='x]", "p-4")`)).toEqual(["unusable-query"]);
     expect(kinds(`inside("", "p-4")`)).toEqual(["unusable-query"]);
     expect(kinds(`nth("3n{1}", "p-4")`)).toEqual(["unusable-query"]);
@@ -316,6 +353,51 @@ describe("a helper imported under another name", () => {
     expect(kinds(`import { ss as tw } from "other-lib";`)).toEqual([]);
     expect(kinds(`import { ss as tw } from "tailess/vite";`)).toEqual([]);
   });
+
+  it("reports the spellings a line-start import pattern missed", () => {
+    // Each of these renames a helper and unstyles every class it builds; none was seen.
+    const cases: [string, string][] = [
+      [`export { ss as tw } from "tailess";`, "re-exported"],
+      [`const { ss: tw } = require("tailess");`, "required"],
+      [`"use client"; import { ss as tw } from "tailess";`, "imported"],
+      [`import{ss as t}from"tailess";`, "imported"],
+    ];
+    for (const [code, verb] of cases) {
+      const found = diagnose(code, "src/a.ts");
+      expect(
+        found.map((d) => d.kind),
+        code,
+      ).toEqual(["renamed-import"]);
+      expect(found[0]?.message).toContain(`is ${verb} as`);
+    }
+    // A re-export takes its classes from every file that imports it, not this one.
+    expect(diagnose(`export { on as when } from "tailess";`)[0]?.message).toContain(
+      "in every file that imports it from here",
+    );
+  });
+
+  it("says nothing about a type-only rename, which binds nothing callable", () => {
+    expect(diagnose(`import type { ss as tw } from "tailess";`)).toEqual([]);
+    expect(diagnose(`import { type ss as tw, cn } from "tailess";`)).toEqual([]);
+    expect(diagnose(`const s = 'x; import { ss as tw } from "tailess"';`)).toEqual([]);
+  });
+});
+
+describe("files that reach tailess other than through a named import", () => {
+  it("checks a CommonJS namespace and a dynamic import like any other", () => {
+    // The checks were silently off in each: only `import * as` counted as a receiver,
+    // and `import("tailess")` did not count as importing the package at all.
+    for (const code of [
+      `const t = require("tailess");\nt.ss({ md: size });`,
+      `const t = await import("tailess");\nt.ss({ md: size });`,
+      `const { ss } = await import("tailess");\nss({ md: size });`,
+    ]) {
+      expect(
+        diagnose(code, "src/a.ts").map((d) => d.kind),
+        code,
+      ).toEqual(["dynamic-value"]);
+    }
+  });
 });
 
 describe("where an import statement is prose rather than code", () => {
@@ -382,6 +464,21 @@ describe("an ss map handed to a helper that takes a flat class value", () => {
     expect(kinds(`has("> img", { hover: "p-0" })`)).toEqual(["bucket-as-dictionary"]);
   });
 
+  it("reports one inside responsive()'s breakpoints and match()'s options too", () => {
+    // Nothing else catches these two: `responsive("p-2", { md: { hover: "p-4" } })`
+    // builds `md:hover`, `match(size, { sm: { md: "p-4" } })` builds `md`, and neither
+    // utility exists — so `check` skips them as junk, and the element ships unstyled.
+    const [fromResponsive] = diag(`responsive("p-2", { md: { hover: "p-4" } })`);
+    expect(fromResponsive?.kind).toBe("bucket-as-dictionary");
+    expect(fromResponsive?.message).toContain('ss({ md: { hover: "…" } })');
+    const [fromMatch] = diag(`match(size, { sm: { md: "p-4" }, lg: "p-8" })`);
+    expect(fromMatch?.kind).toBe("bucket-as-dictionary");
+    expect(fromMatch?.message).toContain("ss(");
+    // A real clsx dictionary there is fine.
+    expect(kinds(`responsive("p-2", { md: { hidden: !open } })`)).toEqual([]);
+    expect(kinds(`match(size, { sm: { "p-2": dense }, lg: "p-8" })`)).toEqual([]);
+  });
+
   it("says nothing about the composition that is correct", () => {
     expect(kinds(`ss({ md: on("hover", "underline") })`)).toEqual([]);
     expect(kinds(`ss({ base: "p-4", md: "p-6" })`)).toEqual([]);
@@ -432,6 +529,43 @@ describe("a bucket the scanner cannot read", () => {
     expect(kinds(`responsive("p-4", { md: size })`)).toEqual(["dynamic-value"]);
   });
 
+  it("reports one nested under another prefix, and a base under a prefix", () => {
+    // A value that was itself a map was skipped outright, so the stacked bucket inside
+    // it was never looked at — `dark:md:<size>` shipped with no rule and no word.
+    expect(kinds(`ss({ dark: { md: size } })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ md: { base: size } })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ base: { md: size } })`)).toEqual(["dynamic-value"]);
+  });
+
+  it("reports one inside a recipe, wherever the recipe keeps its classes", () => {
+    // The recipe helper had no case at all, so every one of these was silent.
+    for (const code of [
+      `variants({ variants: { s: { lg: { md: size } } } })`,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the fixture
+      "variants({ variants: { s: { lg: { md: `p-${n}` } } } })",
+      `variants({ base: { md: size }, variants: {} })`,
+      `variants({ variants: { s: { a: "p-1" } }, compound: [{ s: "a", class: { md: size } }] })`,
+      `variants({ slots: { root: { md: size } }, variants: {} })`,
+      `variants({ slots: { root: "p-1" }, variants: { s: { a: { root: { md: size } } } } })`,
+      `variants({ md: size }, { variants: { s: { a: "p-1" } } })`,
+    ]) {
+      expect(kinds(code), code).toEqual(["dynamic-value"]);
+    }
+  });
+
+  it("stays quiet about an unprefixed value in a recipe, which Tailwind finds itself", () => {
+    // The same rule as `base` in ss: no prefix, nothing for the scanner to add.
+    for (const code of [
+      `variants({ base: size, variants: { s: { a: tone } } })`,
+      `variants({ slots: { root: size }, variants: { s: { a: { root: tone } } } })`,
+      `variants({ variants: { s: { a: "p-1" } }, compound: [{ s: "a", class: extra }] })`,
+      `variants({ slots: { root: "p-1" }, variants: {}, compound: [{ class: { root: extra } }] })`,
+      `variants(size, { variants: { s: { a: "p-1" } } })`,
+    ]) {
+      expect(kinds(code), code).toEqual([]);
+    }
+  });
+
   it("names the value and the way out", () => {
     const [first] = diag(`ss({ md: size })`);
     expect(first?.message).toContain('"md" bucket is set to `size`');
@@ -446,12 +580,44 @@ describe("a bucket the scanner cannot read", () => {
     expect(kinds(`ss({ base: props.className })`)).toEqual([]);
   });
 
-  it("says nothing when a literal is in reach", () => {
+  it("says nothing when every part that becomes a class is a literal", () => {
     expect(kinds(`ss({ md: cond && "p-4" })`)).toEqual([]);
+    expect(kinds(`ss({ md: a && b && "p-4" })`)).toEqual([]);
     expect(kinds(`ss({ md: cond ? "p-4" : "p-2" })`)).toEqual([]);
-    expect(kinds(`ss({ md: [x, "p-4"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: cond ? "p-4" : undefined })`)).toEqual([]);
+    expect(kinds(`ss({ md: a ? "p-1" : b ? "p-2" : "p-3" })`)).toEqual([]);
+    expect(kinds(`ss({ md: [cond && "p-4", "flex"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: [{ "p-4": open }, "flex"] })`)).toEqual([]);
+    expect(kinds(`ss({ md: (cond ? "p-4" : "p-2") })`)).toEqual([]);
+    expect(kinds(`ss({ md: user?.admin ? "p-4" : "p-2" })`)).toEqual([]);
     expect(kinds(`ss({ md: { hover: "underline" } })`)).toEqual([]);
     expect(kinds(`ss({ md: on("hover", "underline") })`)).toEqual([]);
+    expect(kinds(`ss({ base: "p-1", md: "p-2" })`)).toEqual([]);
+  });
+
+  it("reports the part that is not a literal, even beside one that is", () => {
+    // A literal anywhere in the value vouched for all of it, so each of these built a
+    // class nothing enumerated — `md:<size>` — and said nothing. `[x, "p-4"]` was in the
+    // quiet list above until the audit that found this: `md:<x>` has no rule either.
+    for (const code of [
+      `ss({ md: cond ? size : "p-2" })`,
+      `ss({ md: [size, "flex"] })`,
+      `ss({ md: [x, "p-4"] })`,
+      `ss({ md: size ?? "p-2" })`,
+      `ss({ md: size || "p-2" })`,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder is the fixture
+      'ss({ md: [`text-${scale}`, "font-bold"] })',
+      `ss({ md: ["p-4", button({ tone })] })`,
+      `ss({ base: "p-1", md })`,
+      `ss({ md: { base: "p-1", hover } })`,
+    ]) {
+      expect(kinds(code), code).toEqual(["dynamic-value"]);
+    }
+    const [first] = diag(`ss({ md: cond ? size : "p-2" })`);
+    expect(first?.message).toContain(
+      '"md" bucket is set to `cond ? size : "p-2"`, and `size` in it',
+    );
+    expect(first?.message).toContain("match(size, { … })");
   });
 
   it("says nothing about a value that contributes no class at all", () => {
@@ -460,8 +626,143 @@ describe("a bucket the scanner cannot read", () => {
     }
   });
 
+  it("says nothing about a TypeScript object type, which is not a bucket map", () => {
+    // Every class here is enumerated and has CSS; the `string` the warning quoted is a type.
+    expect(kinds(`ss({ md: cond ? "p-4" : "p-2" } as { md: string })`)).toEqual([]);
+    expect(kinds(`ss({ md: "p-4" } satisfies { md: string })`)).toEqual([]);
+    expect(kinds(`ss({ md: "m-1" }, ((x: { md: string }) => x.md)(v) && { lg: "p-6" })`)).toEqual(
+      [],
+    );
+    expect(kinds(`ss({ md: void 0 })`)).toEqual([]);
+  });
+
+  it("still reads the other branch of a ternary, whose colon is not a type's", () => {
+    expect(kinds(`ss(cond ? { md: "p-4" } : { md: size })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss(a ? b : { md: size })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ base: "p-1", md: { base: size } })`)).toEqual(["dynamic-value"]);
+  });
+
   it("says nothing about a later argument, which is not a bucket", () => {
     expect(kinds(`ss({ md: "p-4" }, className)`)).toEqual([]);
     expect(kinds(`ss(base, cond && { md: "p-4" })`)).toEqual([]);
+  });
+});
+
+describe("a file saved with a byte order mark", () => {
+  it("is checked like any other", () => {
+    // Common on Windows. The BOM sat in front of the first-line import, which the
+    // import patterns are anchored to, and every check in the file went quiet.
+    const bom = "﻿";
+    expect(
+      diagnose(`${bom}import { ss as tw } from "tailess";\ntw({ md: "p-1" });`).map((d) => d.kind),
+    ).toEqual(["renamed-import"]);
+    expect(
+      diagnose(`${bom}import { between } from "tailess";\nbetween("lg", "sm", "block");`).map(
+        (d) => d.kind,
+      ),
+    ).toEqual(["empty-range"]);
+  });
+});
+
+describe("a prefixed class the build cannot hand to Tailwind", () => {
+  it("names it, since the literal in the source is not the class on the element", () => {
+    // `{`, `}` and `\` break @source inline(…), so the scanner drops the class — and the
+    // runtime builds `md:after:content-['{']` while Tailwind only ever sees the unprefixed
+    // literal. Silent until this.
+    const [found] = diag(`ss({ md: "after:content-['{']" })`);
+    expect(found?.kind).toBe("uncarried-class");
+    expect(found?.message).toContain("md:after:content-['{']");
+    // Four backslashes in this template are two in the source, which is one in the value.
+    expect(kinds(`on("hover", "before:content-['\\\\']")`)).toEqual(["uncarried-class"]);
+    expect(kinds(`on("hover", "after:content-['}']")`)).toEqual(["uncarried-class"]);
+  });
+
+  it("names one whose backslash is in the prefix, not the class", () => {
+    // What the literal-underscore warning used to advise: `\_` in a helper's selector,
+    // condition or attribute value. The scanner drops it like any other backslash, and
+    // `check --strict` said "nothing to check" and exited 0 over an unstyled element.
+    const [found] = diag(`withPrefix("has-[.my\\\\_class]", "p-2")`);
+    expect(found?.kind).toBe("uncarried-class");
+    expect(found?.message).toContain("has-[.my\\_class]:p-2");
+    expect(kinds(`withPrefix("supports-[--my\\\\_var:1]", "grid")`)).toEqual(["uncarried-class"]);
+    expect(kinds(`data("status", "in\\\\_progress", "p-2")`)).toEqual(["uncarried-class"]);
+    // A backslash outside any bracket is not a Tailwind class to begin with.
+    expect(kinds(`withPrefix("md", "a\\\\b")`)).toEqual([]);
+  });
+
+  it("stays quiet about the same class unprefixed, and about a brace that is not a class", () => {
+    expect(kinds(`ss({ base: "after:content-['{']" })`)).toEqual([]);
+    expect(kinds(`ss("after:content-['{']")`)).toEqual([]);
+    expect(kinds(`on("hover", fmt("{", x))`)).toEqual([]);
+    // And about a double quote, which is carried now.
+    expect(kinds(`ss({ md: 'after:content-["x"]' })`)).toEqual([]);
+  });
+});
+
+describe("a call that does not run", () => {
+  // Enumeration reads comments and docs on purpose — an extra candidate is free. The
+  // checks must not: each of these failed `check --strict` over a line that never runs.
+  const at = (file: string, code: string) => diagnose(code, file).map((d) => d.kind);
+  const live = `import { ss } from "tailess";\nexport const a = ss({ base: "flex", md: big ? "p-6" : "p-2" });\n`;
+
+  it("says nothing about one in a comment", () => {
+    expect(at("a.ts", `${live}// was: ss({ md: size });\n`)).toEqual([]);
+    expect(at("a.ts", `${live}/** Do not write \`ss({ md: size })\`. */\n`)).toEqual([]);
+    expect(at("a.ts", `${live}/* ss({ md: size }) */\n`)).toEqual([]);
+  });
+
+  it("says nothing about one in an HTML comment in markup", () => {
+    const vue =
+      `<script setup>\nimport { ss } from "tailess";\n</script>\n<template>\n` +
+      `  <!-- old: <div :class="ss({ md: props.size })"> -->\n` +
+      `  <div :class="ss({ base: 'flex', md: 'gap-2' })" />\n</template>\n`;
+    expect(at("App.vue", vue)).toEqual([]);
+  });
+
+  it("says nothing about one in a Markdown code fence or code span", () => {
+    for (const fence of ["```", "~~~"]) {
+      const md = `# ui\n\n${fence}ts\nimport { ss } from "tailess";\nss({ md: size });\n${fence}\n`;
+      expect(at("README.md", md), fence).toEqual([]);
+    }
+    const mdx =
+      `import { ss } from "tailess"\n\n<div className={ss({ base: "p-2", md: "p-4" })} />\n\n` +
+      "Never write `ss({ md: size })`.\n\n```tsx\nss({ md: size });\n```\n";
+    expect(at("docs.mdx", mdx)).toEqual([]);
+  });
+
+  it("still reports the same call where it runs", () => {
+    expect(at("a.ts", `${live}ss({ md: size });\n`)).toEqual(["dynamic-value"]);
+    // Inside a template's interpolation is code, not a string.
+    expect(at("a.ts", `${live}const c = \`x \${ss({ md: size })}\`;\n`)).toEqual(["dynamic-value"]);
+    const vue =
+      `<script setup>\nimport { ss } from "tailess";\n</script>\n` +
+      `<template><div :class="ss({ md: props.size })" /></template>\n`;
+    expect(at("App.vue", vue)).toEqual(["dynamic-value"]);
+    const mdx = `import { ss } from "tailess"\n\n<div className={ss({ md: size })} />\n`;
+    expect(at("docs.mdx", mdx)).toEqual(["dynamic-value"]);
+  });
+});
+
+describe("a file a bundler wrote", () => {
+  // Qwik's `server/` and vinxi's `.vinxi/build` hold minified bundles such as
+  // `import{ss as s}from"tailess"`. Each helper there was reported as a renamed import,
+  // so `check --strict` and `diagnostics: "error"` failed after a successful build.
+  const statements = Array.from({ length: 60 }, (_, i) => `var a${i}=s({md:"p-${i % 9}"})`);
+  const minified = `import{ss as s,on as o}from"tailess";${statements.join(";")};export{a1};`;
+
+  it("is not checked when it is minified", () => {
+    expect(minified.length).toBeGreaterThan(1000);
+    expect(diagnose(minified, "server/entry.preview.js")).toEqual([]);
+  });
+
+  it("is not checked when it carries a source map comment", () => {
+    const code = `import { ss as s } from "tailess";\ns({ md: size });\n//# sourceMappingURL=index.js.map\n`;
+    expect(diagnose(code, ".output/index.js")).toEqual([]);
+  });
+
+  it("still checks source with a long line that is not code, like an SVG path", () => {
+    const path = `M0 0${" L1 1".repeat(300)}`;
+    const code = `import { ss as tw } from "tailess";\nexport const Icon = () => <svg><path d="${path}" /></svg>;\n`;
+    expect(diagnose(code, "Icon.tsx").map((d) => d.kind)).toEqual(["renamed-import"]);
   });
 });

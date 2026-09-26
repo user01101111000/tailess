@@ -139,6 +139,23 @@ describe("configure({ keys })", () => {
     expect(ss({ yyy: "p-2", xxx: "p-3" } as never)).toBe("yyy:p-2 xxx:p-3");
     warn.mockRestore();
   });
+
+  it("never ties an undeclared key with the first declared one", () => {
+    // The first declared key's rank was exactly the one every undeclared key got, so the
+    // two kept their written order — and across nested buckets, which padding survived
+    // the merge depended on how the object literal was typed.
+    configure({ keys: ["aaa", "zzz"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(ss({ yyy: "p-2", aaa: "p-3" } as never)).toBe(ss({ aaa: "p-3", yyy: "p-2" } as never));
+    expect(ss({ aaa: { yyy: "p-2" }, yyy: { aaa: "p-4" } } as never)).toBe(
+      ss({ yyy: { aaa: "p-4" }, aaa: { yyy: "p-2" } } as never),
+    );
+    // Undeclared keys go after every declared one, in the order written among themselves.
+    expect(ss({ yyy: "p-1", zzz: "p-2", xxx: "p-3", aaa: "p-4" } as never)).toBe(
+      "aaa:p-4 zzz:p-2 yyy:p-1 xxx:p-3",
+    );
+    warn.mockRestore();
+  });
 });
 
 describe("the memo behind once-per-process warnings", () => {
@@ -163,5 +180,20 @@ describe("the memo behind once-per-process warnings", () => {
     const seen = new Set<string>();
     for (let i = 0; i < 600; i += 1) firstTime(seen, `value-${i}`);
     expect(firstTime(seen, "value-0")).toBe(true);
+  });
+});
+
+describe("resetWarnings from the public entry", () => {
+  it("lets the same warning report a second time", async () => {
+    // The 0.12.0 changelog says it is exported; it was not, from any entry.
+    const { resetWarnings } = await import("../../src/index.js");
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    withPrefix("has-[data-reset=a b]", "p-4");
+    withPrefix("has-[data-reset=a b]", "p-4");
+    expect(seen).toHaveLength(1);
+    resetWarnings();
+    withPrefix("has-[data-reset=a b]", "p-4");
+    expect(seen).toHaveLength(2);
   });
 });

@@ -269,6 +269,40 @@ describe("PostCSS integration (Next.js and any PostCSS setup)", () => {
     expect(result.messages).toEqual([]);
   });
 
+  it("keeps two differently configured instances' classes apart", async () => {
+    // A monorepo root running two apps' pipelines, or a multi-compiler build: both wrote
+    // one sidecar in the working directory's cache, and each app got the other's list —
+    // concurrently, and again on a watcher's rebuild — with the marker present.
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(dir);
+    for (const app of ["a", "b"]) {
+      await mkdir(join(dir, app), { recursive: true });
+      const size = app === "a" ? "p-3" : "p-7";
+      await writeFile(
+        join(dir, app, "x.tsx"),
+        `import { ss } from "tailess";\nss({ md: "${size}" });\n`,
+      );
+      await writeFile(join(dir, app, "app.css"), `@import "tailwindcss";`);
+    }
+    const build = (app: string) =>
+      postcss([
+        tailess({ content: [join(dir, app)] }),
+        tailwindcss({ base: join(dir, app), optimize: false }),
+      ])
+        .process(`@import "tailwindcss";`, { from: join(dir, app, "app.css") })
+        .then((result) => result.css);
+    try {
+      const [a, b] = await Promise.all([build("a"), build("b")]);
+      expect(missingRules(a, ["md:p-3"])).toEqual([]);
+      expect(missingRules(b, ["md:p-7"])).toEqual([]);
+      expect(missingRules(b, ["md:p-3"])).toEqual(["md:p-3"]);
+      // One after the other in one process, as a watcher rebuilds.
+      await build("b");
+      expect(missingRules(await build("a"), ["md:p-3"])).toEqual([]);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it("recognises @tailwind utilities as an entry too", async () => {
     const result = await postcss([
       tailess({ content: [dir], cacheDir: join(dir, ".cache") }),
@@ -366,7 +400,7 @@ describe("Vite integration", () => {
   }
 
   const sidecarOf = async (code: string): Promise<string> => {
-    const specifier = /@import "([^"]+)"/.exec(code)?.[1] ?? "";
+    const specifier = /@import "([^"]*tailess\.css)"/.exec(code)?.[1] ?? "";
     return readFile(join(dir, specifier), "utf8");
   };
 
@@ -374,8 +408,8 @@ describe("Vite integration", () => {
     const { run } = makePlugin();
     const result = await run(`@import "tailwindcss";`, entryId());
 
-    expect(result?.code).toMatch(/^@import "[^"]*tailess\.css";\n/);
-    expect(result?.code.endsWith(`@import "tailwindcss";`)).toBe(true);
+    // After the file's own `@import`: a rule ahead of an `@import` voids it in CSS.
+    expect(result?.code).toMatch(/^@import "tailwindcss";\n@import "[^"]*tailess\.css";\n$/);
 
     const sidecar = await sidecarOf(result?.code ?? "");
     expect(sidecar).toContain("@source inline(");
@@ -501,7 +535,7 @@ describe("Vite integration", () => {
     // "already written" flag would leave the entry importing a missing file.
     const { run } = makePlugin();
     const first = await run(`@import "tailwindcss";`, entryId());
-    const specifier = /@import "([^"]+)"/.exec(first?.code ?? "")?.[1] ?? "";
+    const specifier = /@import "([^"]*tailess\.css)"/.exec(first?.code ?? "")?.[1] ?? "";
     await rm(join(dir, specifier));
 
     const second = await run(`@import "tailwindcss";`, entryId());
@@ -529,7 +563,7 @@ describe("Vite integration", () => {
     expect(result?.code).not.toMatch(/@import "[^"]*tailess\.css"/);
     expect(result?.code).toContain("@source inline(");
     expect(result?.code).toMatch(/--tailess:\s*1/);
-    expect(result?.code.endsWith(`@import "tailwindcss";`)).toBe(true);
+    expect(result?.code.startsWith(`@import "tailwindcss";\n`)).toBe(true);
     expect(warn).toHaveBeenCalled();
 
     // And the inlined CSS still compiles to every rule.
@@ -629,6 +663,82 @@ describe("Vite: content paths and server lifecycle", () => {
     warn.mockRestore();
   });
 
+  it("warns the same way through the PostCSS plugin, naming the glob case", async () => {
+    // Only the Vite plugin had the warning, while the README promised both did — and a
+    // v3-style glob is what a Next.js or PostCSS CLI user reaches for first. Every
+    // prefixed class went unstyled with the marker present and nothing said.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeFile(join(dir, "app.css"), `@import "tailwindcss";`);
+    for (const content of [[join(dir, "src", "**", "*.tsx")], [join(dir, "nope")]]) {
+      clearReported();
+      warn.mockClear();
+      await postcss([
+        tailess({ content, cacheDir: join(dir, ".cache") }),
+        tailwindcss({ base: dir, optimize: false }),
+      ]).process(`@import "tailwindcss";`, { from: join(dir, "app.css") });
+      const said = warn.mock.calls.map((call) => String(call[0]));
+      expect(said.filter((m) => m.includes("matched no files"))).toHaveLength(1);
+      expect(said.some((m) => m.includes("Wildcards are not expanded"))).toBe(
+        content[0]?.includes("*") === true,
+      );
+    }
+    warn.mockRestore();
+  });
+
+  it("warns when an extensions list matches nothing, with content left at its default", async () => {
+    // `extensions: ["*.tsx"]` unstyled every prefixed class with the marker present and no
+    // warning, because the check only ran for an explicit `content`.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const extensions of [["*.tsx"], [], ["mjs"]]) {
+      clearReported();
+      warn.mockClear();
+      const plugin = tailessVite({ extensions });
+      plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+      await plugin.transform.handler.call(
+        { addWatchFile: () => {} },
+        `@import "tailwindcss";`,
+        entryId(),
+      );
+      const said = warn.mock.calls.map((call) => String(call[0]));
+      expect(
+        said.filter((m) => m.includes("matched no files")),
+        String(extensions),
+      ).toHaveLength(1);
+      expect(said.some((m) => m.includes(`with an extension in [${extensions.join(", ")}]`))).toBe(
+        true,
+      );
+      expect(said.some((m) => m.includes("not globs"))).toBe(extensions[0] === "*.tsx");
+    }
+
+    clearReported();
+    warn.mockClear();
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(dir);
+    await writeFile(join(dir, "app.css"), `@import "tailwindcss";`);
+    await postcss([
+      tailess({ extensions: ["*.tsx"], cacheDir: join(dir, ".cache") }),
+      tailwindcss({ base: dir, optimize: false }),
+    ]).process(`@import "tailwindcss";`, { from: join(dir, "app.css") });
+    cwd.mockRestore();
+    expect(warn.mock.calls.some((call) => String(call[0]).includes("matched no files"))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("stays quiet when an extensions list matches the project's files", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clearReported();
+    const plugin = tailessVite({ extensions: ["tsx"] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      entryId(),
+    );
+    expect(warn.mock.calls.some((call) => String(call[0]).includes("matched no files"))).toBe(
+      false,
+    );
+    warn.mockRestore();
+  });
+
   it("registers listeners again on a restarted server", async () => {
     // Vite calls configureServer once per server, and reuses a plugin instance
     // supplied through inlineConfig across a restart. A latch on the instance would
@@ -656,5 +766,301 @@ describe("Vite: content paths and server lifecycle", () => {
     // ...but the same watcher twice must not double-register.
     plugin.configureServer(second.server);
     expect(second.events).toEqual(["change", "add", "unlink"]);
+  });
+});
+
+describe('diagnostics: "error" and a theme that adds rather than removes', () => {
+  // README "Keys your own CSS adds" declares `3xl` and a custom variant, and README
+  // "Plugin options" recommends `diagnostics: "error"` for CI. The two together failed
+  // the build on a note that itself said the class works.
+  async function build(theme: string): Promise<string> {
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-drift-"));
+    try {
+      await writeFile(join(project, "a.tsx"), `ss({ md: "p-4" })`);
+      const css = `@import "tailwindcss";\n${theme}\n`;
+      const result = await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache"), diagnostics: "error" }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(css, { from: join(project, "app.css") });
+      return result.css;
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }
+
+  it("builds a project that adds a breakpoint, a variant or moves a width", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(build(`@theme { --breakpoint-3xl: 120rem; }`)).resolves.toContain("--tailess");
+    await expect(
+      build(`@custom-variant sidebar-open (&:is(.sidebar-open *));`),
+    ).resolves.toBeTruthy();
+    await expect(build(`@theme { --breakpoint-md: 50rem; }`)).resolves.toBeTruthy();
+    warn.mockRestore();
+  });
+
+  it("still fails a project whose theme removes a breakpoint a key needs", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(build(`@theme { --breakpoint-md: initial; }`)).rejects.toThrow(
+      /build-time diagnostic/,
+    );
+    warn.mockRestore();
+  });
+});
+
+describe("a Tailwind prefix written in the entry stylesheet, through PostCSS", () => {
+  // The documented total failure: with prefix(tw) every class tailess builds is the wrong
+  // name. The PostCSS plugin rebuilt each @import as its bare specifier before the theme
+  // check read it, so the prefix on the entry's own import was dropped and never
+  // reported — only one nested a file deeper was. The Vite plugin passes the full CSS.
+  async function build(css: string, diagnostics: "warn" | "error") {
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-prefix-"));
+    try {
+      await writeFile(join(project, "a.tsx"), `ss({ hover: "skew-y-3" })`);
+      return await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache"), diagnostics }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(css, { from: join(project, "app.css") });
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  }
+
+  it("reports it, and fails the build under diagnostics: error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clearReported();
+    await build(`@import "tailwindcss" prefix(tw);`, "warn");
+    expect(warn.mock.calls.map((c) => String(c[0])).some((m) => m.includes('prefix("tw")'))).toBe(
+      true,
+    );
+    clearReported();
+    await expect(build(`@import "tailwindcss" prefix(tw) layer(base);`, "error")).rejects.toThrow(
+      /build-time diagnostic/,
+    );
+    warn.mockRestore();
+  });
+});
+
+describe("a runtime-built class with a double quote in it", () => {
+  it("reaches the stylesheet through the PostCSS plugin", async () => {
+    // `@source inline("…")` cannot carry a `"`, so the class used to be dropped from the
+    // candidate list — unstyled, with `check` passing. It goes in a single-quoted
+    // directive now.
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-dq-"));
+    try {
+      await writeFile(join(project, "a.tsx"), `ss({ md: 'after:content-["x"]', lg: "p-4" })`);
+      const result = await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache") }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(`@import "tailwindcss";`, { from: join(project, "app.css") });
+      expect(missingRules(result.css, ['md:after:content-["x"]', "lg:p-4"])).toEqual([]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a remote @import ahead of Tailwind's", () => {
+  // Google Fonts' own snippet. CSS ignores an `@import` that follows a rule, and the
+  // injection carries one — the marker — so prepending it dropped the font from dev and
+  // production CSS alike, with nothing but a minifier warning about `--tailess`.
+  const font = `@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");`;
+  const entry = `${font}\n@import "tailwindcss";\n`;
+
+  /**
+   * The font import survived, and tailess put nothing ahead of it.
+   *
+   * Tailwind 4.1.0 — the floor — hoists a `@supports` fallback above the import itself,
+   * with no tailess anywhere (compiled below), a bug of its own it has since fixed. So
+   * "no rule ahead of it" holds wherever Tailwind alone gets it right, and the marker must
+   * never be ahead of it on any version.
+   */
+  async function keptFirst(css: string): Promise<void> {
+    const at = css.indexOf("@import url(");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const head = css.slice(0, at);
+    expect(head).not.toContain("--tailess");
+    const alone = (
+      await postcss([tailwindcss({ base: dir, optimize: false })]).process(entry, {
+        from: join(dir, "index.css"),
+      })
+    ).css;
+    if (!alone.slice(0, alone.indexOf("@import url(")).includes("{")) {
+      expect(head).not.toContain("{");
+    }
+    expect(missingRules(css, expected)).toEqual([]);
+  }
+
+  it("keeps the font through the PostCSS plugin", async () => {
+    await keptFirst(await compileWithPostcss(entry));
+  });
+
+  it("keeps the font through the Vite plugin", async () => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const from = join(dir, "index.css");
+    const result = await plugin.transform.handler.call({ addWatchFile: () => {} }, entry, from);
+    expect(result?.code.startsWith(`${font}\n@import "tailwindcss";\n@import "`)).toBe(true);
+    const compiled = await postcss([tailwindcss({ base: dir, optimize: false })]).process(
+      result?.code ?? "",
+      { from },
+    );
+    await keptFirst(compiled.css);
+  });
+});
+
+describe("Tailwind imported inside a component's <style> block, through Vite", () => {
+  // Vue and Svelte hand a `<style>` block over as `App.vue?vue&type=style&index=0&lang.css`,
+  // and Tailwind compiles an `@import "tailwindcss"` written there. The plugin read only
+  // the path before `?`, saw `.vue`, and skipped it: every runtime-built class unstyled.
+  it.each([
+    ["a Vue block", "App.vue?vue&type=style&index=0&lang.css"],
+    ["a Svelte block", "App.svelte?svelte&type=style&lang.css"],
+    ["an inline <style> in index.html", "index.html?html-proxy&index=0.css"],
+  ])("injects into %s", async (_, query) => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const [name] = query.split("?") as [string];
+    const id = join(dir, query);
+    const result = await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      id,
+    );
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+    const compiled = await postcss([tailwindcss({ base: dir, optimize: false })]).process(
+      result?.code ?? "",
+      { from: join(dir, name) },
+    );
+    expect(missingRules(compiled.css, expected)).toEqual([]);
+  });
+
+  it("still leaves a block handed over raw alone", async () => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const id = join(dir, "App.vue?vue&type=style&index=0&lang.css&raw");
+    const call = { addWatchFile: () => {} };
+    expect(await plugin.transform.handler.call(call, `@import "tailwindcss";`, id)).toBeNull();
+  });
+});
+
+describe("Tailwind reached through a workspace package, through PostCSS", () => {
+  // The shadcn/ui monorepo template: the app's globals.css holds only
+  // `@import "@workspace/ui/globals.css"`, and that file imports Tailwind. The entry test
+  // followed relative imports only, so the app's stylesheet got no injection.
+  it("injects into the app's stylesheet", async () => {
+    const pkg = join(dir, "node_modules", "@workspace", "ui");
+    await mkdir(join(pkg, "src"), { recursive: true });
+    await writeFile(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "@workspace/ui", exports: { "./globals.css": "./src/globals.css" } }),
+    );
+    await writeFile(join(pkg, "src", "globals.css"), `@import "tailwindcss";\n`);
+    const css = await compileWithPostcss(`@import "@workspace/ui/globals.css";\n`);
+    expect(css).toMatch(/--tailess:\s*1/);
+    expect(missingRules(css, expected)).toEqual([]);
+  });
+});
+
+describe("Tailwind reached through an import only a resolver can follow, through Vite", () => {
+  // `@import "@/styles/tailwind.css"` is an alias only Vite knows, and a workspace package
+  // is one Node finds. Either way the entry test used to see a bare specifier it could not
+  // follow, and the app's stylesheet got no injection.
+  const transform = (resolve: (source: string) => Promise<{ id: string } | null>) => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    return (code: string) =>
+      plugin.transform.handler.call(
+        { addWatchFile: () => {}, resolve },
+        code,
+        join(dir, "app.css"),
+      );
+  };
+
+  it("follows an alias through Vite's own resolver", async () => {
+    await mkdir(join(dir, "styles"), { recursive: true });
+    const target = join(dir, "styles", "tailwind.css");
+    await writeFile(target, `@import "tailwindcss";\n`);
+    const run = transform(async (source) =>
+      source === "@/styles/tailwind.css" ? { id: `${target}?inline` } : null,
+    );
+    const result = await run(`@import "@/styles/tailwind.css";\n`);
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+  });
+
+  it("falls back to Node's resolution when Vite's resolver fails", async () => {
+    const pkg = join(dir, "node_modules", "@workspace", "ui");
+    await mkdir(pkg, { recursive: true });
+    await writeFile(join(pkg, "globals.css"), `@import "tailwindcss";\n`);
+    const run = transform(() => Promise.reject(new Error("resolver down")));
+    const result = await run(`@import "@workspace/ui/globals.css";\n`);
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+  });
+
+  it("leaves a stylesheet alone when no resolver finds the import", async () => {
+    const run = transform(async () => null);
+    expect(await run(`@import "@nowhere/missing.css";\n`)).toBeNull();
+  });
+});
+
+describe("a theme that removes a breakpoint, through Vite", () => {
+  // The PostCSS plugin's theme check has its own tests; the Vite one runs the same check
+  // in its transform, and nothing exercised it there.
+  const run = (diagnostics: "warn" | "error") => {
+    const plugin = tailessVite({ content: [dir], diagnostics });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    return plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }\n`,
+      join(dir, "index.css"),
+    );
+  };
+
+  // Each finding prints once per process, so each case starts from a clean slate.
+  beforeEach(clearReported);
+
+  const said = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.map((call) => String(call[0])).join("\n");
+
+  it('fails the build under diagnostics: "error", naming the key', async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(run("error")).rejects.toThrow(/1 build-time diagnostic/);
+    expect(said(warn)).toMatch(/removes the "md" breakpoint/);
+    warn.mockRestore();
+  });
+
+  it("warns and still injects by default", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await run("warn");
+    expect(said(warn)).toMatch(/removes the "md" breakpoint/);
+    warn.mockRestore();
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+  });
+});
+
+describe("a quoted value in a helper's selector or query", () => {
+  it("builds a class Tailwind generates a rule for, so nothing warns about it", async () => {
+    // `has('[data-state="open"]', …)` is the usual spelling. Since the plugin carries a
+    // lone `"` in a single-quoted `@source inline`, it works — and the unusable-value
+    // check still called it unusable, failing `--strict` and `diagnostics: "error"`.
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-hq-"));
+    try {
+      await writeFile(
+        join(project, "a.tsx"),
+        `import { has, supports } from "tailess";\n` +
+          `has('[data-state="open"]', "p-2");\nsupports('font-family: "Inter"', "grid");\n`,
+      );
+      const result = await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache"), diagnostics: "error" }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(`@import "tailwindcss";`, { from: join(project, "app.css") });
+      expect(
+        missingRules(result.css, [
+          'has-[[data-state="open"]]:p-2',
+          'supports-[font-family:_"Inter"]:grid',
+        ]),
+      ).toEqual([]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
   });
 });

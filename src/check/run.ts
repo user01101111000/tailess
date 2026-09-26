@@ -1,16 +1,18 @@
 /// <reference types="node" />
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
 import { maskLiterals } from "../extract/scan.js";
-import { isTailwindEntry, tailwindPrefixIn } from "../integration/entry.js";
+import { isTailwindEntry, resolveWithNode, tailwindPrefixIn } from "../integration/entry.js";
 import { buildPrelude } from "../integration/inject.js";
 import { reportDiagnostics } from "../integration/report.js";
+import { collectTheme, themeDiagnostics } from "../integration/theme.js";
+import { hasRule } from "../internal/selector.js";
 import { type Command, commands, jsonResult } from "./result.js";
-import { runDoctor, runInit, wired } from "./setup.js";
-import { type BrokenClass, findBroken, probeList } from "./verify.js";
+import { findHost, readWiring, runDoctor, runInit } from "./setup.js";
+import { findBrokenAcross, probeList, utilitySentinel } from "./verify.js";
 
 /**
  * `tailess check` — compile the project for real and prove every class the runtime
@@ -58,6 +60,18 @@ const nouns: Record<string, string> = {
   "--out": "path",
   "--extensions": "list of extensions",
   "--ignore": "directory name",
+};
+
+/** The commands each flag means something to; `--json` and the rest apply to all four. */
+const scoped: Record<string, Options["command"][]> = {
+  "--content": ["check", "emit"],
+  "--css": ["check"],
+  "--extensions": ["check", "emit"],
+  "--ignore": ["check", "emit"],
+  "--strict": ["check"],
+  "--max": ["check"],
+  "--out": ["emit"],
+  "--write": ["init"],
 };
 
 /**
@@ -116,7 +130,10 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
     }
     if (listOptions.has(arg) || pathOptions.has(arg)) {
       const value = rest[i + 1];
-      if (value === undefined || value.startsWith("-")) {
+      // An empty value is what an unset `$SRC_DIR` expands to, and dropping it widened
+      // `--content ""` to the whole working directory — a CI gate passing on files
+      // nobody named — and turned `--css ""` into auto-detection.
+      if (value === undefined || value.startsWith("-") || value.replace(/,/g, "").trim() === "") {
         throw new UsageError(`${arg} needs a ${nouns[arg] ?? "value"}`);
       }
       if (arg === "--css") css = value;
@@ -131,14 +148,31 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
       i += 1;
       continue;
     }
+    if (arg.startsWith("-")) throw new UsageError(`unknown option ${arg}`);
     // A bare word in the first position was meant as a command, not an option, and
     // saying "unknown option" sends the reader to the flag list rather than the command
-    // list — where the answer is.
+    // list — where the answer is. After a command it is an argument nothing takes:
+    // "unknown command doctor. Expected one of: …, doctor" rejected the very word it
+    // listed.
+    if (i === 0 && rest === argv) {
+      throw new UsageError(`unknown command ${arg}. Expected one of: ${commands.join(", ")}.`);
+    }
     throw new UsageError(
-      i === 0 && !arg.startsWith("-")
-        ? `unknown command ${arg}. Expected one of: ${commands.join(", ")}.`
-        : `unknown option ${arg}`,
+      `unexpected argument ${arg}` +
+        (command === "check" || command === "emit" ? ` — for a directory, --content ${arg}` : ""),
     );
+  }
+
+  // `--help` annotates the flags that belong to one command, and accepting them anywhere
+  // else did nothing without saying so: `init --content apps/web` wrote to the current
+  // directory's config, and `doctor --strict` was the same doctor.
+  for (const flag of new Set(rest.filter((arg) => arg.startsWith("--")))) {
+    const only = scoped[flag];
+    if (only && !only.includes(command)) {
+      throw new UsageError(
+        `${flag} does not apply to ${command} (it is for ${only.join(" and ")})`,
+      );
+    }
   }
 
   return {
@@ -182,13 +216,14 @@ export const help = `tailess — prove every class tailess builds has CSS behind
   --version, -v         print the version and exit.
   --help, -h            print this and exit.
 
-Give --extensions and --ignore the same values as the plugin, or the gate checks a
-different set of files than your build does.
+Give --content, --extensions and --ignore the same values as the plugin, or the gate
+checks a different set of files than your build does.
 
 Exit codes:
   0  every runtime-built class has a rule (or the scan found no tailess calls)
   1  a class reaches the element with no rule behind it
-  2  nothing could be checked — no stylesheet, no files scanned, or a bad option`;
+  2  nothing could be checked — no stylesheet that generates utilities, no files
+     scanned, a Tailwind prefix(), or a bad option`;
 
 /**
  * The package's own version, for `--version`.
@@ -207,34 +242,96 @@ export async function version(): Promise<string> {
   return "unknown";
 }
 
+/** An `exports` entry: a path, a map of conditions, or a list of fallbacks. */
+type ExportTarget = string | null | ExportTarget[] | { [condition: string]: ExportTarget };
+
 /**
- * Resolve an `@import` the way a bundler would.
+ * The file an `exports` entry names for a stylesheet: the `style` condition, which is
+ * what Tailwind's own resolver asks for, else `default` — whichever comes first, since
+ * conditions match in the order the package wrote them.
+ */
+function styleTarget(target: ExportTarget | undefined): string | undefined {
+  if (typeof target === "string") return target;
+  if (Array.isArray(target)) {
+    for (const option of target) {
+      const found = styleTarget(option);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!target) return undefined;
+  for (const [condition, value] of Object.entries(target)) {
+    if (condition === "style" || condition === "default") {
+      const found = styleTarget(value);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The directory of an installed package, found on disk rather than through Node's
+ * resolver.
+ *
+ * `require.resolve("<pkg>/package.json")` goes through the package's `exports` map, and
+ * a style-only package — tw-animate-css, which shadcn/ui's stylesheet imports, or a
+ * scoped design-token package — has no reason to export its manifest. Tailwind's own
+ * resolver does not need it to, so the gate cannot either.
+ */
+async function packageDir(name: string, base: string): Promise<string | undefined> {
+  for (let dir = base; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules", name);
+    if (await stat(join(candidate, "package.json")).catch(() => undefined)) return candidate;
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/**
+ * Resolve an `@import` the way Tailwind's Node host does.
  *
  * A bare package root resolves to JavaScript, not CSS — `require.resolve("tailwindcss")`
- * hands back `dist/lib.js` — so the package's `style` condition is what to follow. A
- * subpath (`tailwindcss/theme.css`) resolves directly.
+ * hands back `dist/lib.js` — so the package's `style` condition is what to follow, on the
+ * root or on a subpath (`@import "@acme/ui/theme"`). A subpath that names the file
+ * (`tailwindcss/theme.css`) resolves directly.
  */
 async function loadStylesheet(id: string, base: string) {
-  let path: string;
+  let path: string | undefined;
   if (id.startsWith(".") || isAbsolute(id)) {
     path = resolve(base, id);
   } else {
-    const req = createRequire(join(base, "_"));
-    let resolved: string | undefined;
     try {
-      resolved = req.resolve(id);
+      const resolved = createRequire(join(base, "_")).resolve(id);
+      if (resolved.endsWith(".css")) path = resolved;
     } catch {
-      resolved = undefined;
+      // A style-only export has no `require` condition; the manifest is read below.
     }
-    if (resolved?.endsWith(".css")) {
-      path = resolved;
-    } else {
-      const pkgPath = req.resolve(`${id.split("/")[0]}/package.json`);
-      const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as {
-        exports?: { "."?: { style?: string } };
+    if (path === undefined) {
+      const segments = id.split("/");
+      const nameLength = id.startsWith("@") ? 2 : 1;
+      const name = segments.slice(0, nameLength).join("/");
+      const subpath = segments.slice(nameLength).join("/");
+      const dir = await packageDir(name, base);
+      if (dir === undefined) throw new Error(`could not resolve "${id}" from ${base}`);
+      const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8")) as {
+        exports?: ExportTarget;
         style?: string;
       };
-      path = resolve(dirname(pkgPath), pkg.exports?.["."]?.style ?? pkg.style ?? "index.css");
+      const key = subpath ? `./${subpath}` : ".";
+      const { exports } = pkg;
+      // `exports` is either a map of subpaths or, for a single-entry package, the
+      // conditions for "." directly.
+      const isSubpathMap =
+        exports !== null &&
+        typeof exports === "object" &&
+        !Array.isArray(exports) &&
+        Object.keys(exports).some((k) => k.startsWith("."));
+      const entry = isSubpathMap
+        ? (exports as Record<string, ExportTarget>)[key]
+        : key === "."
+          ? exports
+          : undefined;
+      const target = styleTarget(entry);
+      path = target ? resolve(dir, target) : resolve(dir, subpath || (pkg.style ?? "index.css"));
     }
   }
   return { base: dirname(path), path, content: await readFile(path, "utf8") };
@@ -264,6 +361,51 @@ async function loadModule(id: string, base: string) {
   return { path: resolved, base: dirname(resolved), module: mod.default ?? mod };
 }
 
+/**
+ * Run `task` with `console.log`, `console.info` and `console.debug` writing to stderr,
+ * then put them back — so code this process runs on the project's behalf cannot put a
+ * second thing on a stdout that promised one JSON object.
+ */
+async function toStderr<T>(task: () => Promise<T>): Promise<T> {
+  const { log, info, debug } = console;
+  const redirect = (...args: unknown[]) => console.error(...args);
+  console.log = redirect;
+  console.info = redirect;
+  console.debug = redirect;
+  try {
+    return await task();
+  } finally {
+    console.log = log;
+    console.info = info;
+    console.debug = debug;
+  }
+}
+
+/**
+ * The version of the Tailwind whose entry file is at `from`, read off the nearest
+ * manifest that names it — `tailwindcss/package.json` is not reached through `exports`.
+ */
+async function tailwindVersion(from: string): Promise<string | undefined> {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const text = await readFile(join(dir, "package.json"), "utf8").catch(() => undefined);
+    if (text !== undefined) {
+      try {
+        const pkg = JSON.parse(text) as { name?: unknown; version?: unknown };
+        if (pkg.name === "tailwindcss" && typeof pkg.version === "string") return pkg.version;
+      } catch {
+        // Not a manifest worth reading; keep walking up.
+      }
+    }
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/** True for a v4 release before 4.1.0, the first to parse `@source inline(…)`. */
+function olderThanFloor(version: string): boolean {
+  const [major, minor] = version.split(".").map((part) => Number.parseInt(part, 10));
+  return major === 4 && minor === 0;
+}
+
 /** The slice of Tailwind's own API this needs, so no dependency on it is declared. */
 type Compile = (
   css: string,
@@ -274,11 +416,53 @@ type Compile = (
   },
 ) => Promise<{ build(candidates: string[]): string }>;
 
+/** `compile()` from `@tailwindcss/node`, the host `@tailwindcss/postcss` and `/vite` run. */
+type NodeHostCompile = (
+  css: string,
+  options: { base: string; onDependency: (path: string) => void },
+) => Promise<{ build(candidates: string[]): string }>;
+
+/**
+ * Tailwind's own Node host, when the project has one — directly, or as the dependency of
+ * the PostCSS or Vite plugin, which is where a strict package manager keeps it.
+ *
+ * It resolves `@import`, `@plugin` and `@config` exactly as the build does: `import`
+ * conditions for an ESM-only plugin, `style` conditions for a stylesheet, and TypeScript
+ * through its own loader rather than whatever the running Node happens to strip. The
+ * gate answering for a different resolver than the build is how it came to exit 2 on an
+ * ESM-only plugin the build loaded fine.
+ */
+async function loadNodeHost(cwd: string): Promise<NodeHostCompile | undefined> {
+  const from = createRequire(join(cwd, "_"));
+  const places = [
+    () => from.resolve("@tailwindcss/node"),
+    () => createRequire(from.resolve("@tailwindcss/postcss")).resolve("@tailwindcss/node"),
+    () => createRequire(from.resolve("@tailwindcss/vite")).resolve("@tailwindcss/node"),
+  ];
+  for (const place of places) {
+    let entry: string;
+    try {
+      entry = place();
+    } catch {
+      continue;
+    }
+    const mod = (await import(pathToFileURL(entry).href)) as {
+      compile?: unknown;
+      default?: { compile?: unknown };
+    };
+    const compile = mod.compile ?? mod.default?.compile;
+    if (typeof compile === "function") return compile as NodeHostCompile;
+  }
+  return undefined;
+}
+
 /**
  * Load Tailwind from the project being checked, not from tailess' own tree.
  *
  * `tailwindcss` is the host's, exactly as it is for the plugins — resolving it from
- * here would check tailess' devDependency against the consumer's source.
+ * here would check tailess' devDependency against the consumer's source. Tailwind's own
+ * Node host is preferred when it is there; the bare compiler, with the loaders in this
+ * file, is what is left for a project that has none.
  */
 async function loadCompiler(cwd: string): Promise<Compile> {
   const req = createRequire(join(cwd, "_"));
@@ -288,6 +472,16 @@ async function loadCompiler(cwd: string): Promise<Compile> {
   } catch {
     throw new Error("tailwindcss is not installed here, so there is nothing to compile against");
   }
+  const version = await tailwindVersion(dirname(entry));
+  if (version !== undefined && olderThanFloor(version)) {
+    throw new Error(
+      `tailess needs tailwindcss 4.1 or later, and this project has ${version}. The ` +
+        `plugins inject @source inline(…), which Tailwind parses from 4.1.0 — on ${version} ` +
+        "the build fails with Tailwind's own error, `@source` paths must be quoted.",
+    );
+  }
+  const host = await loadNodeHost(cwd);
+  if (host) return (css, { base }) => host(css, { base, onDependency: () => {} });
   // `require.resolve` picks the `require` condition, so this is usually Tailwind's
   // CJS build — importing that puts its named exports under `default`.
   const mod = (await import(pathToFileURL(entry).href)) as {
@@ -301,10 +495,14 @@ async function loadCompiler(cwd: string): Promise<Compile> {
   return compile as Compile;
 }
 
-/** A config file a build tool would read from the project root. */
-const configFile = /^(?:\..*rc(?:\..*)?|.*\.config\.[cm]?[jt]sx?|.*\.config\.json|package\.json)$/;
-/** A local module a config pulls its plugin list from, which this cannot follow. */
+/** A local module a config pulls its plugin list from, which this cannot always follow. */
 const localImport = /^[ \t]*import\b[^;]*?["']\.[^"'\n]*["']|\brequire\(\s*["']\.[^"'\n]*["']/m;
+
+/** True when `dir` is `root` or inside it. */
+function inside(root: string, dir: string): boolean {
+  const rel = relative(root, dir);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
 
 /**
  * True when nothing in the project's root config mentions tailess.
@@ -320,56 +518,92 @@ const localImport = /^[ \t]*import\b[^;]*?["']\.[^"'\n]*["']|\brequire\(\s*["']\
  * time, so neither reaches the stylesheet on disk. What is left is the config, which
  * is where a reader would look too. Heuristic, so it warns rather than failing unless
  * asked — a gate that fails on a guess is a gate teams delete.
+ *
+ * Read the way `doctor` reads it — the file the build loads, followed into a local
+ * preset, a PostCSS entry counted only when listed ahead of Tailwind's — and only a
+ * real build config counts. Any `*rc` and `*.config.*` did before, so a monorepo root
+ * with an `.npmrc` "had a config" that wired nothing, and `--strict` failed a correctly
+ * wired app. With no build config in the working directory, the nearest one above each
+ * `--content` root inside it answers instead, which is where a monorepo keeps them.
  */
-async function pluginLooksUnwired(cwd: string): Promise<boolean> {
-  const entries = await readdir(cwd, { withFileTypes: true }).catch(() => []);
-  let sawConfig = false;
-  for (const entry of entries) {
-    if (!entry.isFile() || !configFile.test(entry.name)) continue;
-    const text = await readFile(join(cwd, entry.name), "utf8").catch(() => "");
-
-    // `package.json` names tailess in `dependencies` for every consumer, which proves
-    // installation and nothing about wiring. Only its `postcss` key — the one place a
-    // build config can actually live in there — counts as evidence.
-    if (entry.name === "package.json") {
-      let postcss: unknown;
-      try {
-        postcss = (JSON.parse(text) as { postcss?: unknown }).postcss;
-      } catch {
-        continue;
+async function pluginLooksUnwired(cwd: string, roots: readonly string[]): Promise<boolean> {
+  const dirs = new Set<string>();
+  if ((await findHost(cwd)).kind !== "unknown") dirs.add(cwd);
+  else {
+    for (const root of roots) {
+      for (let dir = root; inside(cwd, dir) && dir !== cwd; dir = dirname(dir)) {
+        if ((await findHost(dir)).kind === "unknown") continue;
+        dirs.add(dir);
+        break;
       }
-      if (postcss === undefined) continue;
-      sawConfig = true;
-      if (wired(JSON.stringify(postcss))) return false;
-      continue;
     }
-
-    sawConfig = true;
-    if (wired(text)) return false;
-    // A config that builds its plugin list somewhere else — `import base from
-    // "./vite.base.js"`, the shape every monorepo and shared preset has — is one this
-    // cannot see through, and concluding "unwired" there failed a correctly wired project
-    // under `--strict`. A guess that cannot see the whole config has to abstain.
-    if (localImport.test(maskLiterals(text))) return false;
   }
   // No config at all means this is not a project root worth guessing about.
-  return sawConfig;
+  if (dirs.size === 0) return false;
+
+  for (const dir of dirs) {
+    const host = await findHost(dir);
+    if (host.kind === "unknown") continue;
+    const { state } = await readWiring(host);
+    if (state === "wired" || state === "unknown") return false;
+    // A config that builds its plugin list somewhere else — `import base from
+    // "./vite.base.js"`, the shape every monorepo and shared preset has — may do it
+    // through a package this cannot read, and concluding "unwired" there failed a
+    // correctly wired project under `--strict`. A guess that cannot see the whole config
+    // has to abstain.
+    if (localImport.test(maskLiterals(host.source))) return false;
+  }
+  return true;
 }
 
-/** Every Tailwind entry stylesheet under `roots`. */
-async function findEntries(roots: string[]): Promise<string[]> {
-  const { files } = await collect({ roots, extensions: ["css"] });
+/**
+ * Every Tailwind entry stylesheet under `roots`, skipping what `ignore` names.
+ *
+ * `--ignore` did not reach this search, so a stale `legacy/old-admin.css` anywhere under
+ * `--content` stayed an entry — and since a class only has to work in one entry, it
+ * vouched for the app's broken ones, with no way to leave it out short of `--css`.
+ */
+async function findEntries(roots: string[], ignore: readonly string[] = []): Promise<string[]> {
+  const { files } = await collect({
+    roots,
+    extensions: ["css"],
+    ...(ignore.length ? { ignore: [...ignore] } : {}),
+  });
   const entries: string[] = [];
   for (const file of files) {
     const css = await readFile(file, "utf8").catch(() => undefined);
-    if (css !== undefined && (await isTailwindEntry(css, file))) entries.push(file);
+    if (css === undefined) continue;
+    if (await isTailwindEntry(css, file, undefined, undefined, resolveWithNode)) entries.push(file);
   }
   return entries;
 }
 
 /** Absolute paths, relative to the project, sorted — what a report should print. */
 function shown(paths: readonly string[] | undefined, cwd: string): string[] {
-  return (paths ?? []).map((path) => relative(cwd, path) || path);
+  return (paths ?? []).map((path) => posix(relative(cwd, path) || path));
+}
+
+/**
+ * A path with forward slashes, on every OS. The JSON contract shows `src/app.css`, and a
+ * CI script matching on it behaved differently on a Windows runner, which wrote
+ * `src\app.css`.
+ */
+function posix(path: string): string {
+  return path.split(sep).join("/");
+}
+
+/**
+ * "Scanned no files", with the likeliest reason when there is one. Only `check` named the
+ * unexpanded wildcard, so `emit` given a glob left the reader to find it.
+ */
+function noFiles(command: "check" | "emit", roots: readonly string[]): string {
+  const glob = roots.some((path) => path.includes("*"))
+    ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
+    : "";
+  return (
+    `[tailess] scanned no files, so there is nothing to ${command}. Looked in: ` +
+    `${roots.join(", ")}.${glob}`
+  );
 }
 
 /** Resolve `--content` against the working directory, defaulting to it. */
@@ -409,9 +643,7 @@ async function runEmit(options: Options): Promise<number> {
       console.log(jsonResult("emit", 2, { error: "no-files", roots: shown(roots, options.cwd) }));
       return 2;
     }
-    console.error(
-      `[tailess] scanned no files, so there is nothing to emit. Looked in: ${roots.join(", ")}.`,
-    );
+    console.error(noFiles("emit", roots));
     return 2;
   }
 
@@ -439,7 +671,7 @@ async function runEmit(options: Options): Promise<number> {
     // that answered in prose, so `emit --out … --json | jq -e .ok` failed to parse on a
     // run that exited 0 — which reads as a broken pipeline rather than a pass.
     console.log(
-      jsonResult("emit", 0, { files: files.length, classes: classes.length, out: where }),
+      jsonResult("emit", 0, { files: files.length, classes: classes.length, out: posix(where) }),
     );
     // `--json` changes *what emit produces*, not just how it prints: the file holds the
     // candidate list, not a stylesheet. Naming it `.css` and importing it is the shape
@@ -494,7 +726,7 @@ async function runCheck(options: Options): Promise<number> {
 
   const entries = options.css
     ? [isAbsolute(options.css) ? options.css : resolve(options.cwd, options.css)]
-    : await findEntries(roots);
+    : await findEntries(roots, options.ignore);
 
   if (entries.length === 0) {
     complain(
@@ -504,13 +736,48 @@ async function runCheck(options: Options): Promise<number> {
     return finish(2, { error: "no-stylesheet", roots: shown(roots, options.cwd) });
   }
 
-  const { classes, files, diagnostics, sources } = await collect({
+  // A mistyped --css surfaced as Node's own "ENOENT: … open '…'" (or "EISDIR" for a
+  // folder), under a JSON error of "crashed" — which reads as a bug in the gate, not a
+  // typo in the command.
+  if (options.css !== undefined) {
+    const [css] = entries as [string];
+    if (
+      !(await stat(css).then(
+        (info) => info.isFile(),
+        () => false,
+      ))
+    ) {
+      complain(
+        `[tailess] --css ${options.css} is not a file. Pass the stylesheet that imports ` +
+          "Tailwind, or leave --css out to find it.",
+      );
+      return finish(2, { error: "no-stylesheet", css: posix(relative(options.cwd, css) || css) });
+    }
+  }
+
+  const scanned = await collect({
     ...scanOptions(options, roots),
     provenance: true,
   });
+  const { classes, files, sources } = scanned;
+  // The checks both plugins run over the stylesheet itself — a `@theme` that removes a
+  // breakpoint, a `@custom-variant` — which a build under `diagnostics: "error"` fails
+  // on. `--strict` is documented as the one gate covering both, and never ran them.
+  const diagnostics = [...scanned.diagnostics];
+  for (const entry of entries) {
+    const css = await readFile(entry, "utf8").catch(() => undefined);
+    if (css === undefined) continue;
+    const theme = await collectTheme(css, entry);
+    for (const found of themeDiagnostics(theme.breakpoints, theme.variants)) {
+      diagnostics.push({ ...found, file: entry });
+    }
+  }
+  // A note — a variant or breakpoint the project added, a width moved — describes CSS
+  // that works, and fails nothing here any more than it does in the build.
+  const failing = diagnostics.filter((d) => d.informational !== true).length;
   const asJson = diagnostics.map((d) => ({
     kind: d.kind,
-    file: relative(options.cwd, d.file) || d.file,
+    file: posix(relative(options.cwd, d.file) || d.file),
     message: d.message,
   }));
 
@@ -518,13 +785,7 @@ async function runCheck(options: Options): Promise<number> {
   // --content, or a monorepo task runner in the wrong directory, would otherwise
   // print a cheerful line and exit 0 forever after.
   if (files.length === 0) {
-    const glob = roots.some((path) => path.includes("*"))
-      ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
-      : "";
-    complain(
-      `[tailess] scanned no files, so there is nothing to check. Looked in: ` +
-        `${roots.join(", ")}.${glob}`,
-    );
+    complain(noFiles("check", roots));
     return finish(2, { error: "no-files", roots: shown(roots, options.cwd) });
   }
 
@@ -539,11 +800,11 @@ async function runCheck(options: Options): Promise<number> {
       `[tailess] scanned ${files.length} file${files.length === 1 ? "" : "s"} and found ` +
         "no runtime-built classes — nothing to check.",
     );
-    const failed = options.strict && diagnostics.length > 0;
+    const failed = options.strict && failing > 0;
     return finish(failed ? 1 : 0, { checked: 0, files: files.length, diagnostics: asJson });
   }
 
-  const unwired = await pluginLooksUnwired(options.cwd);
+  const unwired = await pluginLooksUnwired(options.cwd, roots);
   if (unwired) {
     complain(
       "[tailess] no build config here calls the plugin, so it may not be running at " +
@@ -579,7 +840,7 @@ async function runCheck(options: Options): Promise<number> {
     return finish(2, {
       error: "unsupported-prefix",
       prefix,
-      stylesheet: relative(options.cwd, entry) || entry,
+      stylesheet: posix(relative(options.cwd, entry) || entry),
     });
   }
 
@@ -588,17 +849,32 @@ async function runCheck(options: Options): Promise<number> {
 
   // A class only has to work in *one* stylesheet — a project can have several, and a
   // component is styled by whichever one its page loads. So a class is broken only if
-  // every entry fails it.
-  const perEntry: Array<Map<string, BrokenClass>> = [];
-  for (const entry of entries) {
-    const source = await readFile(entry, "utf8");
-    const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
-    const css = compiler.build(probe);
-    perEntry.push(new Map(findBroken(classes, css).map((b) => [b.candidate, b])));
+  // no entry has its rule — and only an entry that generates utilities at all has a say.
+  const sheets: string[] = [];
+  const silent: string[] = [];
+  // Compiling runs the project's `@plugin`s in this process, and some print — daisyUI's
+  // banner goes through console.log. Under --json stdout is the one JSON object, so
+  // anything they say goes to stderr for as long as they run.
+  await (quiet ? toStderr : (task: () => Promise<void>) => task())(async () => {
+    for (const entry of entries) {
+      const source = await readFile(entry, "utf8");
+      const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
+      const css = compiler.build([...probe, utilitySentinel]);
+      if (hasRule(css, utilitySentinel)) sheets.push(css);
+      else silent.push(entry);
+    }
+  });
+  if (sheets.length === 0) {
+    complain(
+      `[tailess] ${shown(silent, options.cwd).join(", ")} ` +
+        `${silent.length === 1 ? "generates" : "generate"} no Tailwind utilities — not even ` +
+        `"${utilitySentinel}" — so there is nothing to check against. Point --css at the ` +
+        "stylesheet that imports Tailwind for the app; if it does, look for a prefix(…) in " +
+        "one of the files it imports.",
+    );
+    return finish(2, { error: "no-utilities", stylesheets: shown(silent, options.cwd) });
   }
-  const broken = [...(perEntry[0]?.values() ?? [])].filter((b) =>
-    perEntry.every((entry) => entry.has(b.candidate)),
-  );
+  const broken = findBrokenAcross(classes, sheets);
 
   const brokenJson = broken.map((b) => ({
     class: b.candidate,
@@ -619,10 +895,10 @@ async function runCheck(options: Options): Promise<number> {
       `[tailess] ${classes.length} runtime-built classes checked against ` +
         `${entries.length} stylesheet${entries.length === 1 ? "" : "s"} — every one has CSS.`,
     );
-    if (options.strict && diagnostics.length > 0) {
+    if (options.strict && failing > 0) {
       complain(
-        `\n[tailess] --strict: ${diagnostics.length} build-time ` +
-          `diagnostic${diagnostics.length === 1 ? "" : "s"} above.`,
+        `\n[tailess] --strict: ${failing} build-time ` +
+          `diagnostic${failing === 1 ? "" : "s"} above.`,
       );
       return finish(1, summary);
     }

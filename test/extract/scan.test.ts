@@ -10,7 +10,7 @@ import {
 describe("scanCalls", () => {
   it("finds a bare helper call and its args", () => {
     expect(scanCalls(`on("hover", "bg-blue-600")`)).toEqual([
-      { name: "on", args: ['"hover"', '"bg-blue-600"'], receiver: "" },
+      { name: "on", args: ['"hover"', '"bg-blue-600"'], receiver: "", at: 2 },
     ]);
   });
 
@@ -19,10 +19,10 @@ describe("scanCalls", () => {
     // an extra candidate is free. The receiver is recorded because the diagnostics
     // cannot be that generous: `socket.on(...)` is not a tailess call.
     expect(scanCalls(`st.ss({ md: "text-2xl" })`)).toEqual([
-      { name: "ss", args: ['{ md: "text-2xl" }'], receiver: "st" },
+      { name: "ss", args: ['{ md: "text-2xl" }'], receiver: "st", at: 5 },
     ]);
     expect(scanCalls(`socket.on("presence", handler)`)).toEqual([
-      { name: "on", args: ['"presence"', "handler"], receiver: "socket" },
+      { name: "on", args: ['"presence"', "handler"], receiver: "socket", at: 9 },
     ]);
   });
 
@@ -34,27 +34,29 @@ describe("scanCalls", () => {
   // desyncing on markup — see the note on `scanCalls`.
   it("matches calls inside strings and comments too", () => {
     expect(scanCalls(`// on("hover", "a")`)).toEqual([
-      { name: "on", args: ['"hover"', '"a"'], receiver: "" },
+      { name: "on", args: ['"hover"', '"a"'], receiver: "", at: 5 },
     ]);
     expect(scanCalls(`/* ss({ md: "b" }) */`)).toEqual([
-      { name: "ss", args: ['{ md: "b" }'], receiver: "" },
+      { name: "ss", args: ['{ md: "b" }'], receiver: "", at: 5 },
     ]);
   });
 
   it("finds a call inside a quoted markup attribute", () => {
     expect(scanCalls(`<div :class="ss({ md: 'grid' })">`)).toEqual([
-      { name: "ss", args: ["{ md: 'grid' }"], receiver: "" },
+      { name: "ss", args: ["{ md: 'grid' }"], receiver: "", at: 15 },
     ]);
   });
 
   it("does not let an apostrophe in prose swallow the next call", () => {
     expect(scanCalls(`<p>Let's go</p>\n<b class={on("hover", "a")} />`)).toEqual([
-      { name: "on", args: ['"hover"', '"a"'], receiver: "" },
+      { name: "on", args: ['"hover"', '"a"'], receiver: "", at: 28 },
     ]);
   });
 
   it("stops an unclosed argument list at the end of input", () => {
-    expect(scanCalls(`ss({ md: "b"`)).toEqual([{ name: "ss", args: ['{ md: "b"'], receiver: "" }]);
+    expect(scanCalls(`ss({ md: "b"`)).toEqual([
+      { name: "ss", args: ['{ md: "b"'], receiver: "", at: 2 },
+    ]);
   });
 
   it("finds multiple and nested calls", () => {

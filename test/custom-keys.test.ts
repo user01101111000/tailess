@@ -58,7 +58,7 @@ describe("telling the runtime about them too", () => {
 
     ss({ "not-declared-anywhere": "p-1" } as never);
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toContain("is not a Tailwind breakpoint");
+    expect(seen[0]).toContain("is not one of ss()'s keys");
 
     seen.length = 0;
     configure({ keys: ["screen-wide", "sidebar-open"] });

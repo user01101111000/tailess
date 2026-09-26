@@ -1,7 +1,7 @@
 import { isDev } from "../internal/env.js";
 import { own, ownOr } from "../internal/lookup.js";
 import { firstTime, warn } from "../internal/settings.js";
-import type { SsArg } from "../types.js";
+import type { ClassArg, SsArg } from "../types.js";
 import { ss } from "./ss.js";
 
 /** The options one variant offers, e.g. `{ sm: "text-sm", lg: "text-lg" }`. */
@@ -39,9 +39,11 @@ type AnyGroups = Record<string, Record<string, unknown>>;
  * Any built recipe, loose enough that a concrete one is assignable.
  *
  * `VariantComponent<VariantGroups>` is not that: its `config` makes the type invariant,
- * so a real component would not fit where a parent is asked for.
+ * so a real component would not fit where a parent is asked for. `config` is still
+ * required, as `unknown`: without it a plain config object — a shared `{ base, variants }`
+ * — fit too, and its variants were typed as inherited while the runtime inherited nothing.
  */
-type AnyRecipe = { readonly variants: AnyGroups };
+type AnyRecipe = { readonly variants: AnyGroups; readonly config: unknown };
 /** Any built recipe with parts. The `slots` key is what keeps the two overloads apart. */
 type AnySlottedRecipe = AnyRecipe & { readonly slots: SlotDefaults };
 /**
@@ -189,7 +191,15 @@ export interface SlottedConfig<
 
 /** A component built by {@link variants}. */
 export interface VariantComponent<V extends VariantGroups> {
-  (props?: PropsOf<V>, ...rest: SsArg[]): string;
+  /**
+   * The class string for these props, with the caller's extra classes last. An extra is
+   * a {@link ClassArg} — not an `ss` map, which the build could never see here; wrap
+   * one in `ss()`.
+   *
+   * `props` is an object, always: with no variants its type was `{}`, which a string
+   * satisfies, so `bare(className)` — the `cn` habit — compiled and dropped the class.
+   */
+  (props?: PropsOf<V> & object, ...rest: ClassArg[]): string;
   /**
    * The variants it was built from, kept so `VariantProps<typeof button>` has
    * something to read the option names back out of — and useful in its own right for
@@ -202,7 +212,14 @@ export interface VariantComponent<V extends VariantGroups> {
 
 /** A multi-part component built by {@link variants}: one class string per slot. */
 export interface SlottedComponent<V extends AnyGroups, S extends SlotDefaults> {
-  (props?: PropsOf<V>, extra?: SlotValue<S>): { -readonly [K in keyof S]: string };
+  /**
+   * One class string per part. Extra classes are keyed by part, each a
+   * {@link ClassArg} — an `ss` map there is never seen by the build; wrap it in `ss()`.
+   */
+  (
+    props?: PropsOf<V> & object,
+    extra?: { -readonly [K in keyof S]?: ClassArg | undefined },
+  ): { -readonly [K in keyof S]: string };
   readonly variants: V;
   readonly slots: S;
   readonly config: unknown;
@@ -226,6 +243,64 @@ function optionKey(value: unknown): string | undefined {
 
 /** Slot sets already reported, so a recipe built in a render loop warns once. */
 const warnedFlatExtends = new Set<string>();
+const warnedExtraMap = new Set<string>();
+const warnedStaleCompound = new Set<string>();
+const warnedClassProp = new Set<string>();
+
+const warnedExtend = new Set<string>();
+
+/** Say so, once, when `extend` names something this recipe cannot build on. */
+function warnExtend(what: string): void {
+  if (firstTime(warnedExtend, what))
+    warn(`variants(): \`extend\` ${what}, so it inherits nothing.`);
+}
+
+/** Say so, once, when extra classes arrive in the props rather than after them. */
+function warnClassProp(name: string): void {
+  if (!firstTime(warnedClassProp, name)) return;
+  warn(
+    `variants(): props.${name} is not applied — extra classes are the second argument: ` +
+      `component(props, ${name}).`,
+  );
+}
+
+/** Say so, once, when a compound rule names a group the recipe does not declare. */
+function warnStaleCompound(keys: string[]): void {
+  const named = keys.join(", ");
+  if (!firstTime(warnedStaleCompound, named)) return;
+  warn(
+    `variants(): a compound rule names ${keys.map((k) => `"${k}"`).join(", ")}, which ` +
+      `the recipe does not declare, so the rule never applies.`,
+  );
+}
+
+/**
+ * Say so when a caller hands a component an `ss` map as an extra class value.
+ *
+ * The types refuse it; this is for plain JavaScript and casts. The runtime builds the
+ * prefixed classes happily, but the build reads the recipe and never the calls of the
+ * component, so every one of them lands on the element with no rule behind it.
+ */
+function warnExtraMap(value: unknown, where: string): void {
+  // `{ base: "mt-2" }` and `{}` build no prefixed class, and a literal `mt-2` is one
+  // Tailwind styles itself — so they work, and saying "those classes get no CSS" was false.
+  if (!prefixes(value)) return;
+  const keys = Object.keys(value as object).join(", ");
+  if (!firstTime(warnedExtraMap, `${where}:${keys}`)) return;
+  warn(
+    `variants(): ${where} got an ss map ({ ${keys} }). The build never reads a ` +
+      `component's call, so those classes get no CSS. Wrap the map in ss().`,
+  );
+}
+
+/** Whether `value` is an `ss` map that builds a prefixed class: a key other than `base`, at any depth. */
+function prefixes(value: unknown, seen = new Set<object>()): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || seen.has(value))
+    return false;
+  seen.add(value);
+  const map = value as Record<string, unknown>;
+  return Object.keys(map).some((key) => key !== "base" || prefixes(map[key], seen));
+}
 
 /**
  * Warn that a flat recipe extended a slotted one, and what was dropped.
@@ -276,19 +351,39 @@ interface Resolved {
  * enumerate, which is the invariant this package is written around.
  *
  * A copy rather than freezing what was passed in, because freezing someone else's object
- * as a side effect of reading it is its own surprise. One level per group is enough: an
- * option's *value* is a class value, and nothing reads through it again.
+ * as a side effect of reading it is its own surprise. All the way down: one level per
+ * group left compound rules, defaults and every `ss` map inside an option the caller's
+ * live objects, so a write to any of them still changed the parent after the fact — and
+ * built classes the scanner never saw. `extend` is a built component, with its own.
  */
 function snapshot(config: Record<string, unknown>): Record<string, unknown> {
-  const groups = (config.variants ?? {}) as Record<string, Record<string, unknown>>;
-  const copied: Record<string, Record<string, unknown>> = {};
-  for (const name of Object.keys(groups)) own(copied, name, Object.freeze({ ...groups[name] }));
-  const slots = config.slots as Record<string, unknown> | undefined;
-  return Object.freeze({
-    ...config,
-    variants: Object.freeze(copied),
-    ...(slots ? { slots: Object.freeze({ ...slots }) } : {}),
-  });
+  const { extend, ...rest } = config;
+  const copy = frozen(rest) as Record<string, unknown>;
+  return extend === undefined ? copy : Object.freeze({ ...copy, extend });
+}
+
+/**
+ * `value` copied, with every plain object and array in it frozen.
+ *
+ * Each copy is registered before its contents are, so a map that contains itself gets a
+ * copy that contains itself — which `ss` cuts, with one warning — rather than recursing
+ * until `RangeError` took the whole module import down with it.
+ */
+function frozen(value: unknown, copies = new Map<object, unknown>()): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (copies.has(value)) return copies.get(value);
+  const list = Array.isArray(value);
+  const proto = Object.getPrototypeOf(value);
+  if (!list && proto !== Object.prototype && proto !== null) return value;
+  const out: Record<string, unknown> | unknown[] = list ? [] : {};
+  copies.set(value, out);
+  for (const key of Object.keys(value))
+    own(
+      out as Record<string, unknown>,
+      key,
+      frozen((value as Record<string, unknown>)[key], copies),
+    );
+  return Object.freeze(out);
 }
 
 /**
@@ -316,8 +411,20 @@ function resolve(
   if (seen.has(config)) throw new Error("variants(): `extend` chain is a cycle.");
   seen.add(config);
   const parent = config.extend as { config?: Record<string, unknown> } | undefined;
-  const parentConfig = parent?.config;
+  let parentConfig = parent?.config;
+  // A shared config object, not a built recipe: the types said its variants were
+  // inherited, and the runtime inherited nothing and said nothing.
+  if (isDev && parent !== undefined && !parentConfig) {
+    warnExtend("takes a recipe built with variants(), not a config object");
+  }
   const parentSlots = parentConfig?.slots as Record<string, SsArg> | undefined;
+  // The mirror of a flat recipe on a slotted parent, and as silent: a flat option has no
+  // part to go to, so an `ss` map in one was spread by *slot name* — its `base` landing on
+  // a `base` part, the rest nowhere — while the parent's groups stayed props.
+  if (wantSlots && parentConfig && !parentSlots) {
+    if (isDev) warnExtend("names a recipe without slots, and this one has them");
+    parentConfig = undefined;
+  }
   const skipped = !wantSlots && parentSlots !== undefined ? Object.keys(parentSlots) : undefined;
   const from: Resolved =
     parentConfig && !skipped
@@ -372,10 +479,25 @@ function mergeSlots(
  * the default — so `V & VariantGroups` leaked a string index signature into the props
  * of every recipe that did not extend anything. Reading it back out of the component
  * type keeps the "no parent" case exactly `V`.
+ *
+ * The "no parent" case is tested first, and wrapped so it does not distribute. With
+ * `strictNullChecks` off — TypeScript's default — `undefined` is assignable to every
+ * object type, so `undefined extends { variants: infer P }` succeeded, `P` fell back to
+ * its constraint, and every recipe in such a project inherited `Record<string, …>` as its
+ * variants: boolean props refused, typos accepted, `ComponentProps & VariantProps`
+ * rejecting `onClick`.
  */
-type Inherited<E> = E extends { variants: infer P extends AnyGroups } ? P : Empty;
+type Inherited<E> = [E] extends [undefined]
+  ? Empty
+  : E extends { variants: infer P extends AnyGroups }
+    ? P
+    : Empty;
 /** The parent's slots, read the same way. */
-type InheritedSlots<E> = E extends { slots: infer P extends SlotDefaults } ? P : Empty;
+type InheritedSlots<E> = [E] extends [undefined]
+  ? Empty
+  : E extends { slots: infer P extends SlotDefaults }
+    ? P
+    : Empty;
 
 /**
  * Every slot name from both recipes.
@@ -385,20 +507,50 @@ type InheritedSlots<E> = E extends { slots: infer P extends SlotDefaults } ? P :
  * Only the *names* matter downstream, so the values are widened.
  */
 type MergedSlots<A extends SlotDefaults, B extends SlotDefaults> = {
-  [K in keyof A | keyof B]: SsArg;
+  readonly [K in keyof A | keyof B]: SsArg;
 };
 
-export function variants<
-  const S extends SlotDefaults,
-  const V extends SlottedGroups<S>,
-  const E extends AnySlottedRecipe | undefined = undefined,
->(
-  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E },
-): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
-export function variants<
-  const V extends VariantGroups,
-  const E extends AnyRecipe | undefined = undefined,
->(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
+/**
+ * Every part an option names, required to be a part.
+ *
+ * `V` is inferred `const` from the literal, so no excess-property check runs against
+ * {@link SlotValue}; and since every part in it is optional, TypeScript's weak-type check
+ * fires only when an option shares *no* key with the slots. `{ root: "p-2", titel: "…" }`
+ * shares `root`, so the typo compiled, and its classes reached no part at runtime.
+ */
+type KnownParts<V, S> = {
+  [G in keyof V]: {
+    [O in keyof V[G]]: { [K in keyof V[G][O]]: K extends keyof S ? unknown : never };
+  };
+};
+
+// The overloads that take base classes first come first. TypeScript reports a call no
+// overload accepts against the *last* one it tried, and with `variants(base)` last a typo
+// anywhere in a flat recipe — `compound: [{ tones: … }]` — was "'variants' does not exist
+// in type 'SsInput'", pointing at `variants` and naming nothing that was wrong. With the
+// flat config last, the error is about the flat config, at the rule, with the typo in it.
+// A config object is refused by the base overload by type rather than by excess-property
+// checking, so a config held in a variable cannot land there either.
+
+/**
+ * An object with any key only a config has. Testing for `variants` alone let
+ * `variants({ extend: button, base: "font-medium" })` through as base classes — `base` is
+ * an `ss` key too — and the runtime, which reads an object without `variants` the same
+ * way, rendered `font-medium` and inherited nothing.
+ */
+type ConfigShaped =
+  | { variants: unknown }
+  | { extend: unknown }
+  | { slots: unknown }
+  | { compound: unknown }
+  | { compoundVariants: unknown }
+  | { defaults: unknown }
+  | { defaultVariants: unknown };
+
+/** `cva`'s one-argument call: base classes and nothing else. */
+export function variants<const B extends SsArg>(
+  base: B extends ConfigShaped ? never : B,
+): VariantComponent<Empty>;
 /**
  * `cva`'s own call shape: the base classes first, everything else second.
  *
@@ -413,8 +565,19 @@ export function variants<
   base: SsArg,
   config: Omit<VariantsConfig<V, Inherited<E>>, "base"> & { extend?: E },
 ): VariantComponent<V & Inherited<E>>;
-/** `cva`'s other call: base classes and nothing else. */
-export function variants(base: SsArg): VariantComponent<Empty>;
+export function variants<
+  const S extends SlotDefaults,
+  const V extends SlottedGroups<S>,
+  const E extends AnySlottedRecipe | undefined = undefined,
+>(
+  config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E } & {
+    variants: KnownParts<V, MergedSlots<S, InheritedSlots<E>>>;
+  },
+): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
+export function variants<
+  const V extends VariantGroups,
+  const E extends AnyRecipe | undefined = undefined,
+>(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
 
 /**
  * Build a component's `className` from a set of typed variants.
@@ -488,7 +651,10 @@ export function variants(first: any, second?: any): any {
   const slots = resolved.slots;
 
   /** The option each variant resolves to for one call, defaults included. */
-  const pick = (props?: Record<string, unknown>): Record<string, string | undefined> => {
+  const pick = (
+    props?: Record<string, unknown>,
+    forwarded: readonly unknown[] = [],
+  ): Record<string, string | undefined> => {
     // Spread would let an explicitly-`undefined` prop erase a default, and
     // `{ size: undefined }` is what a component writes when it forwards an optional
     // prop it did not receive.
@@ -501,14 +667,39 @@ export function variants(first: any, second?: any): any {
         const key = optionKey(props[name]);
         if (key !== undefined) own(chosen, name, key);
       }
+      // cva and tv read extra classes off the props; here they are a second argument,
+      // and a props object built elsewhere slips past the types, so the class was
+      // dropped without a word. Other unknown props — `children`, `onClick` — are the
+      // normal cost of forwarding a component's props, and stay quiet. So does one that
+      // was passed on as the extra argument too — `button(p, p.className)` is the
+      // natural wrapper, and it works.
+      if (isDev) {
+        for (const name of ["class", "className"]) {
+          const value = props[name];
+          if (value !== undefined && !names.includes(name) && !forwarded.includes(value)) {
+            warnClassProp(name);
+          }
+        }
+      }
     }
     return chosen;
   };
 
+  // A rule that names a group this recipe does not have can never be satisfied — cva
+  // and tailwind-variants never apply one — but only the declared groups were checked,
+  // so a typo or a since-renamed group counted as met and the rule applied everywhere.
+  const live = resolved.compound.filter((rule) => {
+    const stale = Object.keys(rule).filter(
+      (key) => key !== "class" && key !== "className" && !names.includes(key),
+    );
+    if (stale.length > 0 && isDev) warnStaleCompound(stale);
+    return stale.length === 0;
+  });
+
   /** Every compound rule this call satisfies, in declaration order. */
   const matching = (chosen: Record<string, string | undefined>): unknown[] => {
     const out: unknown[] = [];
-    for (const rule of resolved.compound) {
+    for (const rule of live) {
       let matched = true;
       for (const name of names) {
         const wanted = rule[name];
@@ -525,7 +716,7 @@ export function variants(first: any, second?: any): any {
   if (slots) {
     const slotNames = Object.keys(slots);
     const component = (props?: Record<string, unknown>, extra?: Record<string, SsArg>) => {
-      const chosen = pick(props);
+      const chosen = pick(props, extra === undefined ? [] : Object.values(extra));
       const parts: Record<string, SsArg[]> = {};
       for (const slot of slotNames) own(parts, slot, [...(slots[slot] as SsArg[])]);
 
@@ -546,17 +737,34 @@ export function variants(first: any, second?: any): any {
         spread(ownOr<unknown>(groups[name] as Record<string, unknown>, value, undefined));
       }
       for (const rule of matching(chosen)) spread(rule);
-      if (extra) spread(extra);
+      if (extra) {
+        if (isDev)
+          for (const slot of slotNames)
+            warnExtraMap(ownOr(extra, slot, undefined), `the "${slot}" extra`);
+        spread(extra);
+      }
 
       const out: Record<string, string> = {};
       for (const slot of slotNames) own(out, slot, ss(...(parts[slot] as SsArg[])));
       return out;
     };
-    return Object.assign(component, { variants: groups, slots, config });
+    // Each part's own classes, frozen — not the arrays the component spreads on every
+    // call, which read as clsx dictionaries through `ss` and which a write corrupted for
+    // every later render. Built on first read: at creation, `configure()` may not have
+    // run yet, and a declared key would warn as unknown.
+    // `fromEntries` defines each key as its own, so a `__proto__` part stays a part.
+    let declared: Readonly<Record<string, string>> | undefined;
+    return Object.defineProperty(Object.assign(component, { variants: groups, config }), "slots", {
+      enumerable: true,
+      get: () =>
+        (declared ??= Object.freeze(
+          Object.fromEntries(slotNames.map((slot) => [slot, ss(...(slots[slot] as SsArg[]))])),
+        )),
+    });
   }
 
   const component = (props?: Record<string, unknown>, ...rest: SsArg[]): string => {
-    const chosen = pick(props);
+    const chosen = pick(props, rest);
     const parts: SsArg[] = [...resolved.base];
     for (const name of names) {
       const value = chosen[name];
@@ -564,6 +772,7 @@ export function variants(first: any, second?: any): any {
       parts.push(ownOr<SsArg>(groups[name] as Record<string, SsArg>, value, undefined));
     }
     for (const rule of matching(chosen)) parts.push(rule as SsArg);
+    if (isDev) for (const extra of rest) warnExtraMap(extra, "an extra argument");
     return ss(...parts, ...rest);
   };
 

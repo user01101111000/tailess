@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetWarnings } from "../../src/internal/settings.js";
+import { configure, resetWarnings } from "../../src/internal/settings.js";
 import { ss } from "../../src/utils/ss.js";
 
 // Every warning here is memoised, so one test tripping a key would leave the next one
@@ -79,6 +79,23 @@ describe("ss", () => {
     // @ts-expect-error "nope" is not a Tailwind breakpoint or state variant.
     expect(ss({ nope: "block", base: "flex", md: "grid" })).toBe("flex md:grid nope:block");
     expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("says what is true of an unknown key, not that Tailwind lacks it", () => {
+    // `aria-checked` is a working Tailwind variant, and the warning called it "not a
+    // Tailwind breakpoint or state variant"; for "" it described a ":" prefix that the
+    // top level never emits.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(ss({ "aria-checked": "p-4" } as never)).toBe("aria-checked:p-4");
+    expect(ss({ "": "p-2" } as never)).toBe("p-2");
+    const messages = warn.mock.calls.map(([message]) => String(message));
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain(`"aria-checked" is not one of ss()'s keys`);
+    for (const message of messages) {
+      expect(message).not.toContain("not a Tailwind");
+      expect(message).not.toContain('":" prefix');
+    }
     warn.mockRestore();
   });
 
@@ -226,5 +243,76 @@ describe("ss, nested buckets", () => {
     expect(ss(input)).toContain("flex");
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it("cuts a cycle where it closes, however many keys reach it, and says so once", () => {
+    // Bounding the depth alone made a map reaching itself from four keys walk 4¹⁰ paths —
+    // seconds per call, in production too — and warn once per path on every call.
+    resetWarnings();
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      const a: Record<string, unknown> = { base: "p-4" };
+      a.md = a;
+      a.lg = a;
+      a.xl = a;
+      a.hover = a;
+      const input = a as unknown as Parameters<typeof ss>[0];
+      const started = performance.now();
+      expect(ss(input)).toBe("p-4");
+      expect(ss(input)).toBe("p-4");
+      expect(performance.now() - started).toBeLessThan(50);
+      expect(seen.filter((m) => m.includes("contains itself"))).toHaveLength(1);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  });
+
+  it("drops buckets nested past the scanner's depth, and says so once", () => {
+    // The scanner stops at the same depth. A level the runtime emitted past it would be a
+    // class with no CSS behind it, so the runtime drops it too — out loud.
+    const seen: string[] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation((m: string) => {
+      seen.push(m);
+    });
+    let map: Record<string, unknown> = { base: "deepest" };
+    for (let level = 12; level > 0; level -= 1) map = { base: `p-${level}`, hover: map };
+    const once = ss(map as Parameters<typeof ss>[0]);
+    ss(map as Parameters<typeof ss>[0]);
+    warn.mockRestore();
+
+    expect(once.split(" ")).toContain("p-1");
+    expect(once).toContain("hover:p-2");
+    expect(once).not.toContain("deepest");
+    const deep = seen.filter((m) => m.includes("deep and were dropped"));
+    expect(deep).toHaveLength(1);
+    expect(deep[0]).toContain("more than 10 deep");
+  });
+
+  it("still emits one map shared by two keys, which is not a cycle", () => {
+    const states = { base: "p-2", hover: "underline" };
+    expect(ss({ md: states, lg: states })).toBe(
+      "md:p-2 md:hover:underline lg:p-2 lg:hover:underline",
+    );
+  });
+
+  it("is not left thinking a map is its own ancestor after onWarn throws", () => {
+    // The documented fatal `onWarn` throws out of the middle of a walk; the maps on the
+    // way down must not stay on the path, or a later call drops a map that is fine.
+    resetWarnings();
+    const shared = { hover: "underline" };
+    const a: Record<string, unknown> = { base: "p-4", md: shared };
+    a.lg = a;
+    configure({
+      onWarn: (message) => {
+        throw new Error(message);
+      },
+    });
+    try {
+      expect(() => ss(a as unknown as Parameters<typeof ss>[0])).toThrow(/contains itself/);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+    expect(ss({ sm: shared })).toBe("sm:hover:underline");
   });
 });
