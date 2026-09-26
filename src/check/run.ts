@@ -222,7 +222,8 @@ checks a different set of files than your build does.
 Exit codes:
   0  every runtime-built class has a rule (or the scan found no tailess calls)
   1  a class reaches the element with no rule behind it
-  2  nothing could be checked — no stylesheet, no files scanned, or a bad option`;
+  2  nothing could be checked — no stylesheet that generates utilities, no files
+     scanned, a Tailwind prefix(), or a bad option`;
 
 /**
  * The package's own version, for `--version`.
@@ -669,7 +670,7 @@ async function runEmit(options: Options): Promise<number> {
     // that answered in prose, so `emit --out … --json | jq -e .ok` failed to parse on a
     // run that exited 0 — which reads as a broken pipeline rather than a pass.
     console.log(
-      jsonResult("emit", 0, { files: files.length, classes: classes.length, out: where }),
+      jsonResult("emit", 0, { files: files.length, classes: classes.length, out: posix(where) }),
     );
     // `--json` changes *what emit produces*, not just how it prints: the file holds the
     // candidate list, not a stylesheet. Naming it `.css` and importing it is the shape
@@ -732,6 +733,25 @@ async function runCheck(options: Options): Promise<number> {
         "--content at the directory that holds it.",
     );
     return finish(2, { error: "no-stylesheet", roots: shown(roots, options.cwd) });
+  }
+
+  // A mistyped --css surfaced as Node's own "ENOENT: … open '…'" (or "EISDIR" for a
+  // folder), under a JSON error of "crashed" — which reads as a bug in the gate, not a
+  // typo in the command.
+  if (options.css !== undefined) {
+    const [css] = entries as [string];
+    if (
+      !(await stat(css).then(
+        (info) => info.isFile(),
+        () => false,
+      ))
+    ) {
+      complain(
+        `[tailess] --css ${options.css} is not a file. Pass the stylesheet that imports ` +
+          "Tailwind, or leave --css out to find it.",
+      );
+      return finish(2, { error: "no-stylesheet", css: posix(relative(options.cwd, css) || css) });
+    }
   }
 
   const scanned = await collect({
@@ -819,7 +839,7 @@ async function runCheck(options: Options): Promise<number> {
     return finish(2, {
       error: "unsupported-prefix",
       prefix,
-      stylesheet: relative(options.cwd, entry) || entry,
+      stylesheet: posix(relative(options.cwd, entry) || entry),
     });
   }
 

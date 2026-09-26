@@ -16,7 +16,7 @@ Never do these, however natural they look:
 - Hoist a class into a `const` and pass the variable: `ss({ md: size })`
 - Build one by interpolation: `` ss({ md: `text-${scale}` }) ``
 - Spread into a bucket map, or use a computed key
-- Rename the import: `import { ss as tw }` removes every class in that file
+- Rename the import: `import { ss as tw }` removes every prefixed class `tw()` builds
 
 Do these instead:
 

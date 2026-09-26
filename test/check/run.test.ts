@@ -404,6 +404,35 @@ describe("the check itself", () => {
     expect(parsed.broken[0].files).toEqual(["src/Card.tsx"]);
     expect(parsed.diagnostics[0]).toMatchObject({ file: "src/Card.tsx" });
     expect(parsed.stylesheets).toEqual(["src/a.css"]);
+
+    // The paths on the exits that are not a report: a refused prefix, and emit's file.
+    await writeFile(join(dir, "src", "a.css"), `@import "tailwindcss" prefix(tw);`);
+    const prefixed = JSON.parse((await check({ json: true })).output);
+    expect(prefixed).toMatchObject({ error: "unsupported-prefix", stylesheet: "src/a.css" });
+    vi.restoreAllMocks();
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((m) => void out.push(String(m)));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const target = join(dir, "out", "candidates.json");
+    await run({ ...base(dir), command: "emit", json: true, out: target });
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ out: "out/candidates.json" });
+  });
+
+  it("says a --css that is not a file is not a file, rather than crashing", async () => {
+    // Node's raw "ENOENT: … open '…'" under `"error": "crashed"` read as a bug in the gate.
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    await mkdir(join(dir, "styles"));
+    for (const css of ["missing.css", "styles"]) {
+      const prose = await check({ css });
+      expect(prose.code).toBe(2);
+      expect(prose.output).toContain(`--css ${css} is not a file`);
+      expect(prose.output).not.toMatch(/ENOENT|EISDIR/);
+      vi.restoreAllMocks();
+      const { code, output } = await check({ css, json: true });
+      expect(code).toBe(2);
+      expect(JSON.parse(output)).toMatchObject({ ok: false, error: "no-stylesheet", css });
+      vi.restoreAllMocks();
+    }
   });
 
   it("says why it could not run, in JSON too", async () => {

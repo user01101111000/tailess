@@ -323,7 +323,7 @@ the types back rather than calling the API. They were not called out when it shi
 
   Runtime cost: routing `cn` and `ss` through `internal/settings.ts` puts them at **5,683
   characters**, from 5,177 on the last release — the figure of 5,170 that stood in this
-  paragraph was `main`'s, and nothing had re-measured it. `variants` on top of that is 2,908.
+  paragraph was `main`'s, and nothing had re-measured it. `variants` on top of that is 2,920.
   The size budget moved deliberately, and every number is now measured in the test that pins
   it rather than carried forward by hand.
 
@@ -383,11 +383,13 @@ the types back rather than calling the API. They were not called out when it shi
   reports `checked: N` for a check it never ran. `--json` was silently ignored by `doctor`
   and `init`, every failure printed the whole usage text, and `-v` was undocumented.
 
-  **Half of what a consumer installs is gone.** Sourcemaps were 66% of the tarball, and
+  **The tarball is smaller.** Sourcemaps were 66% of the tarball, and
   581 kB of that was the scanner's source inlined three times into CJS maps nothing can
   debug — the argument `tsup.config.ts` already makes for the CLI's map, applied where it
-  is worth more. Packed 421,892 → 197,121 bytes. `*.tgz` is ignored, so hand-verifying a
-  release cannot leave a binary blob one `git add -A` from being in history.
+  is worth more. As published, 296,329 → 254,662 bytes packed and 1,078,071 → 906,217
+  unpacked — corrected from a 421,892 → 197,121 measured on a build that never shipped.
+  `*.tgz` is ignored, so hand-verifying a release cannot leave a binary blob one
+  `git add -A` from being in history.
 
   **The release waits for CI.** It published on push to `main` while CI ran beside it,
   re-verifying a strict subset — not the platform matrix, not the `engines` floor, not the
@@ -544,7 +546,8 @@ slots, … })` with the map hoisted to a const, and `slots: { ...shared, title: 
   The bundle budget moves 12,200 -> 13,000 for the two `variants` fixes. While measuring it,
   the note claiming a consumer using only `ss` and `cn` bundles 5,170 characters "unchanged"
   through several earlier raises turned out to be neither — nothing had re-measured it. It
-  is 5,344, measured, along with `vars` (+411) and `variants` (+2,322).
+  was 5,344 at that point on the branch, with `vars` (+411) and `variants` (+2,322); the
+  release as shipped measures 5,683, `vars` +419 and `variants` +2,920.
 
 ## 0.11.0
 

@@ -351,11 +351,13 @@ describe("the per-file cache", () => {
     await writeFile(file, `ss({ md: "p-4" })`);
     const old = new Date(Date.now() - 60_000);
     await utimes(file, old, old);
-    const first = await collect({ roots: [dir] });
-    const second = await collect({ roots: [dir] });
-    expect(second.classes).toEqual(first.classes);
-    // Same content either way; what matters is that it was not read again — the
-    // entry object is the cached one.
-    expect(second.diagnostics).toEqual(first.diagnostics);
+    expect((await collect({ roots: [dir] })).classes).toEqual(["md:p-4"]);
+    // What matters is that it is not read again: an unchanged file costs one `stat`. So
+    // change the bytes behind the cache's back — same size, same old mtime — and the
+    // trusted entry must still answer. Compared by value, as this test used to, a cache
+    // that never hit passed while every rescan re-read every file.
+    await writeFile(file, `ss({ lg: "p-4" })`);
+    await utimes(file, old, old);
+    expect((await collect({ roots: [dir] })).classes).toEqual(["md:p-4"]);
   });
 });

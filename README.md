@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-dark.svg">
-  <img src="./assets/hero.svg" alt="tailess — write Tailwind classes as a readable object" width="840">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/user01101111000/tailess/main/assets/hero-dark.svg">
+  <img src="https://raw.githubusercontent.com/user01101111000/tailess/main/assets/hero.svg" alt="tailess — write Tailwind classes as a readable object" width="840">
 </picture>
 
 <br>
@@ -58,7 +58,7 @@ className={ss(
   {
     base: "rounded-lg border p-4",
     md:   "p-6",
-    dark: { base: "border-neutral-800", hover: "border-neutral-700" },
+    dark: "border-neutral-800",
   },
   isDisabled && { base: "opacity-50", sm: "bg-red-500" },
   className,
@@ -131,7 +131,7 @@ so wrap one in an array: `ss([{ "font-bold": isActive }])`.
 </td>
 <td width="50%" valign="top">
 
-🔌 &nbsp;**One line of setup**
+🔌 &nbsp;**One plugin, no config**
 
 A Vite or PostCSS plugin. No config file, no CSS changes, nothing to commit.
 
@@ -165,7 +165,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 
 ⚡ &nbsp;**Fast**
 
-`ss()` with three groups costs ~385 ns, one `tailwind-merge` pass whatever the shape.
+`ss()` with three groups costs ~244 ns, one `tailwind-merge` pass whatever the shape.
 
 </td>
 </tr>
@@ -189,7 +189,7 @@ Add a class and it appears without restarting; delete it and it stops being emit
 npm install tailess
 ```
 
-A runnable app is in [`examples/vite-react`](./examples/vite-react) — Vite + React, every
+A runnable app is in [`examples/vite-react`](https://github.com/user01101111000/tailess/tree/main/examples/vite-react) — Vite + React, every
 class built at runtime, with `npm run verify` wired to the gate. CI builds it on every
 push, and asserts the gate goes red when the plugin is removed.
 
@@ -201,13 +201,13 @@ push, and asserts the gate goes red when the plugin is removed.
 
 ## Setup
 
-Add one line to the config file you already have for Tailwind. There is no
+Add the plugin to the config file you already have for Tailwind. There is no
 `tailess.config`, nothing to add to your CSS, and no generated file to commit.
 
 ```bash
 npx tailess init          # shows the edit it would make
 npx tailess init --write  # makes it
-npx tailess doctor        # says whether the plugin is wired up, and exits 1 if not
+npx tailess doctor        # says whether the plugin is wired up: exit 1 if not, 2 if no config
 ```
 
 `init` reads your project, picks the right integration, and writes the edit — after
@@ -223,7 +223,7 @@ PostCSS entry counts only when it is listed, not `false`, and ahead of
 `@tailwindcss/postcss`. `init` edits `vite.config` and `postcss.config` files; for a
 framework's config or a JSON or YAML one it prints the line to add instead.
 
-Or do it by hand — it is one line either way.
+Or do it by hand — an import and a `plugins` entry in Vite, one entry in PostCSS.
 
 ### Vite
 
@@ -833,7 +833,7 @@ compounds and the caller's `className` together.
 **What is deliberately absent.** Responsive variant selection at the call site —
 `size={{ base: "sm", md: "lg" }}` — is not supported and will not be: the scanner reads
 your *recipe*, never the call sites of the component it builds, so it would have to
-enumerate every option under all thirteen breakpoints or let the class land with no CSS.
+enumerate every option under every breakpoint and container size, or let the class land with no CSS.
 Put the breakpoints inside the option instead (`lg: { base: "text-lg", md: "px-6" }`),
 which is statically knowable and is the shape this is built around.
 
@@ -1207,10 +1207,10 @@ cannot run yours. A project that calls `configure({ merge })` gets no reports of
 kind rather than wrong ones.
 
 **A renamed import** is the widest of them. The scanner finds calls by identifier, so
-`import { ss as tw } from "tailess"` is one line that removes every class in that file
-from the candidate list — while the file compiles, type-checks and renders exactly the
-`class` attribute you wrote. Renaming `cn` or `match` is free; renaming a helper that
-builds a variant prefix is not, and that is what this reports.
+`import { ss as tw } from "tailess"` is one line that removes every prefixed class its
+`tw(…)` calls build from the candidate list — while the file compiles, type-checks and
+renders exactly the `class` attribute you wrote. Renaming `cn` or `match` is free;
+renaming a helper that builds a variant prefix is not, and that is what this reports.
 
 **A bucket the scanner cannot read** is the package's most common support case, and the
 type system cannot express any of it — `ss({ md: size })` is perfectly well typed and
@@ -1294,10 +1294,14 @@ npx tailess check
 ```
 
 ```
+[tailess] src/app.css: your theme removes the "md" breakpoint, but tailess still offers it as a key — ss({ "md": … }) compiles, emits "md:", and no rule is generated for it.
 [tailess] 1 of 3 runtime-built classes reach the element with no rule behind them:
 
   md:p-4
+    src/Card.tsx
     "p-4" resolves on its own, so the variant is what fails.
+
+Usually a @theme that moved a breakpoint, a variant your CSS redefines, or an arbitrary value Tailwind rejects.
 ```
 
 It exits `1` when something is wrong, so it can gate a build:
@@ -1311,7 +1315,7 @@ Use `--strict` in CI. The check compiles your stylesheet with the candidates the
 with `tailess()` deleted from the config it prints a "no build config here calls the
 plugin" warning and still exits `0`. `--strict` turns that warning — and the
 [build-time checks](#build-time-checks) — into exit `1`. It is what CI runs on
-[`examples/vite-react`](./examples/vite-react), which asserts the gate goes red with the
+[`examples/vite-react`](https://github.com/user01101111000/tailess/tree/main/examples/vite-react), which asserts the gate goes red with the
 plugin removed.
 
 | | |
@@ -1329,7 +1333,7 @@ plugin removed.
 > Give `--content`, `--extensions` and `--ignore` the same values as the
 > [plugin](#plugin-options), or the gate reads a different set of files than your build
 > does — a project scanning `["tsx", "vue"]` has a build enumerating two extensions and a
-> gate reading thirteen, and a plugin narrowed to `content: ["src/pages"]` builds nothing
+> gate reading fourteen, and a plugin narrowed to `content: ["src/pages"]` builds nothing
 > for `src/components` while a gate reading all of `src` passes it. Wrong in both
 > directions, and silently.
 
@@ -1354,7 +1358,7 @@ Every finding names the file it came from, and `--json` gives a CI job something
 | ---: | --- |
 | `0` | every runtime-built class has a rule — or the scan ran and found no tailess calls |
 | `1` | a class reaches the element with no rule behind it |
-| `2` | nothing could be checked: no entry stylesheet, no files scanned, or a bad option |
+| `2` | nothing could be checked: no entry stylesheet (or none that generates utilities), no files scanned, a Tailwind `prefix()`, or a bad option |
 
 `2` is the one worth wiring an alert to. It means the gate did not run, which in CI looks
 nothing like a failure but proves exactly as much: a `--content` typo, a task runner in
@@ -1694,7 +1698,7 @@ pipeline, so your theme values resolve exactly as they do for classes written by
 
 Two things changed, and **TypeScript catches both** — neither can turn into a style that
 quietly stops appearing. Everything else is untouched: every existing `ss({ … })` call,
-`cn`, and all seven other helpers behave exactly as before.
+`cn`, and all eight other helpers behave exactly as before.
 
 **1. A `clsx` dictionary as a bucket value now goes in an array,** because a bare object
 is a nested map:
@@ -1721,12 +1725,12 @@ this, a `vite.config.cjs` got a namespace object that Vite rejects.
 
 ## Contributing
 
-Issues and PRs welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md).
+Issues and PRs welcome — see [CONTRIBUTING.md](https://github.com/user01101111000/tailess/blob/main/CONTRIBUTING.md).
 
 ```bash
 npm install
+npm run build   # before the tests: the plugin-shape test reads dist/
 npm test
-npm run build
 ```
 
 ## License
@@ -1738,12 +1742,12 @@ npm run build
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/wordmark-dark.svg">
-  <img src="./assets/wordmark.svg" alt="tailess" width="150">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/user01101111000/tailess/main/assets/wordmark-dark.svg">
+  <img src="https://raw.githubusercontent.com/user01101111000/tailess/main/assets/wordmark.svg" alt="tailess" width="150">
 </picture>
 
 <br>
 
-[npm](https://www.npmjs.com/package/tailess) · [Issues](https://github.com/user01101111000/tailess/issues) · [Contributing](./CONTRIBUTING.md) · [Changelog](./CHANGELOG.md)
+[npm](https://www.npmjs.com/package/tailess) · [Issues](https://github.com/user01101111000/tailess/issues) · [Contributing](https://github.com/user01101111000/tailess/blob/main/CONTRIBUTING.md) · [Changelog](./CHANGELOG.md)
 
 </div>
