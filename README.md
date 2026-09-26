@@ -242,7 +242,10 @@ export default defineConfig({
 
 Order in the array doesn't matter — the hook is registered `order: "pre"`, so it always
 runs before Tailwind wherever you put it. A CommonJS config works the same way:
-`require("tailess/vite")` is the plugin itself.
+`require("tailess/vite")` is the plugin itself. An `@import "tailwindcss"` written in a
+Vue or Svelte `<style>` block, or an inline `<style>` in `index.html`, is handled like a
+`.css` file — though `tailess check` only reads stylesheet files, so give it one with
+`--css` or it exits `2` with nothing checked.
 
 ### Next.js
 

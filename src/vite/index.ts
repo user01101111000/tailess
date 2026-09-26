@@ -70,6 +70,15 @@ const passthroughQuery = /[?&](?:raw|url)(?:&|$)/;
 
 const cssFile = /\.(?:css|pcss|postcss|scss|sass|less|styl|stylus)$/;
 
+/**
+ * A stylesheet that is not a file of its own: a Vue or Svelte `<style>` block
+ * (`App.vue?vue&type=style&index=0&lang.css`) or an inline `<style>` in `index.html`
+ * (`index.html?html-proxy&index=0.css`). Tailwind compiles an `@import "tailwindcss"`
+ * written in either, so the same test it uses decides it here — reading only the path
+ * before `?` skipped them, and every runtime-built class went unstyled, silently.
+ */
+const styleBlock = /&lang\.css(?:&|$)|[?&]index=\d+\.css$/;
+
 /** Coalesce bursts of file-system events (editors save in several steps). */
 const debounceMs = 25;
 
@@ -246,7 +255,7 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
       async handler(code, id) {
         if (passthroughQuery.test(id)) return null;
         const [file = ""] = id.split("?");
-        if (!cssFile.test(file)) return null;
+        if (!cssFile.test(file) && !styleBlock.test(id)) return null;
 
         const entry = resolve(file);
         // Only a stylesheet Tailwind emits utilities into — directly, or through a

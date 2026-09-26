@@ -891,3 +891,38 @@ describe("a remote @import ahead of Tailwind's", () => {
     keptFirst(compiled.css);
   });
 });
+
+describe("Tailwind imported inside a component's <style> block, through Vite", () => {
+  // Vue and Svelte hand a `<style>` block over as `App.vue?vue&type=style&index=0&lang.css`,
+  // and Tailwind compiles an `@import "tailwindcss"` written there. The plugin read only
+  // the path before `?`, saw `.vue`, and skipped it: every runtime-built class unstyled.
+  it.each([
+    ["a Vue block", "App.vue?vue&type=style&index=0&lang.css"],
+    ["a Svelte block", "App.svelte?svelte&type=style&lang.css"],
+    ["an inline <style> in index.html", "index.html?html-proxy&index=0.css"],
+  ])("injects into %s", async (_, query) => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const [name] = query.split("?") as [string];
+    const id = join(dir, query);
+    const result = await plugin.transform.handler.call(
+      { addWatchFile: () => {} },
+      `@import "tailwindcss";`,
+      id,
+    );
+    expect(result?.code).toMatch(/@import "[^"]*tailess\.css"/);
+    const compiled = await postcss([tailwindcss({ base: dir, optimize: false })]).process(
+      result?.code ?? "",
+      { from: join(dir, name) },
+    );
+    expect(missingRules(compiled.css, expected)).toEqual([]);
+  });
+
+  it("still leaves a block handed over raw alone", async () => {
+    const plugin = tailessVite({ content: [dir] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".cache") });
+    const id = join(dir, "App.vue?vue&type=style&index=0&lang.css&raw");
+    const call = { addWatchFile: () => {} };
+    expect(await plugin.transform.handler.call(call, `@import "tailwindcss";`, id)).toBeNull();
+  });
+});
