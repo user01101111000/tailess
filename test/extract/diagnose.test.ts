@@ -619,6 +619,22 @@ describe("a bucket the scanner cannot read", () => {
     }
   });
 
+  it("says nothing about a TypeScript object type, which is not a bucket map", () => {
+    // Every class here is enumerated and has CSS; the `string` the warning quoted is a type.
+    expect(kinds(`ss({ md: cond ? "p-4" : "p-2" } as { md: string })`)).toEqual([]);
+    expect(kinds(`ss({ md: "p-4" } satisfies { md: string })`)).toEqual([]);
+    expect(kinds(`ss({ md: "m-1" }, ((x: { md: string }) => x.md)(v) && { lg: "p-6" })`)).toEqual(
+      [],
+    );
+    expect(kinds(`ss({ md: void 0 })`)).toEqual([]);
+  });
+
+  it("still reads the other branch of a ternary, whose colon is not a type's", () => {
+    expect(kinds(`ss(cond ? { md: "p-4" } : { md: size })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss(a ? b : { md: size })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`ss({ base: "p-1", md: { base: size } })`)).toEqual(["dynamic-value"]);
+  });
+
   it("says nothing about a later argument, which is not a bucket", () => {
     expect(kinds(`ss({ md: "p-4" }, className)`)).toEqual([]);
     expect(kinds(`ss(base, cond && { md: "p-4" })`)).toEqual([]);

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -359,6 +359,20 @@ describe("a plugin list built in another file", () => {
     const init = await capture(() => runInit(dir, true));
     expect(init.code).toBe(0);
     expect(await readFile(join(dir, "vite.config.ts"), "utf8")).toBe(config);
+  });
+
+  it("names a preset in a folder with forward slashes, on every OS", async () => {
+    // The JSON contract shows `src/app.css`; a Windows runner wrote `config\\vite.ts`,
+    // so a script matching on the path passed on one OS and failed on the other.
+    await mkdir(join(dir, "config"));
+    await writeFile(join(dir, "config", "vite.ts"), preset);
+    await writeFile(
+      join(dir, "vite.config.ts"),
+      `import { sharedPlugins } from "./config/vite";\nexport default { plugins: sharedPlugins() };\n`,
+    );
+    const doctor = await capture(() => runDoctor(dir, true));
+    expect(doctor.code).toBe(0);
+    expect(JSON.parse(doctor.output)).toMatchObject({ via: "config/vite.ts" });
   });
 
   it("still fails when the preset does not wire it either", async () => {

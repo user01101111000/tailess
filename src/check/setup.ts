@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { maskLiterals } from "../extract/scan.js";
 import { jsonResult } from "./result.js";
@@ -788,7 +788,7 @@ function shortestEdit(a: string[], b: string[]): [op: "-" | "+", line: string][]
  */
 export async function runDoctor(cwd: string, json = false): Promise<number> {
   const host = await findHost(cwd);
-  const where = (file: string) => relative(cwd, file) || file;
+  const where = (file: string) => (relative(cwd, file) || file).split(sep).join("/");
   const say = (message: string, error = false) => {
     if (json) return;
     if (error) console.error(message);
@@ -1038,7 +1038,7 @@ function handEdit(host: Exclude<Host, { kind: "unknown" }>): string {
 /** `tailess init` — write that edit, after showing it. */
 export async function runInit(cwd: string, write: boolean, json = false): Promise<number> {
   const host = await findHost(cwd);
-  const where = (file: string) => relative(cwd, file) || file;
+  const where = (file: string) => (relative(cwd, file) || file).split(sep).join("/");
   const say = (message: string, error = false) => {
     if (json) return;
     if (error) console.error(message);

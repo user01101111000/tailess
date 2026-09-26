@@ -93,6 +93,16 @@ describe("parsing the command line", () => {
     expect(() => parse(["--content", "--css"])).toThrow(/needs a path/);
   });
 
+  it("refuses an empty value, which is what an unset variable expands to", () => {
+    // `--content "$SRC_DIR"` with the variable unset scanned the whole working directory
+    // and passed, and `--css ""` quietly went back to auto-detecting.
+    for (const flag of ["--content", "--css", "--out", "--extensions", "--ignore"]) {
+      expect(() => parse(["emit", flag, ""])).toThrow(/needs a/);
+      expect(() => parse(["emit", flag, " , "])).toThrow(/needs a/);
+    }
+    expect(parse(["--content", "src,"])).toMatchObject({ content: ["src"] });
+  });
+
   it("refuses an option it does not know", () => {
     expect(() => parse(["--bogus"])).toThrow(/unknown option/);
   });
@@ -376,6 +386,24 @@ describe("the check itself", () => {
     expect(parsed.broken).toEqual([{ class: "md:p-4", utility: "p-4", files: ["Card.tsx"] }]);
     expect(parsed.diagnostics[0]).toMatchObject({ kind: "dead-class", file: "Card.tsx" });
     expect(parsed.stylesheets).toEqual(["a.css"]);
+  });
+
+  it("writes paths with forward slashes, on every OS", async () => {
+    // The contract above shows `Card.tsx`; one folder down, a Windows runner wrote
+    // `src\Card.tsx` and a CI script matching on the path broke there alone.
+    await mkdir(join(dir, "src"));
+    await writeFile(
+      join(dir, "src", "Card.tsx"),
+      `import { ss } from "tailess";\nss({ md: "p-4" });\nss({ base: "p-4 p-2" });`,
+    );
+    await writeFile(
+      join(dir, "src", "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }`,
+    );
+    const parsed = JSON.parse((await check({ json: true })).output);
+    expect(parsed.broken[0].files).toEqual(["src/Card.tsx"]);
+    expect(parsed.diagnostics[0]).toMatchObject({ file: "src/Card.tsx" });
+    expect(parsed.stylesheets).toEqual(["src/a.css"]);
   });
 
   it("says why it could not run, in JSON too", async () => {
@@ -754,6 +782,12 @@ describe("tailess emit", () => {
     const { code, output } = await emit();
     expect(code).toBe(2);
     expect(output).toContain("nothing to emit");
+  });
+
+  it("names the glob case, as check does", async () => {
+    const { code, output } = await emit({ content: [join(dir, "**", "*.tsx")] });
+    expect(code).toBe(2);
+    expect(output).toContain("Wildcards are not expanded");
   });
 });
 

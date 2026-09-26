@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { collect } from "../extract/collect.js";
 import { maskLiterals } from "../extract/scan.js";
@@ -130,7 +130,10 @@ export function parse(argv: readonly string[]): Options | "help" | "version" {
     }
     if (listOptions.has(arg) || pathOptions.has(arg)) {
       const value = rest[i + 1];
-      if (value === undefined || value.startsWith("-")) {
+      // An empty value is what an unset `$SRC_DIR` expands to, and dropping it widened
+      // `--content ""` to the whole working directory — a CI gate passing on files
+      // nobody named — and turned `--css ""` into auto-detection.
+      if (value === undefined || value.startsWith("-") || value.replace(/,/g, "").trim() === "") {
         throw new UsageError(`${arg} needs a ${nouns[arg] ?? "value"}`);
       }
       if (arg === "--css") css = value;
@@ -575,7 +578,30 @@ async function findEntries(roots: string[], ignore: readonly string[] = []): Pro
 
 /** Absolute paths, relative to the project, sorted — what a report should print. */
 function shown(paths: readonly string[] | undefined, cwd: string): string[] {
-  return (paths ?? []).map((path) => relative(cwd, path) || path);
+  return (paths ?? []).map((path) => posix(relative(cwd, path) || path));
+}
+
+/**
+ * A path with forward slashes, on every OS. The JSON contract shows `src/app.css`, and a
+ * CI script matching on it behaved differently on a Windows runner, which wrote
+ * `src\app.css`.
+ */
+function posix(path: string): string {
+  return path.split(sep).join("/");
+}
+
+/**
+ * "Scanned no files", with the likeliest reason when there is one. Only `check` named the
+ * unexpanded wildcard, so `emit` given a glob left the reader to find it.
+ */
+function noFiles(command: "check" | "emit", roots: readonly string[]): string {
+  const glob = roots.some((path) => path.includes("*"))
+    ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
+    : "";
+  return (
+    `[tailess] scanned no files, so there is nothing to ${command}. Looked in: ` +
+    `${roots.join(", ")}.${glob}`
+  );
 }
 
 /** Resolve `--content` against the working directory, defaulting to it. */
@@ -615,9 +641,7 @@ async function runEmit(options: Options): Promise<number> {
       console.log(jsonResult("emit", 2, { error: "no-files", roots: shown(roots, options.cwd) }));
       return 2;
     }
-    console.error(
-      `[tailess] scanned no files, so there is nothing to emit. Looked in: ${roots.join(", ")}.`,
-    );
+    console.error(noFiles("emit", roots));
     return 2;
   }
 
@@ -732,7 +756,7 @@ async function runCheck(options: Options): Promise<number> {
   const failing = diagnostics.filter((d) => d.informational !== true).length;
   const asJson = diagnostics.map((d) => ({
     kind: d.kind,
-    file: relative(options.cwd, d.file) || d.file,
+    file: posix(relative(options.cwd, d.file) || d.file),
     message: d.message,
   }));
 
@@ -740,13 +764,7 @@ async function runCheck(options: Options): Promise<number> {
   // --content, or a monorepo task runner in the wrong directory, would otherwise
   // print a cheerful line and exit 0 forever after.
   if (files.length === 0) {
-    const glob = roots.some((path) => path.includes("*"))
-      ? ' Wildcards are not expanded — pass a directory ("src") or a file, not a glob.'
-      : "";
-    complain(
-      `[tailess] scanned no files, so there is nothing to check. Looked in: ` +
-        `${roots.join(", ")}.${glob}`,
-    );
+    complain(noFiles("check", roots));
     return finish(2, { error: "no-files", roots: shown(roots, options.cwd) });
   }
 

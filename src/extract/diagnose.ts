@@ -321,6 +321,11 @@ function dynamicBuckets(
         `match(${part}, { … }) for a lookup, or vars() when the value is a number.`,
     });
   for (const map of objectLiterals(text)) {
+    // `{ … } as { md: string }` and `(x: { md: string }) => …`: a type, whose `string` is
+    // not a value, let alone an unreadable one. The colon has to follow a parameter name:
+    // `cond ? { … } : { md: size }` is the other branch of a ternary, and is read.
+    const before = text.slice(0, text.indexOf(map));
+    if (/(?:\bas|\bsatisfies|[(,]\s*[\w$]+\??\s*:)\s*$/.test(before)) continue;
     for (const { key, value } of parseObject(map)) {
       const prefixed = underPrefix || key !== "base";
       if (objectLiterals(value).length > 0 && !isArrayLiteral(value.trim())) {
