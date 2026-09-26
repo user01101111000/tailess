@@ -225,8 +225,15 @@ describe("a feature query the build cannot enumerate", () => {
     // The candidate list is written into a stylesheet, so these are dropped there
     // while the runtime still puts the class on the element.
     expect(kinds(`supports("display: grid;", "grid")`)).toEqual(["unusable-query"]);
-    expect(kinds(`supports('(font-family: "My Font")', "italic")`)).toEqual(["unusable-query"]);
+    expect(kinds(`supports('(content: "it\\'s")', "italic")`)).toEqual(["unusable-query"]);
     expect(kinds(`notSupports("display: grid;", "flex")`)).toEqual(["unusable-query"]);
+  });
+
+  it("says nothing about a double-quoted string, which the build carries", () => {
+    // Reported, this failed `--strict` over working code: the class goes into a
+    // single-quoted `@source inline`, and Tailwind generates its rule.
+    expect(kinds(`supports('(font-family: "My Font")', "italic")`)).toEqual([]);
+    expect(kinds(`has('input[type="text"]', "p-4")`)).toEqual([]);
   });
 
   it("reports an empty query", () => {
@@ -263,7 +270,7 @@ describe("a feature query the build cannot enumerate", () => {
     // The one failure `tailess check` cannot catch either: the candidate is dropped
     // before it ever reaches the compiler, so nothing downstream can find it missing.
     // Only `supports` used to say so, which left seven helpers with no build check.
-    expect(kinds(`has('input[type="text"]', "p-4")`)).toEqual(["unusable-query"]);
+    expect(kinds(`has('input[type="text]', "p-4")`)).toEqual(["unusable-query"]);
     expect(kinds(`notHas("[title='x]", "p-4")`)).toEqual(["unusable-query"]);
     expect(kinds(`inside("", "p-4")`)).toEqual(["unusable-query"]);
     expect(kinds(`nth("3n{1}", "p-4")`)).toEqual(["unusable-query"]);

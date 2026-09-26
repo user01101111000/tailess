@@ -240,11 +240,11 @@ describe("the check itself", () => {
     // amount of comparing generated CSS can notice it.
     await writeFile(
       join(dir, "a.tsx"),
-      `import { ss, has } from "tailess";\nss({ md: "p-4" });\nhas('input[type="x"]', "p-2");`,
+      `import { ss, has } from "tailess";\nss({ md: "p-4" });\nhas('input[type="x]', "p-2");`,
     );
     await writeFile(join(dir, "a.css"), `@import "tailwindcss";`);
     const { code, output } = await check();
-    expect(output).toContain("cannot appear in a class name");
+    expect(output).toContain("which the build cannot carry");
     // Printed, but not fatal on its own — the exit code still reflects the classes.
     expect(code).toBe(0);
   });

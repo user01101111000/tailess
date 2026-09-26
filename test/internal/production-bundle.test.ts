@@ -43,7 +43,7 @@ const warnings = [
   "letters, digits",
   "was given an empty",
   "positions count from 1",
-  "cannot appear in a class name",
+  "which the build cannot carry",
   "not a config object",
   "names a recipe without slots",
 ];
@@ -172,12 +172,21 @@ describe("the browser bundle", () => {
     // settings on `globalThis`: an ESM app with a CommonJS component library loads both
     // builds, and `configure()` from the app never reached the library's copy.
     //
+    // Raised again to 16,000 for the release-candidate audit: 15,468 -> 15,724 chars
+    // (6,552 gzipped). +12 in `ss` + `cn` for an unknown-key warning that called working
+    // Tailwind variants (`aria-checked`) "not a Tailwind variant". +244 in the helpers that
+    // take an arbitrary value (`has`, `supports`, `nth`…): once the plugin carried a lone
+    // `"` in a single-quoted `@source inline`, the check still called `[data-state="open"]`
+    // unusable — a warning on working code that failed `--strict` — so the rule became
+    // "an unclosed quote or both kinds", and a quoted `nth` position, which the old rule
+    // caught by accident, got a check of its own rather than going silent.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 6,077 chars (2,858 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 4,394 (10,471). Measured with the
+    // 6,089 chars (2,857 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 4,394 (10,483). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
-    expect(code.length).toBeLessThan(15_500);
+    expect(code.length).toBeLessThan(16_000);
   });
 
   it("pulls in no Node builtins", async () => {

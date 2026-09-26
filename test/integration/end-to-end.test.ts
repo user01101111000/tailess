@@ -944,3 +944,31 @@ describe("Tailwind reached through a workspace package, through PostCSS", () => 
     expect(missingRules(css, expected)).toEqual([]);
   });
 });
+
+describe("a quoted value in a helper's selector or query", () => {
+  it("builds a class Tailwind generates a rule for, so nothing warns about it", async () => {
+    // `has('[data-state="open"]', …)` is the usual spelling. Since the plugin carries a
+    // lone `"` in a single-quoted `@source inline`, it works — and the unusable-value
+    // check still called it unusable, failing `--strict` and `diagnostics: "error"`.
+    const project = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-hq-"));
+    try {
+      await writeFile(
+        join(project, "a.tsx"),
+        `import { has, supports } from "tailess";\n` +
+          `has('[data-state="open"]', "p-2");\nsupports('font-family: "Inter"', "grid");\n`,
+      );
+      const result = await postcss([
+        tailess({ content: [project], cacheDir: join(project, ".cache"), diagnostics: "error" }),
+        tailwindcss({ base: project, optimize: false }),
+      ]).process(`@import "tailwindcss";`, { from: join(project, "app.css") });
+      expect(
+        missingRules(result.css, [
+          'has-[[data-state="open"]]:p-2',
+          'supports-[font-family:_"Inter"]:grid',
+        ]),
+      ).toEqual([]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+});

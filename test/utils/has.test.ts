@@ -84,8 +84,16 @@ describe("a selector that cannot become a class", () => {
   it("warns about a character no class name can carry", () => {
     // The candidate list is written into a stylesheet, so these are dropped there
     // while the runtime still puts the class on the element.
-    expect(warnings(() => has('input[value="x"]', "p-2"))).toHaveLength(1);
+    expect(warnings(() => has(`[title="it's"]`, "p-2"))).toHaveLength(1);
+    expect(warnings(() => has('input[value="x]', "p-2"))).toHaveLength(1);
     expect(warnings(() => notHas("a;b", "p-3"))).toHaveLength(1);
+  });
+
+  it("stays quiet about a quoted attribute value, which the build does carry", () => {
+    // `[data-state="open"]` is the usual way to write it, and the class it builds goes
+    // into a single-quoted `@source inline`; the warning called it unusable.
+    expect(warnings(() => has('[data-state="open"]', "p-2"))).toEqual([]);
+    expect(warnings(() => has('input[value="x"]', "p-2"))).toEqual([]);
   });
 
   it("warns about an unclosed quote, which would poison the candidate list", () => {

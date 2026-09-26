@@ -130,8 +130,15 @@ describe("supports — a query that compiles but cannot work", () => {
     // the one failure this package exists to prevent.
     const semicolon = warnings(() => supports("display: grid;", "p-10"));
     expect(semicolon).toHaveLength(1);
-    expect(semicolon[0]).toContain("cannot appear in a class name");
-    expect(warnings(() => supports('(font-family: "My Font")', "p-11"))).toHaveLength(1);
+    expect(semicolon[0]).toContain("which the build cannot carry");
+    // Both kinds of quote cannot be carried by either quoting of `@source inline`.
+    expect(warnings(() => supports(`(content: "it's")`, "p-11"))).toHaveLength(1);
+  });
+
+  it("stays quiet about a double-quoted string, which the build does carry", () => {
+    // A class holding `"` goes into a single-quoted `@source inline`, and Tailwind
+    // generates `@supports (font-family: "My Font")` for it; the warning said it could not.
+    expect(warnings(() => supports('(font-family: "My Font")', "p-11"))).toEqual([]);
   });
 
   it("warns about an underscore in a var() fallback, which Tailwind does decode", () => {
@@ -233,7 +240,8 @@ describe("supports — a query that compiles but cannot work", () => {
     // `@source inline("…")` string early and takes the rest of the chunk with it.
     const seen = warnings(() => supports("content: 'a", "p-16"));
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toContain("cannot appear in a class name");
+    expect(seen[0]).toContain("which the build cannot carry");
     expect(warnings(() => supports("content: 'a' 'b'", "p-17"))).toEqual([]);
+    expect(warnings(() => supports('content: "a', "p-18"))).toHaveLength(1);
   });
 });

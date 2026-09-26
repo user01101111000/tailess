@@ -63,7 +63,25 @@ export interface Diagnostic {
 const whitespace = /\s/;
 
 /** Characters a class name cannot carry, so the build can never enumerate them. */
-const unusableInClassName = /["{}\\;]/;
+const unusableInClassName = /[{}\\;]/;
+
+/**
+ * True when an arbitrary value cannot reach a rule. A lone `"` can: the plugin carries
+ * such a class in a single-quoted `@source inline`, and reporting it failed
+ * `--strict` over `has('[data-state="open"]', …)`, which works. An unclosed quote, or
+ * both kinds together, cannot be carried at all. The runtime's copy is in
+ * `internal/arbitrary.ts`; the runtime bundle cannot import from here.
+ */
+function unusableValue(value: string): boolean {
+  const singles = value.split("'").length - 1;
+  const doubles = value.split('"').length - 1;
+  return (
+    unusableInClassName.test(value) ||
+    singles % 2 === 1 ||
+    doubles % 2 === 1 ||
+    (singles > 0 && doubles > 0)
+  );
+}
 
 /** Normalize a class string to a stable token list, so comparison ignores spacing. */
 function tokens(literal: string): string[] {
@@ -392,13 +410,20 @@ function unusableValues(name: string, arg: string, report: (d: Diagnostic) => vo
           `${name}("", …) has an empty ${noun}, so it builds "…-[]:" — a class nothing ` +
           "generates a rule for.",
       });
-    } else if (unusableInClassName.test(value) || (value.match(/'/g) ?? []).length % 2 === 1) {
+    } else if (name.startsWith("nth") && /["']/.test(value)) {
+      // A position is a number or `An+B`, never a string: `:nth-of-type("2n")` is a
+      // rule the browser throws away.
+      report({
+        kind: "unusable-query",
+        message: `${name}(${literal}, …) quotes its position, so it builds a selector the browser discards.`,
+      });
+    } else if (unusableValue(value)) {
       report({
         kind: "unusable-query",
         message:
-          `${name}("${value}", …) has a ${noun} containing one of \`" { } \\ ;\` or an ` +
-          "unclosed `'`, which cannot appear in a class name, so the class is built but " +
-          "no rule is generated for it.",
+          `${name}("${value}", …) has a ${noun} containing one of \`{ } \\ ;\`, an unclosed ` +
+          "quote or both kinds of quote, which the build cannot carry, so the class is " +
+          "built but no rule is generated for it.",
       });
     }
   }

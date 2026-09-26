@@ -6,8 +6,8 @@ import { firstTime, warn } from "./settings.js";
  * `supports`, `has`, `inside` and the `nth` family all put user text inside
  * `variant-[…]`, and they all fail the same three ways when that text cannot survive
  * the trip: an empty value builds `…-[]:`, which nothing generates a rule for; a
- * value carrying `"`, `{`, `}`, `\`, `;` or an unclosed `'` is dropped from the
- * candidate list while the runtime still puts the class on the element; and a literal
+ * value carrying `{`, `}`, `\`, `;`, an unclosed quote or both kinds of quote is dropped
+ * from the candidate list while the runtime still puts the class on the element; and a literal
  * `_` is decoded back into a space, so the rule that *is* generated says something
  * else than what was written.
  *
@@ -19,7 +19,23 @@ import { firstTime, warn } from "./settings.js";
 const checked = new Set<string>();
 
 /** Characters a class name cannot carry, so the build never enumerates them. */
-const unusableChar = /["{}\\;]/;
+const unusableChar = /[{}\\;]/;
+
+/**
+ * True when `value` cannot reach a rule. A lone `"` can — the plugin carries such a class
+ * in a single-quoted `@source inline` — and flagging it warned on `[data-state="open"]`,
+ * which works; an unclosed quote, or both kinds together, cannot be carried at all.
+ */
+function unusable(value: string): boolean {
+  const singles = value.split("'").length - 1;
+  const doubles = value.split('"').length - 1;
+  return (
+    unusableChar.test(value) ||
+    singles % 2 === 1 ||
+    doubles % 2 === 1 ||
+    (singles > 0 && doubles > 0)
+  );
+}
 
 /**
  * The custom-property *name* inside `var(…)` — the one place Tailwind keeps a `_`.
@@ -50,10 +66,16 @@ export function warnUnusableValue(helper: string, noun: string, value: string): 
     return true;
   }
 
-  if (unusableChar.test(value) || (value.match(/'/g) ?? []).length % 2 === 1) {
+  // A position is a number or `An+B`, never a string: `:nth-of-type("2n")` is a rule the
+  // browser throws away, so a quote there is as fatal as an unusable character.
+  const quoted = helper.startsWith("nth") && /["']/.test(value);
+  if (quoted || unusable(value)) {
     warn(
-      `[tailess] the ${noun} "${value}" contains one of \`" { } \\ ;\` or an unclosed ` +
-        "`'`, which cannot appear in a class name, so the build generates no rule for it.",
+      quoted
+        ? `[tailess] ${helper}() positions are never quoted, so "${value}" builds a selector ` +
+            "the browser discards."
+        : `[tailess] the ${noun} "${value}" contains one of \`{ } \\ ;\`, an unclosed quote ` +
+            "or both kinds of quote, which the build cannot carry, so it generates no rule for it.",
     );
     return true;
   }
