@@ -170,3 +170,23 @@ describe("container-query keys", () => {
     expect(new Set(all).size).toBe(all.length);
   });
 });
+
+describe("the exported key lists", () => {
+  it("cannot be rearranged in place by a caller", async () => {
+    // A JavaScript caller's `screenKeys.reverse()` rearranged the list the runtime reads,
+    // so `between("sm", "lg", …)` warned that its range was empty and `responsive()`
+    // changed its order — spooky action at a distance from somebody else's module.
+    const constants = await import("../src/constants.js");
+    for (const list of [
+      constants.screenKeys,
+      constants.maxScreenKeys,
+      constants.containerKeys,
+      constants.maxContainerKeys,
+      constants.stateKeys,
+    ]) {
+      expect(Object.isFrozen(list)).toBe(true);
+      expect(() => (list as unknown as string[]).reverse()).toThrow(TypeError);
+    }
+    expect(Object.isFrozen(constants.screens)).toBe(true);
+  });
+});

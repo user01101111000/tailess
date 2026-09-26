@@ -238,6 +238,28 @@ describe("what the theme changed", () => {
     expect(first).toContain('withPrefix("3xl"');
   });
 
+  it("marks what describes working CSS as informational, and a removal as not", () => {
+    // `diagnostics: "error"` fails on everything that is not informational, so this is
+    // the line between a note and a broken build. An added breakpoint and a moved width
+    // both compile; a removed one leaves `sm:` classes with no rule.
+    const kind = (css: string) =>
+      themeDiagnostics(breakpointsIn(css)).map((d) => d.informational === true);
+    expect(kind(`@theme { --breakpoint-3xl: 120rem; }`)).toEqual([true]);
+    expect(kind(`@theme { --breakpoint-md: 50rem; }`)).toEqual([true]);
+    expect(kind(`@theme { --breakpoint-sm: initial; }`)).toEqual([false]);
+    expect(themeDiagnostics([], ["sidebar-open"]).map((d) => d.informational === true)).toEqual([
+      true,
+    ]);
+  });
+
+  it("does not claim a declared key will not compile", () => {
+    // The README's "Keys your own CSS adds" declares exactly this key; telling that
+    // project `ss({ "3xl": … })` will not compile is a warning on working code.
+    const [first] = messages(`@theme { --breakpoint-3xl: 120rem; }`);
+    expect(first).not.toContain("will not compile");
+    expect(first).toContain("declare");
+  });
+
   it("does not report a removal twice when a reset and a key agree", () => {
     expect(messages(`@theme { --breakpoint-*: initial; --breakpoint-sm: initial; }`)).toHaveLength(
       5,

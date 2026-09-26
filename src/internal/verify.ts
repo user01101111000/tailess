@@ -35,6 +35,10 @@ export function verifyIntegration(): void {
   started = true;
 
   const check = (): void => {
+    // A document with no stylesheet at all has nothing to compare against — it is a
+    // component test's jsdom or happy-dom, which load no CSS, and every test file there
+    // was told its build was not wired up.
+    if (document.styleSheets?.length === 0) return;
     const value = getComputedStyle(document.documentElement)
       .getPropertyValue(markerProperty)
       .trim();

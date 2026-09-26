@@ -1,15 +1,21 @@
 import { twMerge } from "tailwind-merge";
 import { maxScreenKeys, screenKeys, stateKeys } from "../constants.js";
+import { uncarriedClasses } from "./extract.js";
 import {
+  arrayBody,
+  declaresKey,
   dictionaryKeys,
   extractStrings,
   helperNames,
+  inertCode,
   isArrayLiteral,
   maskLiterals,
   objectLiterals,
   parseObject,
   type RawCall,
   scanCalls,
+  scanMatchCalls,
+  splitArgs,
 } from "./scan.js";
 
 /**
@@ -42,15 +48,41 @@ export interface Diagnostic {
     /** An `ss` map handed to a helper whose class argument is a clsx value. */
     | "bucket-as-dictionary"
     /** A prefixed bucket whose value the scanner cannot read. */
-    | "dynamic-value";
+    | "dynamic-value"
+    /** A prefixed class with a `{`, `}` or `\` in it, which cannot reach Tailwind. */
+    | "uncarried-class";
   /** One line, written for whoever has to fix it. */
   message: string;
+  /**
+   * A note about CSS that works — a breakpoint or variant the theme adds, a width it
+   * moves — rather than a class that cannot. Printed like the rest, but it never fails a
+   * build under `diagnostics: "error"` or `check --strict`.
+   */
+  informational?: true;
 }
 
 const whitespace = /\s/;
 
 /** Characters a class name cannot carry, so the build can never enumerate them. */
-const unusableInClassName = /["{}\\;]/;
+const unusableInClassName = /[{}\\;]/;
+
+/**
+ * True when an arbitrary value cannot reach a rule. A lone `"` can: the plugin carries
+ * such a class in a single-quoted `@source inline`, and reporting it failed
+ * `--strict` over `has('[data-state="open"]', …)`, which works. An unclosed quote, or
+ * both kinds together, cannot be carried at all. The runtime's copy is in
+ * `internal/arbitrary.ts`; the runtime bundle cannot import from here.
+ */
+function unusableValue(value: string): boolean {
+  const singles = value.split("'").length - 1;
+  const doubles = value.split('"').length - 1;
+  return (
+    unusableInClassName.test(value) ||
+    singles % 2 === 1 ||
+    doubles % 2 === 1 ||
+    (singles > 0 && doubles > 0)
+  );
+}
 
 /** Normalize a class string to a stable token list, so comparison ignores spacing. */
 function tokens(literal: string): string[] {
@@ -130,15 +162,19 @@ const ambiguousAsClass = new Set<string>(
  * an `ss` map handed to one is read as a dictionary and its *keys* become the classes:
  * `on("hover", { base: "underline", md: "font-bold" })` builds `"hover:base hover:md"`.
  *
- * The type system refuses it, so this only fires where a cast or an untyped boundary let
- * it through — and there it is silent, which is why it is worth a build check. The test
- * is exact: `base`, `md` and `hover` are `ss` keys and none of them is a Tailwind
- * utility, so a dictionary key that is one of them was meant as a bucket.
+ * The type system cannot refuse it: a clsx dictionary is any object, so an `ss` map is
+ * one too. The runtime is silent, which is why it is worth a build check. The test is
+ * exact: `base`, `md` and `hover` are `ss` keys and none of them is a Tailwind utility,
+ * so a dictionary key that is one of them was meant as a bucket.
+ *
+ * `fix` is the rewrite to offer, given the key: for the prefixing helpers it is nesting
+ * the other way round; for a value of `responsive` or `match` it is wrapping it in `ss`.
  */
 function bucketMapAsDictionary(
   name: string,
   text: string | undefined,
   report: (d: Diagnostic) => void,
+  fix: (key: string) => string = (key) => `Nest the other way round: ss({ ${key}: ${name}(…) }).`,
 ): void {
   if (!text) return;
   // Spelled-out entries only. `({ open, dark }) => …` is a destructuring parameter, not a
@@ -149,8 +185,8 @@ function bucketMapAsDictionary(
       kind: "bucket-as-dictionary",
       message:
         `${name}() was given an object with the key "${key}", which is an ss bucket — but ` +
-        `its class argument is a clsx value, so "${key}" becomes the class name. Nest the ` +
-        `other way round: ss({ ${key}: ${name}(…) }).` +
+        `its class argument is a clsx value, so "${key}" becomes the class name. ` +
+        fix(key) +
         // `first`, `last`, `open`, `checked`, `disabled` are ordinary conditional class
         // names — Bootstrap's `.active`, a CSS module's `.open` — so the nesting mistake
         // is not the only way to land here. The class is dead either way, but only one of
@@ -167,7 +203,103 @@ function bucketMapAsDictionary(
 }
 
 /** Values that contribute no class at all, so being unreadable costs nothing. */
-const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '""', "''", "``"]);
+const contributesNothing = new Set([
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "void 0",
+  "0",
+  '""',
+  "''",
+  "``",
+]);
+
+/**
+ * The index of the first top-level `op` in `blank` — the value with its strings and
+ * comments masked — or -1. Top level means outside every `()`, `[]` and `{}`.
+ */
+function topLevel(blank: string, op: RegExp): number {
+  let depth = 0;
+  for (let i = 0; i < blank.length; i += 1) {
+    const c = blank[i];
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") depth -= 1;
+    else if (depth === 0 && op.test(blank.slice(i, i + 2))) return i;
+  }
+  return -1;
+}
+
+/**
+ * The parts of a bucket value that become classes.
+ *
+ * Both branches of a ternary, both sides of `||` and `??`, the last of an `&&` chain —
+ * the ones before it are conditions — and every element of an array. A literal anywhere
+ * used to vouch for the whole value, so `cond ? size : "p-2"`, `[size, "flex"]` and
+ * `size ?? "p-2"` all read as fine while `size` built a class nothing enumerated.
+ */
+function operands(value: string): string[] {
+  const text = value.trim();
+  if (isArrayLiteral(text)) return splitArgs(arrayBody(text)).flatMap(operands);
+  const blank = maskLiterals(text, true);
+  if (text.startsWith("(") && closing(blank) === blank.length - 1) {
+    return operands(text.slice(1, -1));
+  }
+  const split = ternary(blank);
+  if (split) {
+    const [question, colon] = split;
+    return [...operands(text.slice(question + 1, colon)), ...operands(text.slice(colon + 1))];
+  }
+  for (const [op, keepAll] of [
+    [/^(?:\|\||\?\?)/, true],
+    [/^&&/, false],
+  ] as const) {
+    const at = topLevel(blank, op);
+    if (at === -1) continue;
+    const right = operands(text.slice(at + 2));
+    return keepAll ? [...operands(text.slice(0, at)), ...right] : right;
+  }
+  return [text];
+}
+
+/** Where the bracket opening `blank` closes, or -1. */
+function closing(blank: string): number {
+  let depth = 0;
+  for (let i = 0; i < blank.length; i += 1) {
+    const c = blank[i];
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if ((c === ")" || c === "]" || c === "}") && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * The top-level `?` of a ternary in `blank` and the `:` that closes it, or `undefined`.
+ * `?.` and `??` are not ternaries; a nested ternary's `:` is its own.
+ */
+function ternary(blank: string): [question: number, colon: number] | undefined {
+  let depth = 0;
+  let question = -1;
+  let nested = 0;
+  for (let i = 0; i < blank.length; i += 1) {
+    const c = blank[i];
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") depth -= 1;
+    else if (depth !== 0) continue;
+    else if (c === "?") {
+      if (blank[i + 1] === "." || blank[i + 1] === "?" || blank[i - 1] === "?") continue;
+      if (question === -1) question = i;
+      else nested += 1;
+    } else if (c === ":" && question !== -1) {
+      if (nested === 0) return [question, i];
+      nested -= 1;
+    }
+  }
+  return undefined;
+}
+
+/** A bare identifier: a shorthand property, `{ md }`, is `md: md`. */
+const identifier = /^[A-Za-z_$][\w$]*$/;
 
 /**
  * Report a bucket whose value the scanner cannot read.
@@ -182,28 +314,70 @@ const contributesNothing = new Set(["true", "false", "null", "undefined", "0", '
  * Only a *prefixed* bucket is reported. `base` adds no prefix, so its value passes
  * through unchanged and Tailwind finds the literal wherever it really lives — which is
  * why the same shape there is fine, and reporting it would be a warning on working code.
+ * A `base` inside a prefixed map is prefixed all the same — `{ md: { base: size } }` is
+ * `md:<size>` — and a value that is itself a map is walked, since the bucket that cannot
+ * be read may be the one nested inside it.
+ *
+ * `nested` is false where a value is a flat class value rather than an `ss` argument —
+ * `responsive`'s breakpoints — since an object there is a clsx dictionary, whose
+ * `{ hidden: !open }` is a condition, not a bucket.
  */
-function dynamicBuckets(text: string | undefined, report: (d: Diagnostic) => void): void {
+function dynamicBuckets(
+  text: string | undefined,
+  report: (d: Diagnostic) => void,
+  underPrefix = false,
+  nested = true,
+): void {
   if (!text) return;
+  const unreadable = (key: string, trimmed: string, part: string) =>
+    report({
+      kind: "dynamic-value",
+      message:
+        `the "${key}" bucket is set to \`${trimmed}\`` +
+        (part === trimmed ? "" : `, and \`${part}\` in it`) +
+        ", which the scanner cannot read — so nothing enumerates the class it builds and it " +
+        "reaches the element with no rule. Keep the class literal at the call site: " +
+        `match(${part}, { … }) for a lookup, or vars() when the value is a number.`,
+    });
   for (const map of objectLiterals(text)) {
+    // `{ … } as { md: string }` and `(x: { md: string }) => …`: a type, whose `string` is
+    // not a value, let alone an unreadable one. The colon has to follow a parameter name:
+    // `cond ? { … } : { md: size }` is the other branch of a ternary, and is read.
+    const before = text.slice(0, text.indexOf(map));
+    if (/(?:\bas|\bsatisfies|[(,]\s*[\w$]+\??\s*:)\s*$/.test(before)) continue;
     for (const { key, value } of parseObject(map)) {
-      if (key === "base") continue;
+      const prefixed = underPrefix || key !== "base";
+      if (objectLiterals(value).length > 0 && !isArrayLiteral(value.trim())) {
+        if (nested) dynamicBuckets(value, report, prefixed);
+        continue;
+      }
+      if (!prefixed) continue;
       const trimmed = value.trim();
-      if (trimmed === "" || contributesNothing.has(trimmed)) continue;
-      // A literal anywhere in the value is enough: the sweep reads both branches of a
-      // ternary and both halves of `cond && "p-4"`, so those are not dynamic.
-      if (extractStrings(value).length > 0 || objectLiterals(value).length > 0) continue;
-      report({
-        kind: "dynamic-value",
-        message:
-          `the "${key}" bucket is set to \`${trimmed}\`, which the scanner cannot read — so ` +
-          `nothing enumerates the class it builds and it reaches the element with no rule. ` +
-          `Keep the class literal at the call site: match(${trimmed}, { … }) for a lookup, ` +
-          `or vars() when the value is a number.`,
-      });
+      // Each part that becomes a class has to be readable on its own — a literal in the
+      // other branch builds a different class, and says nothing about this one. A known
+      // helper's call is its own call, read where it stands; an object in an array is a
+      // clsx dictionary, whose keys are the classes.
+      for (const part of operands(trimmed)) {
+        if (part === "" || contributesNothing.has(part) || extractStrings(part).length > 0)
+          continue;
+        if (part.startsWith("{") || helperCall.test(part)) continue;
+        unreadable(key, trimmed, part);
+        break;
+      }
+    }
+    // `parseObject` skips shorthand, and `{ base: "p-1", md }` is `md: md` — a variable
+    // under a prefix, as unreadable as any other.
+    const body = map.trim().slice(1, map.trim().lastIndexOf("}"));
+    for (const entry of splitArgs(body)) {
+      const name = entry.trim();
+      if (!identifier.test(name) || !everyKey.has(name)) continue;
+      if (name !== "base" || underPrefix) unreadable(name, name, name);
     }
   }
 }
+
+/** A call to a helper the scanner reads, which it enumerates where it stands. */
+const helperCall = new RegExp(`^(?:${helperNames.join("|")})\\s*\\(`);
 
 /** What each helper that writes into `…-[…]` calls the text it puts there. */
 const arbitraryNoun: Record<string, string> = {
@@ -226,7 +400,7 @@ const arbitraryNoun: Record<string, string> = {
  * failure this package exists to prevent, and it is the one case `tailess check` cannot
  * catch either: the candidate never reaches the compiler to be found missing.
  */
-function unusableValues(name: string, arg: string, report: (d: Diagnostic) => void): void {
+function unusableValues(name: string, arg: string, report: Report): void {
   const noun = arbitraryNoun[name] as string;
   for (const literal of extractStrings(arg)) {
     const value = literal.trim();
@@ -237,14 +411,24 @@ function unusableValues(name: string, arg: string, report: (d: Diagnostic) => vo
           `${name}("", …) has an empty ${noun}, so it builds "…-[]:" — a class nothing ` +
           "generates a rule for.",
       });
-    } else if (unusableInClassName.test(value) || (value.match(/'/g) ?? []).length % 2 === 1) {
+    } else if (name.startsWith("nth") && /["']/.test(value)) {
+      // A position is a number or `An+B`, never a string: `:nth-of-type("2n")` is a
+      // rule the browser throws away.
       report({
         kind: "unusable-query",
-        message:
-          `${name}("${value}", …) has a ${noun} containing one of \`" { } \\ ;\` or an ` +
-          "unclosed `'`, which cannot appear in a class name, so the class is built but " +
-          "no rule is generated for it.",
+        message: `${name}(${literal}, …) quotes its position, so it builds a selector the browser discards.`,
       });
+    } else if (unusableValue(value)) {
+      report(
+        {
+          kind: "unusable-query",
+          message:
+            `${name}("${value}", …) has a ${noun} containing one of \`{ } \\ ;\`, an unclosed ` +
+            "quote or both kinds of quote, which the build cannot carry, so the class is " +
+            "built but no rule is generated for it.",
+        },
+        value,
+      );
     }
   }
 }
@@ -275,7 +459,13 @@ function checkPrefix(text: string | undefined, report: (d: Diagnostic) => void):
 }
 
 /** Inspect one call. */
-function check(call: RawCall, report: (d: Diagnostic) => void): void {
+/**
+ * Where a check sends what it found. `value` is an arbitrary value already reported as
+ * one the build cannot carry, so the class built from it is not reported a second time.
+ */
+type Report = (d: Diagnostic, value?: string) => void;
+
+function check(call: RawCall, report: Report): void {
   const { name, args } = call;
 
   switch (name) {
@@ -393,7 +583,89 @@ function check(call: RawCall, report: (d: Diagnostic) => void): void {
       // place a bucket the scanner cannot read is worth reporting.
       for (const arg of args) {
         deadClasses(arg, report);
-        dynamicBuckets(arg, report);
+        dynamicBuckets(arg, report, false, name === "ss");
+      }
+      // A breakpoint's value is a flat class value, not another map:
+      // `responsive("p-2", { md: { hover: "p-4" } })` builds `md:hover`, which no
+      // utility matches, so `check` skips it as junk and nothing else says a word.
+      if (name === "responsive") {
+        for (const map of objectLiterals(args[1] ?? "")) {
+          for (const { key, value } of parseObject(map)) {
+            bucketMapAsDictionary(
+              name,
+              value,
+              report,
+              (inner) => `Write the stack as a map: ss({ ${key}: { ${inner}: "…" } }).`,
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    // The same mistake in a lookup: `match(size, { sm: { md: "p-4" } })` builds `md`.
+    case "match": {
+      for (const map of objectLiterals(args[1] ?? "")) {
+        for (const { value } of parseObject(map)) {
+          bucketMapAsDictionary(
+            name,
+            value,
+            report,
+            (inner) => `Wrap the option in ss(): { …: ss({ ${inner}: "…" }) }.`,
+          );
+        }
+      }
+      return;
+    }
+
+    // A recipe keeps its class values in four places — base, slots, each option, each
+    // compound rule — and each is an `ss` argument, or with slots a map of them. They
+    // were never looked at, so `{ lg: { md: size } }`, the shape a responsive option
+    // naturally takes, shipped `md:<size>` with no rule and no word.
+    case "variants": {
+      const first = objectLiterals(args[0] ?? "")[0];
+      const isConfig = first !== undefined && declaresKey(first, "variants");
+      const cva = args.length > 1 && !isConfig;
+      if (cva) dynamicBuckets(args[0], report);
+      // A lone argument with no `variants` key is a base, as the scanner reads it.
+      if (args.length === 1 && !isConfig) {
+        dynamicBuckets(args[0], report);
+        return;
+      }
+      const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
+      if (config === undefined) return;
+      // The same test the scanner uses for whether option values are one level deeper.
+      const slotted = declaresKey(config, "slots");
+      const classValue = (text: string): void => {
+        if (!slotted) {
+          dynamicBuckets(text, report);
+          return;
+        }
+        for (const parts of objectLiterals(text)) {
+          for (const part of parseObject(parts)) dynamicBuckets(part.value, report);
+        }
+      };
+      for (const { key, value } of parseObject(config)) {
+        if (key === "base") dynamicBuckets(value, report);
+        else if (key === "slots") {
+          for (const parts of objectLiterals(value)) {
+            for (const part of parseObject(parts)) dynamicBuckets(part.value, report);
+          }
+        } else if (key === "variants") {
+          for (const groups of objectLiterals(value)) {
+            for (const group of parseObject(groups)) {
+              for (const options of objectLiterals(group.value)) {
+                for (const option of parseObject(options)) classValue(option.value);
+              }
+            }
+          }
+        } else if (key === "compound" || key === "compoundVariants") {
+          for (const rule of objectLiterals(arrayBody(value))) {
+            for (const field of parseObject(rule)) {
+              if (field.key === "class" || field.key === "className") classValue(field.value);
+            }
+          }
+        }
       }
       return;
     }
@@ -420,10 +692,31 @@ const maxPerFile = 20;
  */
 const proseFile = /\.(?:md|markdown|html?)$/i;
 
-/** A named import from tailess, with the whole specifier list in hand. */
-const tailessImport = /^[ \t]*import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']tailess["']/gm;
-/** One `original as local` specifier inside it. */
-const renamedSpecifier = /([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g;
+/**
+ * Each way a file can bind a tailess helper under a name of its own: the statement, how
+ * one specifier in its list renames, and what the message calls it.
+ *
+ * A statement starts a line or follows a `;` — `"use client"; import { ss as tw } …` and
+ * a minified `import{ss as t}from"tailess"` are both imports. `import type` binds nothing
+ * callable, so it is not one of these.
+ */
+const renamings: [statement: RegExp, specifier: RegExp, verb: string][] = [
+  [
+    /(?:^|;)[ \t]*(import)\s*\{([^}]*)\}\s*from\s*["']tailess["']/gm,
+    /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+    "imported",
+  ],
+  [
+    /(?:^|;)[ \t]*(export)\s*\{([^}]*)\}\s*from\s*["']tailess["']/gm,
+    /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/,
+    "re-exported",
+  ],
+  [
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(require)\(\s*["']tailess["']\s*\)/g,
+    /^([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)$/,
+    "required",
+  ],
+];
 const scannedHelpers = new Set<string>(helperNames);
 
 /**
@@ -435,37 +728,98 @@ const scannedHelpers = new Set<string>(helperNames);
  * every variant on it is unstyled. It is the largest silent failure the package has and
  * the only one provable from the import statement alone.
  *
- * `code` here is the masked source and the match is anchored to the start of a line, so a
- * commented-out import and one quoted inside a docs sample are both what they are: text
- * about code. This check asserts the strongest failure the package reports, and asserting
- * it about a line that does not run — in the same output that says every class has CSS —
- * is how a build gate teaches people to stop reading it.
+ * `code` here is the masked source, and `blank` the same with strings blanked too: a
+ * commented-out import, one quoted inside a docs sample and one inside a string are all
+ * what they are — text about code. This check asserts the strongest failure the package
+ * reports, and asserting it about a line that does not run — in the same output that says
+ * every class has CSS — is how a build gate teaches people to stop reading it.
+ *
+ * A re-export is the form the old message recommended, and renaming there is worse, not
+ * better: every file that imports the new name loses its classes, and none of them has a
+ * rename in it to be reported.
  */
-function renamedImports(code: string, report: (d: Diagnostic) => void): void {
-  tailessImport.lastIndex = 0;
-  for (let m = tailessImport.exec(code); m !== null; m = tailessImport.exec(code)) {
-    const list = m[1] as string;
-    renamedSpecifier.lastIndex = 0;
-    for (let s = renamedSpecifier.exec(list); s !== null; s = renamedSpecifier.exec(list)) {
-      const original = s[1] as string;
-      const local = s[2] as string;
-      if (!scannedHelpers.has(original) || original === local) continue;
-      report({
-        kind: "renamed-import",
-        message:
-          `${original}() is imported as "${local}", and the scanner finds calls by name — ` +
-          `so every class ${local}() builds in this file reaches the element with no rule ` +
-          `behind it. Import it under its own name, or re-export a wrapper the scanner ` +
-          `also knows.`,
-      });
+function renamedImports(code: string, blank: string, report: (d: Diagnostic) => void): void {
+  for (const [statement, specifier, verb] of renamings) {
+    statement.lastIndex = 0;
+    for (let m = statement.exec(code); m !== null; m = statement.exec(code)) {
+      const keyword = m[1] === "import" || m[1] === "export" ? m[1] : "const";
+      const list = (keyword === "const" ? m[1] : m[2]) as string;
+      // Inside a string, the keyword is blanked: `"…; import { ss as tw } from …"` is data.
+      const at = m.index + m[0].indexOf(keyword === "const" ? "{" : keyword);
+      if (blank[at] !== code[at]) continue;
+      for (const entry of list.split(",")) {
+        const found = specifier.exec(entry.trim());
+        if (!found) continue;
+        const original = found[1] as string;
+        const local = found[2] as string;
+        if (!scannedHelpers.has(original) || original === local) continue;
+        report({
+          kind: "renamed-import",
+          message:
+            verb === "re-exported"
+              ? `${original}() is re-exported as "${local}", and the scanner finds calls by ` +
+                `name — so every class ${local}() builds, in every file that imports it from ` +
+                `here, reaches the element with no rule behind it. Re-export it under its ` +
+                `own name.`
+              : `${original}() is ${verb} as "${local}", and the scanner finds calls by name ` +
+                `— so every class ${local}() builds in this file reaches the element with no ` +
+                `rule behind it. Import it under its own name, or re-export a wrapper the ` +
+                `scanner also knows.`,
+        });
+      }
     }
   }
 }
 
-/** Any import of the package itself, in either module system. */
-const anyTailessImport = /^[ \t]*import\b[^;]*?["']tailess["']|\brequire\(\s*["']tailess["']\s*\)/m;
-/** `import * as tl from "tailess"`, whose members are helper calls. */
-const namespaceImport = /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm;
+/** Any import of the package itself: ESM, CommonJS, or a dynamic `import()`. */
+const anyTailessImport =
+  /(?:^|;)[ \t]*import\b[^;]*?["']tailess["']|\b(?:require|import)\(\s*["']tailess["']\s*\)/m;
+/**
+ * A name the whole package is bound to, whose members are helper calls:
+ * `import * as tl from "tailess"`, `const tl = require("tailess")`, and
+ * `const tl = await import("tailess")`. The last two were never read, so every check in a
+ * CommonJS file that used one was off.
+ */
+const namespaceImports = [
+  /(?:^|;)[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']tailess["']/gm,
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:require|await\s+import)\(\s*["']tailess["']\s*\)/g,
+];
+/** `import { ss, on } from "tailess"`, the names a bare call has to be. */
+const namedImport =
+  /\bimport\s*(?:type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*["']tailess["']/g;
+/** `const { ss, on } = require("tailess")` or `= await import("tailess")`: the same. */
+const namedRequire =
+  /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:require|await\s+import)\(\s*["']tailess["']\s*\)/g;
+
+/**
+ * The local names an import or a destructuring `require` of tailess binds.
+ *
+ * Type-only entries bind nothing callable. A renamed one binds its new name, which is
+ * not a helper name the scanner looks for — and the renamed-import check reports it.
+ */
+function boundNames(list: string, out: Set<string>): void {
+  for (const raw of list.split(",")) {
+    const entry = raw.trim();
+    if (entry === "" || entry.startsWith("type ")) continue;
+    const local = entry
+      .split(/\s+as\s+|\s*:\s*/)
+      .at(-1)
+      ?.trim();
+    if (local && /^[A-Za-z_$][\w$]*$/.test(local)) out.add(local);
+  }
+}
+
+/** The bare names a file can call a helper by: what it imported from tailess by name. */
+function importedNames(masked: string): Set<string> {
+  const names = new Set<string>();
+  for (const pattern of [namedImport, namedRequire]) {
+    pattern.lastIndex = 0;
+    for (let m = pattern.exec(masked); m !== null; m = pattern.exec(masked)) {
+      boundNames(m[1] as string, names);
+    }
+  }
+  return names;
+}
 
 /**
  * The names a call has to be reached through in this file to be one of ours, or `null`
@@ -487,11 +841,54 @@ const namespaceImport = /^[ \t]*import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*[
 function callableHere(masked: string): Set<string> | null {
   if (!anyTailessImport.test(masked)) return null;
   const receivers = new Set<string>([""]);
-  namespaceImport.lastIndex = 0;
-  for (let m = namespaceImport.exec(masked); m !== null; m = namespaceImport.exec(masked)) {
-    receivers.add(m[1] as string);
+  for (const pattern of namespaceImports) {
+    pattern.lastIndex = 0;
+    for (let m = pattern.exec(masked); m !== null; m = pattern.exec(masked)) {
+      receivers.add(m[1] as string);
+    }
   }
   return receivers;
+}
+
+/** `configure({ …, merge: … })`, within reach of the call's opening brace. */
+const configureMerge = /\bconfigure\s*\(\s*\{[\s\S]{0,2000}?\bmerge\s*:/;
+
+/**
+ * True when `source` hands tailess a merge of its own.
+ *
+ * The dead-class check runs the default `tailwind-merge`, because the build cannot run
+ * the project's. With `configure({ merge: extendTailwindMerge(…) })` — the README's own
+ * recipe for a custom `@utility` font size — the runtime keeps `text-hero text-white` and
+ * the check called one of them dead, failing `check --strict` on working code. A project
+ * that configures its merge gets no dead-class reports rather than wrong ones.
+ */
+export function configuresMerge(source: string): boolean {
+  const code = source.startsWith("﻿") ? source.slice(1) : source;
+  if (!code.includes("tailess")) return false;
+  const masked = maskLiterals(code);
+  return anyTailessImport.test(masked) && configureMerge.test(masked);
+}
+
+/**
+ * True for a file a bundler wrote rather than a person: it carries a source-map comment,
+ * or a minified line — long and dense with statements, where an inline SVG path is long
+ * but has none.
+ *
+ * A bundle runs, but every class in it came from source that is scanned in its own right,
+ * so reporting on it can only repeat or invent. It invented: Qwik's `server/` and vinxi's
+ * `.vinxi/build` hold `import{ss as s}from"tailess"`, and each helper there was reported
+ * as a renamed import — failing `check --strict` and `diagnostics: "error"` after a
+ * successful build. Enumeration still reads such a file; only the checks skip it.
+ */
+function bundled(code: string): boolean {
+  if (/^\/[/*][#@] sourceMappingURL=/m.test(code)) return true;
+  for (let start = 0; start < code.length; ) {
+    const end = code.indexOf("\n", start);
+    const stop = end === -1 ? code.length : end;
+    if (stop - start > 1000 && code.slice(start, stop).split(";").length > 20) return true;
+    start = stop + 1;
+  }
+  return false;
 }
 
 /**
@@ -500,12 +897,22 @@ function callableHere(masked: string): Set<string> | null {
  * `file` is only ever read to decide whether an import statement in it is code, so a
  * caller with no path in hand loses nothing else by omitting it.
  */
-export function diagnose(code: string, file?: string): Diagnostic[] {
+export function diagnose(source: string, file?: string): Diagnostic[] {
+  // A UTF-8 byte order mark survives `readFile(…, "utf8")`, and the import patterns are
+  // anchored at the start of a line — so on a file saved with one, the first-line
+  // import matched nothing and every check in the file went quiet, the renamed-import
+  // one included.
+  const code = source.startsWith("﻿") ? source.slice(1) : source;
+  // Every check needs the file to import tailess, by that name — and most scanned files
+  // never mention it. Masking each of them twice first doubled the cost of a cold scan.
+  if (!code.includes("tailess") || bundled(code)) return [];
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;
+  const uncarriable: string[] = [];
 
-  const report = (d: Diagnostic): void => {
+  const report: Report = (d, value) => {
+    if (value !== undefined) uncarriable.push(value);
     // One call site written twice in a file is one problem, not two.
     const key = `${d.kind} ${d.message}`;
     if (seen.has(key)) return;
@@ -518,12 +925,36 @@ export function diagnose(code: string, file?: string): Diagnostic[] {
   };
 
   const masked = maskLiterals(code);
-  if (file === undefined || !proseFile.test(file)) renamedImports(masked, report);
+  if (file === undefined || !proseFile.test(file)) {
+    renamedImports(masked, maskLiterals(code, true), report);
+  }
 
   const receivers = callableHere(masked);
   if (receivers) {
-    for (const call of scanCalls(code)) {
-      if (receivers.has(call.receiver)) check(call, report);
+    // A bare call is ours only under a name the file imported from tailess: Solid's `on`
+    // beside tailess's `ss` is a file that imports the package, and its
+    // `on(accessor, (c) => ({ open: c > 0 }))` was checked as a class map.
+    const bare = importedNames(masked);
+    // Nor a call that does not run: in a comment, or in a README's code fence.
+    const inert = inertCode(code, file);
+    for (const call of [...scanCalls(code), ...scanMatchCalls(code)]) {
+      if (call.at !== undefined && inert[call.at] === 1) continue;
+      if (call.receiver === "" ? bare.has(call.name) : receivers.has(call.receiver)) {
+        check(call, report);
+      }
+    }
+    for (const cls of uncarriedClasses(code)) {
+      // `nth("3n{1}", …)` is already named, by the helper that took the value.
+      if (uncarriable.some((value) => cls.includes(value))) continue;
+      report({
+        kind: "uncarried-class",
+        message:
+          `"${cls}" is built at runtime, but its "{", "}" or "\\" cannot be handed to ` +
+          "Tailwind — @source inline(…) reads them as brace expansion or an escape — so it " +
+          "has no rule. Write the class out as a literal somewhere in your source, where " +
+          "Tailwind's own scan finds it (one with a backslash in String.raw`…`), or use a " +
+          "value without the character.",
+      });
     }
   }
 

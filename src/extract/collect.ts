@@ -1,8 +1,9 @@
 /// <reference types="node" />
 import type { Dirent } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
-import { type Diagnostic, diagnose } from "./diagnose.js";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { extname, join, resolve, sep } from "node:path";
+import { shared } from "../internal/shared.js";
+import { configuresMerge, type Diagnostic, diagnose } from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
 /** File extensions scanned by default. */
@@ -26,6 +27,9 @@ export const defaultExtensions = [
 /**
  * Directory names skipped by default: dependencies, build output, caches and VCS
  * metadata. Everything else is scanned, including dot-directories — see {@link walk}.
+ *
+ * The plain-word build outputs in {@link outputDirs} are skipped only where a build
+ * writes them; the rest wherever they are.
  */
 export const defaultIgnore = [
   "node_modules",
@@ -41,6 +45,14 @@ export const defaultIgnore = [
   ".svelte-kit",
   ".astro",
   ".output",
+  // SolidStart 1 and TanStack Start (vinxi), Nitro, React Router 7, Angular: build output
+  // and caches. vinxi writes `.vinxi/build` before the client build runs, so its minified
+  // server bundle was scanned — and reported — on the very first build.
+  ".vinxi",
+  ".nitro",
+  ".react-router",
+  ".tanstack",
+  ".angular",
   ".vercel",
   ".netlify",
   ".turbo",
@@ -57,6 +69,17 @@ export const defaultIgnore = [
   ".idea",
   ".vscode",
 ] as const;
+
+/**
+ * The build outputs whose names are ordinary words, skipped only where a build writes
+ * them: at the top of a content root, or beside a `package.json`.
+ *
+ * Anywhere else they are source. `app/build/page.tsx` is a Next.js route and
+ * `src/coverage/` an insurance dashboard; skipping every directory with one of these
+ * names dropped their runtime-built classes while Tailwind still styled the literals —
+ * half a page, and a `check` that passed because it read the same walk.
+ */
+const outputDirs = new Set(["dist", "build", "out", "coverage"]);
 
 /**
  * Both optional fields are spelled `| undefined` because that is what the callers
@@ -116,19 +139,36 @@ export interface FileDiagnostic extends Diagnostic {
 interface CacheEntry {
   mtimeMs: number;
   size: number;
+  /** When the file was read, which decides whether its mtime can be trusted. */
+  readAt: number;
+  /** Whether the file configures a merge of its own; see `configuresMerge`. */
+  merge: boolean;
   classes: string[];
   diagnostics: Diagnostic[];
 }
+
+/**
+ * How close to the read an mtime has to be before it cannot vouch for the content.
+ *
+ * Two seconds is the coarsest mtime in use (FAT and exFAT), and NTFS often leaves a
+ * back-to-back rewrite with the same one. A same-length edit inside that window — a
+ * formatter, a codemod, an agent — kept the old classes until the dev server restarted.
+ * Git's "racy" rule, for the same reason: a file changed within a tick of being read is
+ * read again, and one changed well before is trusted.
+ */
+const mtimeTick = 2000;
 
 /**
  * Per-file extraction cache, keyed by absolute path and invalidated by
  * mtime + size. A dev server re-scans on every stylesheet rebuild, so without
  * this we'd re-read and re-parse the whole project on every keystroke.
  *
- * Module-level on purpose: the Vite and PostCSS integrations share it when they
- * run in the same process.
+ * Process-level on purpose: the Vite and PostCSS integrations share it when they run in
+ * the same process — and so do the CommonJS entries, which each bundle their own copy of
+ * this module, so a module-level map left `clearCache()` from `tailess/build` unable to
+ * reach the plugin's. The key names this entry shape.
  */
-const cache = new Map<string, CacheEntry>();
+const cache = shared("tailess.scan-cache.2", () => new Map<string, CacheEntry>());
 
 /**
  * Scans already running, keyed by their options. A build with many stylesheets asks
@@ -174,6 +214,9 @@ async function walk(
   extensions: Set<string>,
   ignore: Set<string>,
   found: string[],
+  outputs: ReadonlySet<string> = outputDirs,
+  top = true,
+  links: Set<string> = new Set(),
 ): Promise<void> {
   let entries: Dirent[];
   try {
@@ -191,6 +234,8 @@ async function walk(
     return;
   }
 
+  // Where a build writes its output: the top of a root, or a package's own directory.
+  const writesOutput = top || entries.some((e) => e.isFile() && e.name === "package.json");
   const nested: Array<Promise<void>> = [];
   for (const entry of entries) {
     const full = join(root, entry.name);
@@ -199,17 +244,61 @@ async function walk(
       // Real source lives in some of them (`.storybook/preview.tsx`), and silently
       // dropping those classes is the exact failure this package exists to prevent.
       if (ignore.has(entry.name)) continue;
-      nested.push(walk(full, extensions, ignore, found));
+      if (writesOutput && outputs.has(entry.name)) continue;
+      nested.push(walk(full, extensions, ignore, found, outputs, false, links));
     } else if (entry.isFile() && isScannable(entry.name, extensions)) {
       found.push(full);
+    } else if (entry.isSymbolicLink()) {
+      if (ignore.has(entry.name) || (writesOutput && outputs.has(entry.name))) continue;
+      nested.push(follow(full, root, extensions, ignore, found, outputs, links));
     }
   }
   await Promise.all(nested);
 }
 
+/**
+ * Walk a symlink or junction the way Tailwind's own scanner does: into the folder or
+ * file it points at.
+ *
+ * Skipped, a linked `shared/` folder — how monorepos put common components into an app —
+ * had its literal classes styled by Tailwind and every tailess-built one unstyled, with
+ * the check green. Each target is walked once per scan, and never when it is the
+ * directory the link sits in or one above it, so a link back up the tree ends.
+ */
+async function follow(
+  link: string,
+  parent: string,
+  extensions: Set<string>,
+  ignore: Set<string>,
+  found: string[],
+  outputs: ReadonlySet<string>,
+  links: Set<string>,
+): Promise<void> {
+  const info = await stat(link).catch(() => undefined);
+  if (info?.isFile()) {
+    if (isScannable(link, extensions)) found.push(link);
+    return;
+  }
+  if (!info?.isDirectory()) return;
+  const target = await realpath(link).catch(() => undefined);
+  if (target === undefined || links.has(target)) return;
+  // Claimed before the next await: two links to one folder are followed concurrently.
+  links.add(target);
+  const here = await realpath(parent).catch(() => parent);
+  if (here === target || here.startsWith(target + sep)) return;
+  await walk(link, extensions, ignore, found, outputs, false, links);
+}
+
 /** Read one file, reusing the cached extraction when it hasn't changed. */
 async function scanFile(file: string): Promise<CacheEntry> {
-  const empty: CacheEntry = { mtimeMs: 0, size: -1, classes: [], diagnostics: [] };
+  const empty: CacheEntry = {
+    mtimeMs: 0,
+    size: -1,
+    readAt: 0,
+    merge: false,
+    classes: [],
+    diagnostics: [],
+  };
   let mtimeMs = 0;
   let size = -1;
   try {
@@ -222,14 +311,24 @@ async function scanFile(file: string): Promise<CacheEntry> {
   }
 
   const cached = cache.get(file);
-  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) return cached;
+  if (
+    cached &&
+    cached.mtimeMs === mtimeMs &&
+    cached.size === size &&
+    mtimeMs < cached.readAt - mtimeTick
+  ) {
+    return cached;
+  }
 
+  const readAt = Date.now();
   const code = await readFile(file, "utf8").catch(() => "");
   // Both walks read the same text once; diagnostics are cached beside the classes so
   // an unchanged file costs a `stat` on the next scan, exactly as before.
   const entry: CacheEntry = {
     mtimeMs,
     size,
+    readAt,
+    merge: configuresMerge(code),
     classes: extractClasses(code),
     diagnostics: diagnose(code, file),
   };
@@ -259,18 +358,28 @@ export async function collect(options: CollectOptions): Promise<CollectResult> {
 
 async function run(options: CollectOptions): Promise<CollectResult> {
   const extensions = normalizeExtensions(options.extensions);
-  const ignore = new Set<string>(defaultIgnore);
+  // The output names are position-sensitive, unless the project names one itself — then
+  // it is skipped wherever it is, like every other entry it lists.
+  const ignore = new Set<string>(defaultIgnore.filter((name) => !outputDirs.has(name)));
   for (const dir of options.ignore ?? []) ignore.add(dir);
 
   const roots = [...new Set(options.roots.map((p) => resolve(p)))];
-  const files: string[] = [];
-  await Promise.all(roots.map((root) => walk(root, extensions, ignore, files)));
-  files.sort();
+  const walked: string[] = [];
+  const links = new Set<string>();
+  await Promise.all(
+    roots.map((root) => walk(root, extensions, ignore, walked, outputDirs, true, links)),
+  );
+  // Overlapping roots — `src` and `src/components`, the whole project and one of its
+  // folders — reach the same file twice. Read twice, it counted twice and reported every
+  // diagnostic in it twice, which is what `check --json` then handed CI.
+  const files = [...new Set(walked)].sort();
 
   const classes = new Set<string>();
   const diagnostics: FileDiagnostic[] = [];
   const sources = options.provenance ? new Map<string, string[]>() : undefined;
   const perFile = await Promise.all(files.map(scanFile));
+  // The dead-class check assumes the default merge; a project with its own gets none.
+  const ownMerge = perFile.some((entry) => entry.merge);
   perFile.forEach((entry, index) => {
     const file = files[index] as string;
     for (const cls of entry.classes) {
@@ -280,7 +389,9 @@ async function run(options: CollectOptions): Promise<CollectResult> {
       if (seen) seen.push(file);
       else sources.set(cls, [file]);
     }
-    for (const d of entry.diagnostics) diagnostics.push({ ...d, file });
+    for (const d of entry.diagnostics) {
+      if (!(ownMerge && d.kind === "dead-class")) diagnostics.push({ ...d, file });
+    }
   });
 
   return {

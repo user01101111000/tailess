@@ -124,6 +124,64 @@ describe("every count written into the prose", () => {
   });
 });
 
+describe("the other numbers in the prose", () => {
+  it("quotes the benchmark table's ss() figure in the feature list", () => {
+    // The feature list said ~385 ns — a stale figure from the docs site — while the
+    // Performance table, which `npm run bench` reproduces, said ~244 ns.
+    const table = readme.match(/\| `ss\(\)` with 3 groups \| ~(\d+) ns \|/);
+    expect(table).not.toBeNull();
+    expect(readme).toContain(`\`ss()\` with three groups costs ~${table?.[1]} ns`);
+    expect([...readme.matchAll(/~(\d+) ns/g)].map((m) => m[0])).not.toContain("~385 ns");
+  });
+
+  it("spells the default extension count as the list has it", async () => {
+    const { defaultExtensions } = await import("../src/extract/collect.js");
+    const spelled = ["twelve", "thirteen", "fourteen", "fifteen", "sixteen"];
+    const word = spelled[defaultExtensions.length - 12];
+    expect(word).toBeDefined();
+    expect(readme).toContain(`gate reading ${word}`);
+  });
+
+  it("puts the same classes on both sides of the intro's before and after", async () => {
+    // The "one call" rewrite added a dark:hover class the "wrapper" version never had.
+    const { cn, ss } = await import("../src/index.js");
+    const block = readme.slice(
+      readme.indexOf("// ❌ a wrapper"),
+      readme.indexOf("\n```", readme.indexOf("// ❌ a wrapper")),
+    );
+    const calls = [...block.matchAll(/className=\{([\s\S]*?\n\))\}/g)].map((m) => m[1] as string);
+    expect(calls).toHaveLength(2);
+    const [before, after] = calls.map(
+      (code) => new Function("cn", "ss", "isDisabled", "className", `return ${code};`),
+    );
+    for (const isDisabled of [false, true]) {
+      for (const className of [undefined, "mt-2", "p-2"]) {
+        expect(after?.(cn, ss, isDisabled, className)).toBe(
+          before?.(cn, ss, isDisabled, className),
+        );
+      }
+    }
+  });
+});
+
+describe("the README's relative links", () => {
+  it("point only at files the published package carries", async () => {
+    // The README is read from node_modules and on npmjs.com, where CONTRIBUTING.md,
+    // examples/ and assets/ do not exist — and npm leaves a <source srcset> relative, so
+    // the dark hero 404'd there. Anything outside the tarball is linked absolutely.
+    const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+    const carried = [...(pkg.files as string[]), "README.md", "LICENSE", "package.json"];
+    const targets = [
+      ...readme.matchAll(/\]\(\.\/([^)#]+)[^)]*\)|(?:src|srcset|href)="\.\/([^"]+)"/g),
+    ].map((m) => (m[1] ?? m[2]) as string);
+    expect(targets.length).toBeGreaterThan(0);
+    const outside = targets.filter(
+      (target) => !carried.some((path) => target === path || target.startsWith(`${path}/`)),
+    );
+    expect(outside).toEqual([]);
+  });
+});
+
 describe("the anchors the table of contents points at", () => {
   it("resolves every one of them", () => {
     // A renamed heading leaves a link that silently goes nowhere, and the contents list
@@ -192,6 +250,62 @@ describe("every example in the README", () => {
       clearReported();
     }
   }, 30_000);
+
+  it("shows what tailess check really prints", async () => {
+    // The sample had dropped the file line and the closing hint, so a CI script written
+    // against it matched output the command never produced.
+    const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { vi } = await import("vitest");
+    const { run } = await import("../src/check/run.js");
+    const { clearCache } = await import("../src/extract/collect.js");
+    const { clearReported } = await import("../src/integration/report.js");
+
+    const start = readme.indexOf("`tailess check` compiles your project for real and looks:");
+    const sample = readme.slice(start).match(/\n```\n(\[tailess\][\s\S]*?)\n```/)?.[1];
+    expect(sample).toContain("[tailess]");
+
+    clearCache();
+    clearReported();
+    const dir = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-readme-"));
+    const out: string[] = [];
+    const push = (m: unknown) => void out.push(String(m));
+    vi.spyOn(console, "log").mockImplementation(push);
+    vi.spyOn(console, "warn").mockImplementation(push);
+    vi.spyOn(console, "error").mockImplementation(push);
+    try {
+      await mkdir(join(dir, "src"));
+      await writeFile(
+        join(dir, "src", "Card.tsx"),
+        `import { ss } from "tailess";\n` +
+          `export const card = ss({ base: "rounded", md: "p-4", hover: "underline", lg: "flex" });\n`,
+      );
+      await writeFile(
+        join(dir, "src", "app.css"),
+        `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }\n`,
+      );
+      const code = await run({
+        command: "check",
+        content: [dir],
+        css: undefined,
+        cwd: dir,
+        strict: false,
+        extensions: [],
+        ignore: [],
+        json: false,
+        max: 20,
+        out: undefined,
+        write: false,
+      });
+      expect(code).toBe(1);
+      expect(out.join("\n").split("\\").join("/")).toBe(sample);
+    } finally {
+      vi.restoreAllMocks();
+      await rm(dir, { recursive: true, force: true });
+      clearCache();
+      clearReported();
+    }
+  }, 30_000);
 });
 
 describe("the list of exported types", () => {
@@ -212,4 +326,49 @@ describe("the list of exported types", () => {
     const undocumented = [...exported].filter((name) => !readme.includes(`\`${name}\``)).sort();
     expect(undocumented).toEqual([]);
   });
+});
+
+describe("the tailess.d.ts the README tells you to write", () => {
+  it("adds to the package's types rather than replacing them", async () => {
+    // Copied verbatim it was a global script, so `declare module "tailess"` replaced the
+    // package's declarations and every `import { ss } from "tailess"` stopped compiling.
+    // Compiled here against the built declarations, exactly as a consumer's would be.
+    const { existsSync } = await import("node:fs");
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const ts = (await import("typescript")).default;
+
+    const declarations = fileURLToPath(new URL("../dist/index.d.ts", import.meta.url));
+    expect(existsSync(declarations), "build first: this compiles against dist/").toBe(true);
+
+    const snippet = readme.match(/```ts\n(\/\/ tailess\.d\.ts[\s\S]*?)```/)?.[1];
+    expect(snippet).toBeDefined();
+
+    const dir = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-dts-"));
+    try {
+      await writeFile(join(dir, "tailess.d.ts"), snippet as string);
+      await writeFile(
+        join(dir, "main.ts"),
+        `import { configure, ss } from "tailess";\n` +
+          `configure({ keys: ["3xl", "sidebar-open"] });\n` +
+          `export const a = ss({ md: "p-6", "3xl": "p-12", "sidebar-open": "translate-x-0" });\n`,
+      );
+      const program = ts.createProgram([join(dir, "main.ts"), join(dir, "tailess.d.ts")], {
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        target: ts.ScriptTarget.ES2022,
+        paths: { tailess: [declarations] },
+      });
+      const errors = ts
+        .getPreEmitDiagnostics(program)
+        .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+      expect(errors).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

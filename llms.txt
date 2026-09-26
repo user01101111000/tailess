@@ -29,6 +29,7 @@ import { ss as tw } from "tailess";   // a renamed import — kills the whole fi
 ss({ md: "p-4" });
 match(size, { sm: "p-2", lg: "p-8" });          // a lookup, all branches literal
 ss({ md: cond ? "p-4" : "p-2" });               // both branches are read
+button(props, ss({ md: "w-auto" }));            // a component's override goes through ss()
 ss({ base: "w-[var(--w)]" });                   // a value from data goes in a CSS var
 style={vars({ "--w": `${percent}%` })}
 ```
@@ -63,7 +64,7 @@ npx tailess doctor   # is the plugin wired up at all?
 npx tailess check    # compile for real; exits 1 if a class has no rule
 ```
 
-The build plugin reports ten things it can prove wrong from the source. Of the shapes
+The build plugin reports eleven things it can prove wrong from the source. Of the shapes
 above it reports the variable, the interpolated template and the renamed import — and
 **not** the spread, the computed key or the computed prefix: for those the scanner
 enumerates nothing, so there is no candidate for `check` to compile and it exits 0. A

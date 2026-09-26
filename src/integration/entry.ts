@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 /**
@@ -21,8 +22,36 @@ import { dirname, isAbsolute, resolve } from "node:path";
  * the project for every CSS module in the build.
  */
 
-/** How many `@import` hops to follow before giving up. */
-const maxDepth = 3;
+/**
+ * How many `@import` hops to follow before giving up. The `seen` set already stops a
+ * cycle, so this only bounds the work; three hops was too few for a real layout
+ * (`app.css` → `base.css` → `theme.css` → `tokens.css` → Tailwind), and the fourth hop
+ * got no injection and no warning.
+ */
+export const maxDepth = 8;
+
+/**
+ * Resolves a bare or aliased `@import` specifier to a file, the way the bundler will —
+ * `@/styles/tailwind.css` through a Vite alias, `@workspace/ui/globals.css` through a
+ * workspace package. `undefined` when it cannot.
+ */
+export type ImportResolver = (specifier: string, importer: string) => Promise<string | undefined>;
+
+/**
+ * Node's own resolution, for the integrations that have no bundler resolver to ask:
+ * it follows a workspace package's `exports`, which is how the shadcn/ui monorepo
+ * template wires `@import "@workspace/ui/globals.css"`. Aliases stay out of reach.
+ */
+export const resolveWithNode: ImportResolver = async (specifier, importer) => {
+  try {
+    return createRequire(importer).resolve(specifier);
+  } catch {
+    return undefined;
+  }
+};
+
+/** `https://…`, `data:…`, `//cdn…`: nothing on disk to follow. */
+const remote = /^(?:[a-z][a-z\d+.-]*:|\/\/)/i;
 
 const tailwindSpecifier = /(?:^|[/\\])tailwindcss(?:$|[/\\])|^tailwindcss/;
 // An at-rule's *name* is ASCII case-insensitive in CSS, so `@Import` is the same
@@ -92,32 +121,37 @@ export async function readStylesheet(path: string): Promise<string | undefined> 
  * Decide whether Tailwind will emit utilities into this stylesheet, following
  * relative `@import`s from `file` when the answer isn't visible locally.
  *
- * Bare specifiers other than Tailwind's own (`@import "@acme/styles"`) can't be
- * resolved without a bundler resolver, so they're treated as "not Tailwind". A
- * project that hides its Tailwind import behind one still gets the dev-time warning
- * rather than silence.
+ * A bare or aliased specifier (`@import "@acme/styles"`) is followed only through
+ * `resolveImport`, when the caller has one. Without it such an import was never
+ * followed, and an app stylesheet reaching Tailwind through a Vite alias or a workspace
+ * package got no injection — every runtime-built class unstyled, with a dev warning
+ * telling the reader to add a plugin that was already there.
  */
 export async function isTailwindEntry(
   css: string,
   file?: string,
   depth = maxDepth,
   seen: Set<string> = new Set(),
+  resolveImport?: ImportResolver,
 ): Promise<boolean> {
   const specifiers = importSpecifiers(css);
   if (specifiers.some(isTailwindSpecifier)) return true;
   if (hasUtilitiesAtRule(css)) return true;
   if (depth <= 0 || !file) return false;
 
-  const base = dirname(resolve(file));
+  const importer = resolve(file);
+  const base = dirname(importer);
   for (const specifier of specifiers) {
-    // Only relative hops: anything else needs a resolver we don't have.
-    if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue;
-    const path = resolve(base, specifier);
-    if (isAbsolute(path) === false || seen.has(path)) continue;
+    if (remote.test(specifier)) continue;
+    const relative = specifier.startsWith("./") || specifier.startsWith("../");
+    const path = relative
+      ? resolve(base, specifier)
+      : await resolveImport?.(specifier, importer).catch(() => undefined);
+    if (path === undefined || !isAbsolute(path) || seen.has(path)) continue;
     seen.add(path);
     const nested = await readStylesheet(path);
     if (nested === undefined) continue;
-    if (await isTailwindEntry(nested, path, depth - 1, seen)) return true;
+    if (await isTailwindEntry(nested, path, depth - 1, seen, resolveImport)) return true;
   }
 
   return false;

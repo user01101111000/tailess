@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { buildPrelude } from "./inject.js";
 
@@ -66,10 +66,15 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-/** Create a sidecar writer rooted at `cacheDir`. */
-export function createSidecar(cacheDir: string): Sidecar {
-  const path = join(resolve(cacheDir), "tailess", "tailess.css");
-  let written: string | null = null;
+/**
+ * Create a sidecar writer rooted at `cacheDir`.
+ *
+ * `scope` gives the file a directory of its own, for a caller that runs more than one
+ * differently configured instance against one cache directory: sharing the file let one
+ * app's candidate list silently replace the other's.
+ */
+export function createSidecar(cacheDir: string, scope?: string): Sidecar {
+  const path = join(resolve(cacheDir), "tailess", ...(scope ? [scope] : []), "tailess.css");
   let serial = 0;
 
   /**
@@ -103,19 +108,16 @@ export function createSidecar(cacheDir: string): Sidecar {
   ): Promise<{ css: string; changed: boolean }> {
     const css = buildPrelude(classes);
 
-    // Confirm the file is still there rather than trusting `written` alone: cache
-    // directories get wiped between runs (`vite --force`, a clean script), and a
-    // stale "already written" would leave the entry importing nothing.
-    const unchanged =
-      css === written &&
-      (await stat(path).then(
-        () => true,
-        () => false,
-      ));
-    if (unchanged) return { css, changed: false };
+    // The file is the only truth. Memory of having written it is stale when the cache
+    // directory was wiped (`vite --force`, a clean script) or another writer replaced it,
+    // and it is empty in a fresh instance — which postcss-cli and postcss-loader create
+    // for every rebuild. Rewriting identical bytes there bumped the mtime of a file
+    // Tailwind reported as a dependency, so the watcher rebuilt, forever.
+    if ((await readFile(path, "utf8").catch(() => undefined)) === css) {
+      return { css, changed: false };
+    }
 
     await write(css);
-    written = css;
     return { css, changed: true };
   }
 

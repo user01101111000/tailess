@@ -66,6 +66,15 @@ describe("a position that can never match", () => {
     }
   }
 
+  it("warns about a quoted position, which builds a selector the browser discards", () => {
+    // `:nth-of-type("2n")` is not a selector. The check that caught it used to call every
+    // `"` unusable, which was wrong for `has('[data-state="open"]')`; this one is its own.
+    const seen = warnings(() => nthOfType('"2n"', "p-4"));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("never quoted");
+    expect(warnings(() => nthOfType("2n", "p-4"))).toEqual([]);
+  });
+
   it("warns about zero, since :nth-child() counts from 1", () => {
     // `nth-0` compiles and passes every other check; the element is simply never
     // selected, which is the shape of silence this package exists to break.

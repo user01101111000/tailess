@@ -262,6 +262,59 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   { src: `data("count", 2e-2, "opacity-100")` },
   { src: `data("count", -0, "opacity-100")` },
   { src: `data("checked", false, "opacity-100")` },
+  // A ternary over values that are not strings. The string sweep finds no literal in
+  // `c ? 1 : 2`, and the number was read only when it was the whole argument, so the
+  // presence form was the only candidate — and `data-[level=1]:` never got a rule.
+  ...[true, false].flatMap((c) => [
+    { src: `data("level", c ? 1 : 2, "p-2")`, env: { c } },
+    { src: `data("active", c ? true : false, "p-2")`, env: { c } },
+    { src: `data("state", c ? "open" : null, "p-2")`, env: { c } },
+    { src: `data("state", c ? "open" : undefined, "p-2")`, env: { c } },
+    { src: `data("level", c ? 2 : "max", "p-2")`, env: { c } },
+    // A state stack with a conditional element is a product, not one long stack; and a
+    // ternary between a stack and a single state is two alternatives, not three states.
+    { src: `on(["dark", c ? "hover" : "focus"], "underline")`, env: { c } },
+    { src: `on(c ? ["dark", "hover"] : "focus", "underline")`, env: { c } },
+    { src: `on([c ? "md" : "lg", "dark", c ? "hover" : "focus"], "underline")`, env: { c } },
+  ]),
+  // An inline lookup picks one of its values; under a prefix, each value is a class.
+  ...["a", "b"].map((k) => ({ src: `ss({ md: { a: "p-2", b: "p-4" }[k] })`, env: { k } })),
+  // Through a namespace import, a method call is still ours.
+  { src: `t.on("hover", "underline")`, env: { t: { on } } },
+  { src: `t.on(["dark", "hover"], "underline")`, env: { t: { on } } },
+  // cva's one-argument call with an ss map: no `variants` key, so the runtime reads the
+  // whole object as the base — and the scanner read it as a config and kept only `base`.
+  { src: `variants({ base: "flex", md: "p-4", lg: { hover: "p-6" } })()` },
+  // Composition four and five deep. Following stopped at the third helper, so the
+  // innermost stacked class — the only one the runtime builds — was never enumerated.
+  { src: `ss({ dark: on("hover", data("state", "open", aria("selected", "bg-blue-50"))) })` },
+  { src: `on("focus", on("hover", until("md", withPrefix("[&>li]", "p-2"))))` },
+  {
+    src: `variants({ variants: { s: { a: { md: on("hover", until("xl", aria("selected", "p-2"))) } } } })({ s: "a" })`,
+  },
+  {
+    src: `ss({ md: on("hover", on("focus", on("active", until("xl", aria("selected", "p-3"))))) })`,
+  },
+  // Call spellings the pattern did not recognise: an optional call, and a comment
+  // between the name and its parenthesis. Each built a class nothing enumerated.
+  { src: `t.ss?.({ md: "p-4" })`, env: { t: { ss } } },
+  { src: `t.on?.("hover", "underline")`, env: { t: { on } } },
+  { src: `ss /* why */ ({ md: "p-4" })` },
+  // A comment after a key belonged to the key: `lg /* desktops */:p-3`.
+  { src: `ss({ lg /* desktops */: "p-3", md: "p-2" })` },
+  // A parenthesized state list is still a list.
+  { src: `on((["dark", "hover"]), "underline")` },
+  // Escapes the runtime decodes: each of these is a space, so the value is two classes.
+  { src: String.raw`ss({ md: "p-4\x20text-lg" })` },
+  { src: String.raw`ss({ md: "p-4 text-lg" })` },
+  { src: String.raw`ss({ md: "p-4\u{20}text-lg" })` },
+  { src: String.raw`ss({ md: "after:content-['→']" })` },
+  // A template literal decodes its escapes too.
+  { src: "ss({ md: `p-4\\ttext-lg` })" },
+  // A backslash line continuation is nothing at runtime — and with CRLF the string
+  // ended early, taking the next argument's classes with it.
+  { src: `ss({ md: "p-4 \\\r\ntext-lg" }, { lg: "p-6" })` },
+  { src: `ss({ md: "p-4 \\\ntext-lg" }, { lg: "p-6" })` },
 ];
 
 describe("what the runtime builds, the scanner finds", () => {
@@ -277,6 +330,41 @@ describe("what the runtime builds, the scanner finds", () => {
         .split(/\s+/)
         .filter((cls) => cls !== "" && cls.includes(":"));
 
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(emitted.filter((cls) => !candidates.has(cls))).toEqual([]);
+    });
+  }
+});
+
+/**
+ * TypeScript the runtime never sees. The scanner reads the source as written, types and
+ * all; the runtime runs what the compiler leaves. So these are transpiled first, and the
+ * scanner is handed the original.
+ */
+const typescriptCases: string[] = [
+  // A compound list is an ordinary place for a TypeScript assertion, and the scanner
+  // only unwrapped text that started with `[` and ended with `]`: every one of these
+  // lost all of its compound classes, with no diagnostic.
+  `variants({ variants: { t: { a: "p-1" } }, compound: [{ t: "a", class: { md: "p-4" } }] as const })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compound: [{ t: "a", class: { md: "p-4" } }] satisfies ReadonlyArray<object> })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compoundVariants: [{ t: "a", className: { dark: "ring-2" } }] as const })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compound: ([{ t: "a", class: { lg: "p-6" } }]) })({ t: "a" })`,
+  `variants({ variants: { t: { a: "p-1" } }, compound: ([{ t: "a", class: { xl: "p-8" } }] as const) })({ t: "a" })`,
+  `variants("flex", { variants: { t: { a: "p-1" } }, compoundVariants: [{ t: "a", class: { sm: "p-2" } }] as const })({ t: "a" })`,
+  // Type arguments on the call, and an angle-bracket assertion on a state list.
+  `variants<any>({ variants: { s: { a: { md: "p-4" } } } })({ s: "a" })`,
+  `on(<const>["dark", "hover"], "underline")`,
+];
+
+describe("what the runtime builds from TypeScript, the scanner finds", () => {
+  for (const src of typescriptCases) {
+    it(src, async () => {
+      const { transformSync } = await import("esbuild");
+      const js = transformSync(`(${src})`, { loader: "ts" }).code.trim().replace(/;$/, "");
+      const candidates = new Set(extractClasses(src));
+      const emitted = evaluate(js, {})
+        .split(/\s+/)
+        .filter((cls) => cls !== "" && cls.includes(":"));
       expect(emitted.length).toBeGreaterThan(0);
       expect(emitted.filter((cls) => !candidates.has(cls))).toEqual([]);
     });

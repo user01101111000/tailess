@@ -1,9 +1,11 @@
 /// <reference types="node" />
-import { join } from "node:path";
-import { collect } from "../extract/collect.js";
-import { isTailwindEntry, isTailwindSpecifier } from "../integration/entry.js";
-import { sourceChunks } from "../integration/inject.js";
-import { type DiagnosticMode, reportDiagnostics } from "../integration/report.js";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
+import { collect, normalizeExtensions } from "../extract/collect.js";
+import { isTailwindEntry, isTailwindSpecifier, resolveWithNode } from "../integration/entry.js";
+import { sourceLiterals } from "../integration/inject.js";
+import { readOptions } from "../integration/options.js";
+import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 
@@ -64,7 +66,10 @@ interface AtRule {
 interface Root {
   /** Only ever read to spot Tailwind's banner — see {@link ranAfterTailwind}. */
   first?: { type: string; text?: string } | undefined;
+  /** Read for the leading statements the injection has to follow; see {@link inject}. */
+  nodes: ReadonlyArray<{ type: string; nodes?: unknown }>;
   prepend(...nodes: Array<Rule | AtRule>): void;
+  insertAfter(index: number, nodes: Array<Rule | AtRule>): unknown;
   walkAtRules(callback: (rule: AtRule) => false | undefined): void;
 }
 interface Helpers {
@@ -83,7 +88,33 @@ interface Helpers {
     decl(defaults: { prop: string; value: string }): Declaration;
   };
 }
-interface Plugin {
+/**
+ * Put `nodes` after the stylesheet's leading block-less statements — comments,
+ * `@charset`, `@import`, `@layer a, b;` and the like — or first when there are none.
+ *
+ * CSS ignores an `@import` that follows a rule, and the injection carries one: the
+ * marker. Prepended, it pushed a font's `@import url("https://fonts…")` behind
+ * `:root{--tailess:1}`, and the font vanished from the built CSS.
+ */
+function inject(root: Root, nodes: Array<Rule | AtRule>): void {
+  let last = -1;
+  for (const [index, node] of root.nodes.entries()) {
+    if (node.type === "comment" || (node.type === "atrule" && node.nodes === undefined)) {
+      last = index;
+    } else break;
+  }
+  if (last === -1) root.prepend(...nodes);
+  else root.insertAfter(last, nodes);
+}
+
+/**
+ * The plugin a call to `tailessPostcss()` returns.
+ *
+ * Exported so a consumer's declaration emit can name it: a typed `postcss.config.ts` in a
+ * `composite` project, or a shared config package exporting the plugin, failed with
+ * "Default export of the module has or is using private name 'Plugin'".
+ */
+export interface TailessPostcssPlugin {
   postcssPlugin: string;
   Once(root: Root, helpers: Helpers): Promise<void>;
 }
@@ -118,7 +149,7 @@ async function isTailwindStylesheet(root: Root, from: string | undefined): Promi
 
   // Hand the shared resolver just the import list to follow.
   const css = imports.map((specifier) => `@import "${specifier}";`).join("\n");
-  return isTailwindEntry(css, from);
+  return isTailwindEntry(css, from, undefined, undefined, resolveWithNode);
 }
 
 /**
@@ -179,20 +210,45 @@ function themeSource(root: Root): string {
     } else if (name === "custom-variant" || name === "config") {
       parts.push(`@${name} ${rule.params};`);
     } else if (name === "import") {
-      const specifier = /["']([^"']+)["']/.exec(rule.params)?.[1];
-      if (specifier) parts.push(`@import "${specifier}";`);
+      // The params as written, not a rebuilt `@import "<specifier>"`: `prefix(tw)` rides
+      // on the import itself, and dropping it hid the one total failure the theme check
+      // exists to catch whenever it sat on the entry's own import. The Vite plugin hands
+      // over the whole stylesheet, so this is what makes the two agree.
+      if (/["']/.test(rule.params)) parts.push(`@import ${rule.params};`);
     }
     return undefined;
   });
   return parts.join("\n");
 }
 
+/**
+ * The sidecar's scope for these options: none for the defaults, and one keyed on what the
+ * instance scans otherwise.
+ *
+ * Every instance used to write one file in the working directory's cache, so two
+ * configured differently — a monorepo root running two apps' pipelines, a multi-compiler
+ * build with per-entry options — each got the other's list, with the marker present and
+ * nothing printed. Instances that scan the same thing still share a file, which is right.
+ */
+function sidecarScope(options: TailessPostcssOptions): string | undefined {
+  const { content, extensions, ignore } = options;
+  if (!content?.length && extensions === undefined && ignore === undefined) return undefined;
+  const key = JSON.stringify([
+    (content ?? []).map((path) => resolve(path)),
+    extensions === undefined ? null : [...normalizeExtensions(extensions)].sort(),
+    ignore === undefined ? null : [...ignore].sort(),
+  ]);
+  return createHash("sha256").update(key).digest("hex").slice(0, 10);
+}
+
 let warnedAboutOrder = false;
 
 const tailessPostcss = Object.assign(
-  (options: TailessPostcssOptions = {}): Plugin => {
+  (given: TailessPostcssOptions = {}): TailessPostcssPlugin => {
+    const options = readOptions<TailessPostcssOptions>(given, "tailess/postcss");
     const sidecar = createSidecar(
       options.cacheDir ?? join(process.cwd(), "node_modules", ".cache"),
+      sidecarScope(options),
     );
 
     return {
@@ -221,6 +277,13 @@ const tailessPostcss = Object.assign(
         });
 
         reportDiagnostics(diagnostics, process.cwd(), options.diagnostics);
+        if (files.length === 0 && (options.content?.length || options.extensions !== undefined)) {
+          reportEmptyScan(
+            options.content?.length ? options.content : [process.cwd()],
+            `the working directory (${process.cwd()})`,
+            options.extensions,
+          );
+        }
 
         // The breakpoint keys are compiled in, so a `@theme` that moves them is
         // invisible to the source scan — and three of the four ways it can are
@@ -246,7 +309,7 @@ const tailessPostcss = Object.assign(
         if (specifier !== null) {
           try {
             await sidecar.refresh(classes);
-            root.prepend(helpers.postcss.atRule({ name: "import", params: `"${specifier}"` }));
+            inject(root, [helpers.postcss.atRule({ name: "import", params: `"${specifier}"` })]);
           } catch {
             inline = true;
           }
@@ -255,12 +318,12 @@ const tailessPostcss = Object.assign(
         if (inline) {
           const marker = helpers.postcss.rule({ selector: ":root" });
           marker.append(helpers.postcss.decl({ prop: "--tailess", value: "1" }));
-          root.prepend(
+          inject(root, [
             marker,
-            ...sourceChunks(classes).map((chunk) =>
-              helpers.postcss.atRule({ name: "source", params: `inline("${chunk}")` }),
+            ...sourceLiterals(classes).map((chunk) =>
+              helpers.postcss.atRule({ name: "source", params: `inline(${chunk})` }),
             ),
-          );
+          ]);
         }
 
         const parent = from ?? "";

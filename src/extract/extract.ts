@@ -1,9 +1,11 @@
+import { stateKeys } from "../constants.js";
 import { escapeCondition } from "../internal/condition.js";
 import {
+  arrayBody,
+  arrayLiterals,
   declaresKey,
   dictionaryKeys,
   extractStrings,
-  isArrayLiteral,
   isObjectLiteral,
   maskLiterals,
   objectLiterals,
@@ -11,23 +13,25 @@ import {
   parseObject,
   type RawCall,
   scanCalls,
+  splitArgs,
 } from "./scan.js";
 
 /**
  * Characters that can't appear in a candidate we hand to Tailwind via
- * `@source inline("…")`:
+ * `@source inline(…)`:
  *
  * - whitespace would split one candidate into two (and a newline makes Tailwind
  *   throw `Unterminated string`),
- * - `"` would close the string,
  * - `{` / `}` would trigger Tailwind's brace expansion,
  * - `\` and `;` would break out of the declaration.
  *
- * Anything containing them is dropped rather than risking a broken stylesheet;
- * such class names are vanishingly rare and always statically visible to Tailwind
- * anyway when written as a literal.
+ * Anything containing them is dropped rather than risking a broken stylesheet — and
+ * the build check names a prefixed one, since its literal in the source is not the
+ * class the runtime builds and Tailwind never sees that class either. A `"` is carried:
+ * such a candidate goes in a single-quoted directive (see `sourceLiterals`), so only one
+ * holding both kinds of quote is dropped.
  */
-const unsafe = /[\s"{}\\;]/;
+const unsafe = /[\s{}\\;]/;
 
 /**
  * How deep nested buckets are followed. Real compound variants are two or three
@@ -49,15 +53,16 @@ const maxNesting = 10;
  * to {@link enumerate} — so without a bound a chain of nested calls is re-walked
  * once per ancestor, which is quadratic in how deep the chain runs.
  *
- * Two hops covers what people write. One is the ordinary case —
- * `until("md", on("hover", …))`, `ss({ md: withPrefix(…) })` — and the second is
- * there because these compose: `on("hover", until("md", withPrefix(…)))` is three
- * prefixes deep and each one has to reach the innermost classes. Beyond that the
- * spelling is unreadable long before it is unsupported. A nested `ss` or
+ * A bound is what keeps that linear: each call is followed at most this many hops,
+ * however long the chain. It was two, on the argument that nothing deeper is written —
+ * but `ss({ dark: on("hover", data("state", "open", aria("selected", …))) })` is, and
+ * the third helper was where following stopped, so the one class the runtime builds,
+ * the innermost stack, had no rule and nothing said so. Six covers any composition of
+ * the helpers a person would type, at a constant cost per call. A nested `ss` or
  * `responsive` needs no hop at all: its map is an object literal, so
  * {@link objectLiterals} already finds it right there in the value.
  */
-const maxFollow = 2;
+const maxFollow = 6;
 
 /**
  * A JavaScript numeric literal, minus any sign: decimal with an optional leading or
@@ -116,6 +121,23 @@ function staticValues(text: string): string[] {
   return out;
 }
 
+/**
+ * True if `word` (`true`, `null`, …) appears as a bare keyword in `text`, not as part of
+ * an identifier or a property access (`isTrue`, `x.null`).
+ */
+function literalWord(text: string, word: string): boolean {
+  return new RegExp(`(?<![\\w$.])${word}(?![\\w$])`).test(text);
+}
+
+/**
+ * How many stacks one `on([…])` list may enumerate. Each conditional element doubles
+ * them; a real one has one or two, and this only keeps generated code from exploding.
+ */
+const maxStacks = 256;
+
+/** Every state `on` accepts, for telling `t.on("hover", …)` from `stream.on("end", …)`. */
+const knownStates = new Set<string>(stateKeys);
+
 /** Helper name to the variant it builds, for the four `nth-*` families. */
 const nthVariants: Record<string, string> = {
   nth: "nth",
@@ -150,6 +172,7 @@ function isBalanced(candidate: string): boolean {
   let round = 0;
   let square = 0;
   let quotes = 0;
+  let doubles = 0;
   for (let i = 0; i < candidate.length; i += 1) {
     const ch = candidate.charCodeAt(i);
     if (ch === 40) {
@@ -164,9 +187,11 @@ function isBalanced(candidate: string): boolean {
       if (square < 0) return false;
     } else if (ch === 39) {
       quotes += 1;
+    } else if (ch === 34) {
+      doubles += 1;
     }
   }
-  return round === 0 && square === 0 && quotes % 2 === 0;
+  return round === 0 && square === 0 && quotes % 2 === 0 && doubles % 2 === 0;
 }
 
 /** Guards against feeding junk (or a whole expression) to Tailwind as a candidate. */
@@ -175,6 +200,7 @@ function isSafeCandidate(candidate: string): boolean {
     candidate.length > 0 &&
     candidate.length <= 255 &&
     !unsafe.test(candidate) &&
+    !(candidate.includes('"') && candidate.includes("'")) &&
     isBalanced(candidate)
   );
 }
@@ -238,6 +264,32 @@ export function extractClasses(code: string): string[] {
 
   for (const call of scanCalls(code)) enumerate(call, add);
 
+  return [...found].sort();
+}
+
+/**
+ * The prefixed classes the runtime builds in `code` that cannot be handed to Tailwind:
+ * an arbitrary value holding a `{`, `}` or `\`, which `@source inline(…)` reads as brace
+ * expansion or an escape.
+ *
+ * {@link extractClasses} drops them, rightly — one would break the directive — but
+ * dropping one is a silent unstyled element, because the literal in the source is
+ * `after:content-['{']` and the class on the element is `md:after:content-['{']`. This
+ * is what lets the build check name them. Only a class with a `[` counts: that is the one
+ * place those characters belong in a class, so a stray `"{"` in a handler is not one. The
+ * prefix counts as much as the token — `withPrefix("has-[.my\_class]", "p-2")` is dropped
+ * for its backslash all the same.
+ */
+export function uncarriedClasses(code: string): string[] {
+  const found = new Set<string>();
+  const add: Add = (prefix, tokens) => {
+    if (prefix === "") return;
+    for (const token of tokens) {
+      const cls = `${prefix}:${token}`;
+      if (cls.includes("[") && /[{}\\]/.test(cls)) found.add(cls);
+    }
+  };
+  for (const call of scanCalls(code)) enumerate(call, add);
   return [...found].sort();
 }
 
@@ -359,9 +411,39 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
     case "on": {
       if (args.length < 2) return;
       const stateArg = args[0] ?? "";
-      const states = extractStrings(stateArg);
-      const prefixes = isArrayLiteral(stateArg) ? [states.join(":")] : states;
-      emitValue(args[1] ?? "", prefixes, add, follow);
+      const prefixes: string[] = [];
+      const push = (prefix: string) => {
+        if (prefix !== "" && !prefixes.includes(prefix)) prefixes.push(prefix);
+      };
+      // Each list is one stack, and each of its elements is a *position* that may hold
+      // alternatives — `["dark", c ? "hover" : "focus"]` is two stacks, not the one
+      // `dark:hover:focus` that joining every string in it produced.
+      const lists = arrayLiterals(stateArg);
+      let rest = stateArg;
+      for (const list of lists) {
+        let stacks = [""];
+        for (const element of splitArgs(arrayBody(list))) {
+          const options = extractStrings(element);
+          if (options.length === 0) continue;
+          stacks = stacks
+            .flatMap((stack) => options.map((state) => (stack ? `${stack}:${state}` : state)))
+            .slice(0, maxStacks);
+        }
+        for (const stack of stacks) push(stack);
+        rest = rest.replace(list, " ");
+      }
+      // A state outside any list stands alone: `c ? ["dark", "hover"] : "focus"`.
+      for (const state of extractStrings(rest)) push(state);
+      // `on` is the one helper name every event emitter shares, and a method call on
+      // anything might be a namespace import — so `stream.on("end", …)` and
+      // `$(el).on("click", …)` were read as ours, and `end:animate-spin` failed the gate
+      // on healthy code. `on` only accepts Tailwind's own states, so through a receiver
+      // a stack of anything else cannot be a call the runtime builds.
+      const reachable =
+        call.receiver === ""
+          ? prefixes
+          : prefixes.filter((stack) => stack.split(":").every((state) => knownStates.has(state)));
+      emitValue(args[1] ?? "", reachable, add, follow);
       return;
     }
 
@@ -391,7 +473,6 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       if (args.length < 3) return;
       const valueArg = args[1] ?? "";
       const values = extractStrings(valueArg);
-      const literal = valueArg.trim();
       // `data` takes `string | number | boolean | null | undefined`. A number or a
       // boolean is every bit as static as a string — it just isn't a string
       // *literal*, so the sweep above finds nothing and the presence form would be
@@ -399,12 +480,28 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       // twice: `data-[checked=true]:` never gets CSS, and the `data-[checked]:` that
       // does is a selector matching whenever the attribute is merely present.
       // `data-checked={true}` is what React writes, so this is a mainstream path.
-      if (values.length === 0) {
-        const resolved = staticValue(literal);
-        if (resolved !== null) values.push(resolved);
+      //
+      // And not only when it is the whole argument: `open ? 1 : 2`, `on ? true : false`
+      // and `state ? "open" : null` are each two values, and reading only the strings
+      // left one branch — or both — with no rule. So the non-string literals are swept
+      // for with the strings blanked, which is how `nth` reads the same shape.
+      // A whole-argument literal first, since only it resolves a sign and an exponent
+      // (`-1.5`, `2e-2`) — the sweep reads unsigned tokens, which is what a ternary's
+      // branches almost always are.
+      const masked = maskLiterals(valueArg, true);
+      const whole = staticValue(valueArg.trim());
+      if (whole !== null) {
+        if (!values.includes(whole)) values.push(whole);
+      } else {
+        for (const value of staticValues(masked)) if (!values.includes(value)) values.push(value);
       }
-      // `null`/`undefined` (or a non-literal value) means the presence form.
-      const presence = values.length === 0 || literal === "null" || literal === "undefined";
+      for (const word of ["true", "false"]) {
+        if (literalWord(masked, word) && !values.includes(word)) values.push(word);
+      }
+      // `null`/`undefined` (or a non-literal value) means the presence form — in any
+      // branch, not only as the whole argument.
+      const presence =
+        values.length === 0 || literalWord(masked, "null") || literalWord(masked, "undefined");
       const prefixes: string[] = [];
       for (const name of extractStrings(args[0] ?? "")) {
         if (presence) prefixes.push(`data-[${name}]`);
@@ -494,9 +591,16 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
       // value never does — including when it is an `ss` map, which a string-only test
       // would have read as the config.
       const first = objectLiterals(args[0] ?? "")[0];
-      const isConfig = first !== undefined && parseObject(first).some((f) => f.key === "variants");
+      const isConfig = first !== undefined && declaresKey(first, "variants");
       const cva = args.length > 1 && !isConfig;
       if (cva) emitMaps(args[0] ?? "", depth, add, follow);
+      // cva's one-argument call — `variants("flex")`, or an ss map with no `variants`
+      // key — is a base and nothing else, which is how the runtime reads it. Taken for a
+      // config, only its `base` key was read and every breakpoint in it was lost.
+      if (args.length === 1 && !isConfig) {
+        emitMaps(args[0] ?? "", depth, add, follow);
+        return;
+      }
       const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
       if (config === undefined) return;
       const fields = parseObject(config);
@@ -553,9 +657,7 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
           // else here: inside an `ss` value an object is a `clsx` dictionary, so
           // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
           // the one level so the rules themselves are visible to it.
-          const list = value.trim();
-          const rules = list.startsWith("[") && list.endsWith("]") ? list.slice(1, -1) : list;
-          for (const rule of objectLiterals(rules)) {
+          for (const rule of objectLiterals(arrayBody(value))) {
             for (const field of parseObject(rule)) {
               // `className` is the `cva`/`tv` spelling, accepted so a ported recipe
               // does not lose its compound classes without a word.

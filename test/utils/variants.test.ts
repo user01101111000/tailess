@@ -1,4 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { configure } from "../../src/internal/settings.js";
+import { ss } from "../../src/utils/ss.js";
 import { type VariantComponent, type VariantProps, variants } from "../../src/utils/variants.js";
 
 /**
@@ -52,6 +54,32 @@ describe("variants", () => {
 
   it("drops a falsy extra argument", () => {
     expect(button({}, false)).toBe(button());
+  });
+
+  it("refuses an ss map as an extra argument, which the build could never see", () => {
+    // The scanner reads the recipe and `ss(...)` calls, never `button(...)`: a map here
+    // built `md:w-auto` on the element with no rule behind it, and nothing said so. The
+    // literal `ss()` call is what the build reads, so that is the spelling to reach for.
+    // @ts-expect-error an ss map is not a class value.
+    const quiet = button({}, { md: "w-auto" });
+    expect(typeof quiet).toBe("string");
+    expect(button({}, ss({ md: "w-auto" }))).toContain("md:w-auto");
+    expect(button({}, ["mt-2", { underline: true }], "p-1")).toContain("underline");
+  });
+
+  it("says so at runtime when an ss map reaches it anyway", () => {
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      button({}, { md: "w-auto-js" } as never);
+      expect(seen.some((m) => m.includes("got an ss map") && m.includes("md"))).toBe(true);
+      seen.length = 0;
+      // Arrays hold clsx dictionaries, and a class string is just classes: both quiet.
+      button({}, [{ "w-auto": true }], "w-full");
+      expect(seen).toEqual([]);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
   });
 
   it("works with no defaults and no compounds", () => {
@@ -147,6 +175,45 @@ describe("a boolean variant", () => {
     const t = variants({ variants: { size: { sm: "p-1", lg: "p-4" } } });
     // @ts-expect-error a size is not a boolean.
     expect(t({ size: true })).toBeDefined();
+  });
+});
+
+describe("class or className passed in the props, the cva and tv habit", () => {
+  it("is not applied, and says where extra classes go", () => {
+    // cva and tv both read `class`/`className` off the props; here extra classes are a
+    // second argument, and a props object built elsewhere slips past the types — so the
+    // class was dropped with nothing said.
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      const props = { tone: "danger", className: "mt-2" } as const;
+      expect(button(props as never)).not.toContain("mt-2");
+      expect(seen.some((m) => m.includes("className") && m.includes("second argument"))).toBe(true);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  });
+});
+
+describe("a compound rule naming a variant the recipe does not have", () => {
+  it("never applies, as in cva and tailwind-variants, and says so once", () => {
+    // Only the declared groups were checked, so a typo or a since-renamed group counted
+    // as matched and the rule applied to every instance meeting its other conditions.
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      const config = {
+        base: "btn",
+        variants: { tone: { danger: "bg-red-600" } },
+        compoundVariants: [{ tone: "danger", sizee: "lg", class: "ring-4" }],
+        defaultVariants: { tone: "danger" },
+      };
+      const t = variants(config as never) as unknown as (props?: object) => string;
+      expect(t()).toBe("btn bg-red-600");
+      expect(seen.some((m) => m.includes('"sizee"'))).toBe(true);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
   });
 });
 
@@ -273,9 +340,72 @@ describe("slots — a component with named parts", () => {
     card({}, { footer: "p-2" });
   });
 
+  it("refuses an ss map as a part's extra, and warns when one gets through", () => {
+    // @ts-expect-error a part's extra is a class value; wrap a map in ss().
+    card({}, { root: { md: "p-10" } });
+    expect(card({}, { root: ss({ md: "p-10" }) }).root).toContain("md:p-10");
+
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      card({}, { title: { lg: "text-2xl-js" } } as never);
+      expect(seen.some((m) => m.includes('"title" extra') && m.includes("lg"))).toBe(true);
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  });
+
+  it("refuses an option naming a part that does not exist, even beside one that does", () => {
+    // Only an option whose every key was unknown failed; one typo next to a real part
+    // compiled, and its classes reached no part at all.
+    // @ts-expect-error `titel` is not a part.
+    variants({
+      slots: { root: "r", title: "t" },
+      variants: { s: { a: { root: "p-2", titel: "text-xl" } } },
+    });
+    const parent = variants({ slots: { root: "r" }, variants: {} });
+    // An inherited part is a part.
+    const child = variants({
+      slots: { icon: "size-4" },
+      variants: { s: { a: { root: "p-2", icon: "text-red-500" } } },
+      extend: parent,
+    });
+    expect(child({ s: "a" })).toEqual({ root: "r p-2", icon: "size-4 text-red-500" });
+  });
+
   it("ignores a slot name off the prototype", () => {
     const t = variants({ slots: { root: "p-1" }, variants: { s: { a: { root: "p-2" } } } });
     expect(t({ s: "toString" } as never).root).toBe("p-1");
+  });
+
+  it("exposes each part's own classes, frozen, rather than its internal arrays", () => {
+    // `slots` was the list the component spreads on every call: through `ss` a map inside
+    // it read as a clsx dictionary ("base dark"), and a write the types allowed corrupted
+    // every later render.
+    expect(card.slots).toEqual({
+      root: "rounded-lg border dark:border-neutral-800",
+      title: "font-semibold",
+      body: "text-sm",
+    });
+    expect(ss(card.slots.root)).toBe("rounded-lg border dark:border-neutral-800");
+    expect(Object.isFrozen(card.slots)).toBe(true);
+    try {
+      // @ts-expect-error a recipe's parts are read-only.
+      card.slots.root = "SMUGGLED";
+    } catch {
+      /* strict mode */
+    }
+    expect(card().root).toBe("rounded-lg border dark:border-neutral-800 p-3");
+  });
+
+  it("gives an inherited part both recipes' classes", () => {
+    const parent = variants({ slots: { root: "rounded" }, variants: {} });
+    const child = variants({
+      slots: { root: "border", icon: "size-4" },
+      variants: {},
+      extend: parent,
+    });
+    expect(child.slots).toEqual({ root: "rounded border", icon: "size-4" });
   });
 });
 
@@ -394,6 +524,60 @@ describe("extend — building on another recipe", () => {
   });
 });
 
+describe("extend given something it cannot build on", () => {
+  /** Run `fn`, returning what it warned. */
+  function warned(fn: () => void): string[] {
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      fn();
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+    return seen;
+  }
+
+  it("refuses a plain config object, and says so when one gets through", () => {
+    // Sharing a base config between recipes is a plausible pattern: the prop types said
+    // `tone` was inherited, and the built component had no base, no tone and no default.
+    const shared = {
+      base: "rounded",
+      variants: { tone: { danger: "bg-red-600" } },
+      defaults: { tone: "danger" },
+    } as const;
+    // @ts-expect-error `extend` takes a built recipe, not its config.
+    variants({ extend: shared, variants: { size: { lg: "text-lg" } } });
+
+    type Built = (props?: object) => string;
+    const seen = warned(() => {
+      const b = variants({ extend: shared, variants: { size: { lg: "text-lg" } } } as never);
+      expect((b as unknown as Built)({ size: "lg" })).toBe("text-lg");
+    });
+    expect(seen.some((m) => m.includes("not a config object"))).toBe(true);
+    expect(variants({ extend: variants(shared), variants: {} })()).toBe("rounded bg-red-600");
+  });
+
+  it("warns when a slotted recipe extends a flat one, and inherits none of it", () => {
+    // The mirror of the flat-on-slotted case, and as silent: the parent's ss-map option
+    // was spread by slot name, so the `base` part picked up `p-2` and `md:p-4` was lost.
+    const flat = variants({
+      base: { base: "rounded", md: "rounded-lg" },
+      variants: { tone: { a: "bg-red-500", b: { base: "p-2", md: "p-4" } } },
+      compound: [{ tone: "a", class: "ring" }],
+      defaults: { tone: "a" },
+    });
+    type Parts = ((props?: object) => Record<string, string>) & { variants: object };
+    let slotted: Parts | undefined;
+    const seen = warned(() => {
+      const config = { extend: flat, slots: { base: "block", root: "r" }, variants: {} };
+      slotted = variants(config as never) as unknown as Parts;
+    });
+    expect(seen.some((m) => m.includes("names a recipe without slots"))).toBe(true);
+    expect(slotted?.({ tone: "b" })).toEqual({ base: "block", root: "r" });
+    expect(Object.keys(slotted?.variants ?? { x: 1 })).toEqual([]);
+  });
+});
+
 describe("a recipe's definition, once it is built", () => {
   it("is a snapshot, so writing to config or variants cannot change it", () => {
     // Both are declared `readonly` and were the caller's own objects. Writing to `config`
@@ -428,6 +612,32 @@ describe("a recipe's definition, once it is built", () => {
     expect(Object.isFrozen(cfg)).toBe(false);
     cfg.base = "changed";
     expect(cfg.base).toBe("changed");
+  });
+
+  it("is a snapshot all the way down: compounds, defaults and nested maps", () => {
+    // One level per group left these as the caller's live objects, so a write after
+    // building still changed the parent, a child built later disagreed with it, and
+    // `md:bg-green-500` — never in the source — was a class the component built.
+    const cfg = {
+      base: { base: "rounded", md: "rounded-lg" },
+      variants: { tone: { a: "bg-red-500", b: { base: "bg-blue-500", md: "bg-blue-700" } } },
+      compound: [{ tone: "a", class: "ring-1" }],
+      defaults: { tone: "a" },
+    };
+    type Built = ((props?: object) => string) & { config: unknown };
+    const parent = variants(cfg as never) as unknown as Built;
+    const before = [parent(), parent({ tone: "b" })];
+
+    cfg.base.md = "rounded-SMUGGLED";
+    cfg.compound.push({ tone: "b", class: "ring-SMUGGLED" });
+    cfg.compound[0] = { tone: "a", class: "ring-SMUGGLED" };
+    cfg.defaults.tone = "b";
+    cfg.variants.tone.b.md = "bg-SMUGGLED";
+
+    expect([parent(), parent({ tone: "b" })]).toEqual(before);
+    const child = variants({ variants: {}, extend: parent } as never) as unknown as Built;
+    expect([child(), child({ tone: "b" })]).toEqual(before);
+    expect(JSON.stringify(parent.config)).not.toContain("SMUGGLED");
   });
 
   it("names an extend cycle instead of overflowing the stack", () => {
@@ -485,6 +695,49 @@ describe("cva's one-argument call", () => {
     expect(plain()).toBe("flex items-center");
     expect(plain({}, "gap-2")).toBe("flex items-center gap-2");
     expect(variants({ base: "only" } as never)()).toBe("only");
+  });
+
+  it("refuses a class string where the props go", () => {
+    // Its props were typed `{}`, which a string satisfies, so `plain(className)` — the
+    // cn habit — compiled and the class vanished.
+    const plain = variants("flex items-center");
+    const className = "mt-2";
+    // @ts-expect-error extra classes are the second argument.
+    plain("mt-2");
+    // @ts-expect-error the same, through a variable.
+    plain(className);
+    expect(plain(undefined, className)).toBe("flex items-center mt-2");
+  });
+
+  it("does not take a recipe config held in a variable for base classes", () => {
+    // With the base-first overloads ahead of the config ones, a config in a variable —
+    // no excess-property check to refuse it — would have matched `variants(base)` and
+    // lost its variants' types.
+    const config = {
+      base: "rounded",
+      variants: { tone: { a: "bg-red-500", b: "bg-blue-500" } },
+    } as const;
+    const recipe = variants(config);
+    expectTypeOf<VariantProps<typeof recipe>>().toEqualTypeOf<{
+      tone?: "a" | "b" | undefined;
+    }>();
+    // @ts-expect-error "c" is not one of tone's options.
+    recipe({ tone: "c" });
+    expect(recipe({ tone: "b" })).toBe("rounded bg-blue-500");
+  });
+});
+
+describe("a readonly class list", () => {
+  it("is a class value wherever a mutable one is", () => {
+    // `as const` lists were refused by ss and variants, though the runtime reads them the
+    // same and `on` and a recipe's `compound` already took them.
+    const layout = ["flex", "gap-2"] as const;
+    const fromProps: readonly string[] = ["p-4"];
+    expect(ss({ base: layout, md: "gap-4" })).toBe("flex gap-2 md:gap-4");
+    expect(ss(layout)).toBe("flex gap-2");
+    expect(ss({ md: fromProps })).toBe("md:p-4");
+    const recipe = variants({ base: layout, variants: { s: { a: ["p-1", "m-1"] as const } } });
+    expect(recipe({ s: "a" })).toBe("flex gap-2 p-1 m-1");
   });
 });
 
@@ -647,5 +900,67 @@ describe("cva's own call shape", () => {
     const own = `variants({ base: { base: "rounded", md: "p-6" }, variants: { t: { a: { hover: "ring-2" } } } })`;
     expect(extractClasses(cva)).toEqual(["hover:ring-2", "md:p-6"]);
     expect(extractClasses(cva)).toEqual(extractClasses(own));
+  });
+});
+
+describe("regressions the release-candidate audit found in its own fixes", () => {
+  /** Run `fn` collecting the warnings it prints. */
+  function collect(fn: () => unknown): { value: unknown; seen: string[] } {
+    const seen: string[] = [];
+    configure({ onWarn: (message) => seen.push(message) });
+    try {
+      return { value: fn(), seen };
+    } finally {
+      configure({ onWarn: (message) => console.warn(message) });
+    }
+  }
+
+  it("builds a recipe whose map contains itself, rather than throwing on import", () => {
+    // The deep snapshot recursed with no guard, so a self-referencing option, base or
+    // slot map threw `RangeError` from `variants()` itself — taking the module down.
+    const option: Record<string, unknown> = { base: "p-2" };
+    option.md = option;
+    const base: Record<string, unknown> = { base: "flex" };
+    base.lg = base;
+    const { value, seen } = collect(() => [
+      variants({ variants: { size: { lg: option } } } as never)({ size: "lg" } as never),
+      variants({ base, variants: { size: { sm: "p-1" } } } as never)(),
+      variants(base as never, { variants: { size: { sm: "p-1" } } })(),
+      (
+        variants({
+          slots: { root: base },
+          variants: { size: { sm: {} } },
+        } as never)() as unknown as { root: string }
+      ).root,
+    ]);
+    expect(value).toEqual(["p-2", "flex", "flex", "flex"]);
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it("stays quiet when props.className is also passed on as the extra argument", () => {
+    // `<button {...p} className={button(p, p.className)} />` is the natural wrapper, and
+    // the class does reach the output; the warning threw under a CI `onWarn`.
+    const props = { tone: "danger" as const, className: "mt-2" };
+    const { value, seen } = collect(() => button(props, props.className));
+    expect(value).toContain("mt-2");
+    expect(seen).toEqual([]);
+    expect(collect(() => button({ className: "mt-2" } as never)).seen).toHaveLength(1);
+  });
+
+  it("says nothing about an extra map that builds no prefixed class", () => {
+    // `{ base: "mt-2" }` and `{}` work — `mt-2` is a literal Tailwind styles itself.
+    expect(collect(() => button({}, { base: "mt-2" } as never)).seen).toEqual([]);
+    expect(collect(() => button({}, {} as never)).seen).toEqual([]);
+    expect(collect(() => button({}, { base: { md: "mt-3" } } as never)).seen).toHaveLength(1);
+  });
+
+  it("refuses at compile time a config that lacks variants but is still a config", () => {
+    // Read as base classes (`base` is an ss key too), it inherited nothing at runtime.
+    // @ts-expect-error `extend` makes this a config, and a config needs `variants`.
+    variants({ extend: button, base: "font-medium" });
+    // @ts-expect-error likewise `defaults`.
+    variants({ base: "p-2", defaults: {} });
+    // A plain ss map is still base classes.
+    expect(variants({ base: "p-2", md: "p-4" })()).toBe("p-2 md:p-4");
   });
 });
