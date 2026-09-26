@@ -866,16 +866,32 @@ describe("a remote @import ahead of Tailwind's", () => {
   const font = `@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap");`;
   const entry = `${font}\n@import "tailwindcss";\n`;
 
-  /** The font import survived, and no rule reached the output ahead of it. */
-  function keptFirst(css: string): void {
+  /**
+   * The font import survived, and tailess put nothing ahead of it.
+   *
+   * Tailwind 4.1.0 — the floor — hoists a `@supports` fallback above the import itself,
+   * with no tailess anywhere (compiled below), a bug of its own it has since fixed. So
+   * "no rule ahead of it" holds wherever Tailwind alone gets it right, and the marker must
+   * never be ahead of it on any version.
+   */
+  async function keptFirst(css: string): Promise<void> {
     const at = css.indexOf("@import url(");
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(css.slice(0, at)).not.toContain("{");
+    const head = css.slice(0, at);
+    expect(head).not.toContain("--tailess");
+    const alone = (
+      await postcss([tailwindcss({ base: dir, optimize: false })]).process(entry, {
+        from: join(dir, "index.css"),
+      })
+    ).css;
+    if (!alone.slice(0, alone.indexOf("@import url(")).includes("{")) {
+      expect(head).not.toContain("{");
+    }
     expect(missingRules(css, expected)).toEqual([]);
   }
 
   it("keeps the font through the PostCSS plugin", async () => {
-    keptFirst(await compileWithPostcss(entry));
+    await keptFirst(await compileWithPostcss(entry));
   });
 
   it("keeps the font through the Vite plugin", async () => {
@@ -888,7 +904,7 @@ describe("a remote @import ahead of Tailwind's", () => {
       result?.code ?? "",
       { from },
     );
-    keptFirst(compiled.css);
+    await keptFirst(compiled.css);
   });
 });
 
