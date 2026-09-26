@@ -860,6 +860,28 @@ export function configuresMerge(source: string): boolean {
 }
 
 /**
+ * True for a file a bundler wrote rather than a person: it carries a source-map comment,
+ * or a minified line — long and dense with statements, where an inline SVG path is long
+ * but has none.
+ *
+ * A bundle runs, but every class in it came from source that is scanned in its own right,
+ * so reporting on it can only repeat or invent. It invented: Qwik's `server/` and vinxi's
+ * `.vinxi/build` hold `import{ss as s}from"tailess"`, and each helper there was reported
+ * as a renamed import — failing `check --strict` and `diagnostics: "error"` after a
+ * successful build. Enumeration still reads such a file; only the checks skip it.
+ */
+function bundled(code: string): boolean {
+  if (/^\/[/*][#@] sourceMappingURL=/m.test(code)) return true;
+  for (let start = 0; start < code.length; ) {
+    const end = code.indexOf("\n", start);
+    const stop = end === -1 ? code.length : end;
+    if (stop - start > 1000 && code.slice(start, stop).split(";").length > 20) return true;
+    start = stop + 1;
+  }
+  return false;
+}
+
+/**
  * Every problem the scanner can prove from `code`.
  *
  * `file` is only ever read to decide whether an import statement in it is code, so a
@@ -871,6 +893,7 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
   // import matched nothing and every check in the file went quiet, the renamed-import
   // one included.
   const code = source.startsWith("﻿") ? source.slice(1) : source;
+  if (bundled(code)) return [];
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;

@@ -34,7 +34,9 @@ describe("collect", () => {
   });
 
   it("skips dependencies, build output and caches", async () => {
-    for (const name of ["node_modules", ".next", ".turbo", "dist", "coverage"]) {
+    // `.vinxi`: SolidStart 1 writes its minified server bundle there before the client
+    // build runs, and scanning it reported that bundle on the very first build.
+    for (const name of ["node_modules", ".next", ".turbo", "dist", "coverage", ".vinxi"]) {
       await mkdir(join(dir, name), { recursive: true });
       await writeFile(join(dir, name, "x.tsx"), `ss({ md: "from-${name}" })`);
     }

@@ -729,3 +729,27 @@ describe("a call that does not run", () => {
     expect(at("docs.mdx", mdx)).toEqual(["dynamic-value"]);
   });
 });
+
+describe("a file a bundler wrote", () => {
+  // Qwik's `server/` and vinxi's `.vinxi/build` hold minified bundles such as
+  // `import{ss as s}from"tailess"`. Each helper there was reported as a renamed import,
+  // so `check --strict` and `diagnostics: "error"` failed after a successful build.
+  const statements = Array.from({ length: 60 }, (_, i) => `var a${i}=s({md:"p-${i % 9}"})`);
+  const minified = `import{ss as s,on as o}from"tailess";${statements.join(";")};export{a1};`;
+
+  it("is not checked when it is minified", () => {
+    expect(minified.length).toBeGreaterThan(1000);
+    expect(diagnose(minified, "server/entry.preview.js")).toEqual([]);
+  });
+
+  it("is not checked when it carries a source map comment", () => {
+    const code = `import { ss as s } from "tailess";\ns({ md: size });\n//# sourceMappingURL=index.js.map\n`;
+    expect(diagnose(code, ".output/index.js")).toEqual([]);
+  });
+
+  it("still checks source with a long line that is not code, like an SVG path", () => {
+    const path = `M0 0${" L1 1".repeat(300)}`;
+    const code = `import { ss as tw } from "tailess";\nexport const Icon = () => <svg><path d="${path}" /></svg>;\n`;
+    expect(diagnose(code, "Icon.tsx").map((d) => d.kind)).toEqual(["renamed-import"]);
+  });
+});

@@ -45,6 +45,14 @@ export const defaultIgnore = [
   ".svelte-kit",
   ".astro",
   ".output",
+  // SolidStart 1 and TanStack Start (vinxi), Nitro, React Router 7, Angular: build output
+  // and caches. vinxi writes `.vinxi/build` before the client build runs, so its minified
+  // server bundle was scanned — and reported — on the very first build.
+  ".vinxi",
+  ".nitro",
+  ".react-router",
+  ".tanstack",
+  ".angular",
   ".vercel",
   ".netlify",
   ".turbo",

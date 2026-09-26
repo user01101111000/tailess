@@ -132,6 +132,27 @@ describe("malformed input stays contained", () => {
     expect(extractClasses(map)).toContain("lg:grid");
   });
 
+  it("reads a large recipe however its argument list opens", () => {
+    // Only the object-first spelling got the larger cap. A comment first, and the cva
+    // form with a template-literal, shared-constant or `ss()` base, were each dropped
+    // whole past 20,000 characters.
+    const options = Array.from(
+      { length: 700 },
+      (_, i) => `o${i}: { base: "p-${i % 12}", md: "px-${i % 9}" }`,
+    ).join(",\n");
+    const config = `{ variants: { size: {\n${options}\n} } }`;
+    for (const opening of [
+      `\n  // the design system's button\n  ${config}`,
+      `\`inline-flex items-center\`, ${config}`,
+      `base, ${config}`,
+      `ss({ base: "flex" }), ${config}`,
+    ]) {
+      const code = `variants(${opening})`;
+      expect(code.length).toBeGreaterThan(20_000);
+      expect(extractClasses(code), opening.slice(0, 30)).toContain("md:px-8");
+    }
+  });
+
   it("still emits what a call held when the file simply ends mid-edit", () => {
     // A dev server reads files while they are being typed.
     expect(extractClasses(`ss({ md: "text-lg"`)).toEqual(["md:text-lg"]);

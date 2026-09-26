@@ -323,11 +323,14 @@ export function inertCode(code: string, file?: string): Uint8Array {
  * whatever follows would only add noise. An argument list that starts as code gets
  * {@link maxCodeArgsLength} instead, since a large one is a real recipe.
  */
-function readParen(code: string, open: number): string {
+function readParen(code: string, open: number, recipe = false): string {
   const start = open + 1;
-  let first = start;
-  while (first < code.length && /\s/.test(code[first] as string)) first += 1;
-  const startsAsCode = "{['\"".includes(code[first] ?? " ");
+  const first = skipTrivia(code, start);
+  // A recipe is the one call that grows past the prose cap, and it opens however its
+  // author likes — a comment, a template-literal or shared-constant base, an `ss()` call —
+  // so a `variants(` always gets the larger cap. Testing only for `{ [ ' "` read the
+  // object-first spelling and dropped every other one past 20,000 characters, whole.
+  const startsAsCode = recipe || "{['\"`".includes(code[first] ?? " ");
   const capped = start + (startsAsCode ? maxCodeArgsLength : maxArgsLength);
   const limit = Math.min(code.length, capped);
   let i = start;
@@ -952,7 +955,7 @@ function callsMatching(code: string, pattern: RegExp): RawCall[] {
     const open = match.index + match[0].length - 1;
     calls.push({
       name,
-      args: splitArgs(readParen(code, open)),
+      args: splitArgs(readParen(code, open, name === "variants")),
       receiver: receiverBefore(code, match.index),
       at: open,
     });
@@ -998,7 +1001,7 @@ export function outerCalls(code: string): RawCall[] {
     const name = match[1];
     if (name === undefined) continue;
     const open = match.index + match[0].length - 1;
-    const args = readParen(code, open);
+    const args = readParen(code, open, name === "variants");
     calls.push({ name, args: splitArgs(args), receiver: receiverBefore(code, match.index) });
     // Resume past this call's own arguments; the recursion reaches what is inside
     // them through this call rather than beside it.
