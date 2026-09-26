@@ -121,6 +121,11 @@ describe("a selector that cannot become a class", () => {
     const seen = warnings(() => has(".my_class", "p-10"));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toContain("underscore");
+    // The advice has to be one that works. `withPrefix("has-[.my\_class]", …)` built a
+    // class the scanner drops (it cannot carry a backslash), so it was unstyled with the
+    // gate green; a String.raw literal is one Tailwind's own scan reads, and compiles.
+    expect(seen[0]).not.toContain("withPrefix");
+    expect(seen[0]).toContain("String.raw");
     expect(warnings(() => inside(".side_bar", "p-11"))).toHaveLength(1);
     expect(warnings(() => notHas("[data-x=a_b]", "p-12"))).toHaveLength(1);
   });

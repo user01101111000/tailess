@@ -275,15 +275,18 @@ export function extractClasses(code: string): string[] {
  * {@link extractClasses} drops them, rightly — one would break the directive — but
  * dropping one is a silent unstyled element, because the literal in the source is
  * `after:content-['{']` and the class on the element is `md:after:content-['{']`. This
- * is what lets the build check name them. Only a token with a `[` counts: that is the one
- * place those characters belong in a class, so a stray `"{"` in a handler is not one.
+ * is what lets the build check name them. Only a class with a `[` counts: that is the one
+ * place those characters belong in a class, so a stray `"{"` in a handler is not one. The
+ * prefix counts as much as the token — `withPrefix("has-[.my\_class]", "p-2")` is dropped
+ * for its backslash all the same.
  */
 export function uncarriedClasses(code: string): string[] {
   const found = new Set<string>();
   const add: Add = (prefix, tokens) => {
     if (prefix === "") return;
     for (const token of tokens) {
-      if (token.includes("[") && /[{}\\]/.test(token)) found.add(`${prefix}:${token}`);
+      const cls = `${prefix}:${token}`;
+      if (cls.includes("[") && /[{}\\]/.test(cls)) found.add(cls);
     }
   };
   for (const call of scanCalls(code)) enumerate(call, add);

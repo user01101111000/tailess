@@ -85,7 +85,8 @@ export function warnUnusableValue(helper: string, noun: string, value: string): 
   if (value.replace(varName, "").includes("_")) {
     warn(
       `[tailess] the ${noun} "${value}" has a literal underscore, which Tailwind reads ` +
-        'as a space. Spaces are escaped for you; use withPrefix for a real "\\_".',
+        'as a space. Spaces are escaped for you; a real "\\_" needs the whole class ' +
+        "written out in String.raw.",
     );
   }
 

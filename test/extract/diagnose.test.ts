@@ -677,6 +677,19 @@ describe("a prefixed class the build cannot hand to Tailwind", () => {
     expect(kinds(`on("hover", "after:content-['}']")`)).toEqual(["uncarried-class"]);
   });
 
+  it("names one whose backslash is in the prefix, not the class", () => {
+    // What the literal-underscore warning used to advise: `\_` in a helper's selector,
+    // condition or attribute value. The scanner drops it like any other backslash, and
+    // `check --strict` said "nothing to check" and exited 0 over an unstyled element.
+    const [found] = diag(`withPrefix("has-[.my\\\\_class]", "p-2")`);
+    expect(found?.kind).toBe("uncarried-class");
+    expect(found?.message).toContain("has-[.my\\_class]:p-2");
+    expect(kinds(`withPrefix("supports-[--my\\\\_var:1]", "grid")`)).toEqual(["uncarried-class"]);
+    expect(kinds(`data("status", "in\\\\_progress", "p-2")`)).toEqual(["uncarried-class"]);
+    // A backslash outside any bracket is not a Tailwind class to begin with.
+    expect(kinds(`withPrefix("md", "a\\\\b")`)).toEqual([]);
+  });
+
   it("stays quiet about the same class unprefixed, and about a brace that is not a class", () => {
     expect(kinds(`ss({ base: "after:content-['{']" })`)).toEqual([]);
     expect(kinds(`ss("after:content-['{']")`)).toEqual([]);

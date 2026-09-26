@@ -400,7 +400,7 @@ const arbitraryNoun: Record<string, string> = {
  * failure this package exists to prevent, and it is the one case `tailess check` cannot
  * catch either: the candidate never reaches the compiler to be found missing.
  */
-function unusableValues(name: string, arg: string, report: (d: Diagnostic) => void): void {
+function unusableValues(name: string, arg: string, report: Report): void {
   const noun = arbitraryNoun[name] as string;
   for (const literal of extractStrings(arg)) {
     const value = literal.trim();
@@ -419,13 +419,16 @@ function unusableValues(name: string, arg: string, report: (d: Diagnostic) => vo
         message: `${name}(${literal}, …) quotes its position, so it builds a selector the browser discards.`,
       });
     } else if (unusableValue(value)) {
-      report({
-        kind: "unusable-query",
-        message:
-          `${name}("${value}", …) has a ${noun} containing one of \`{ } \\ ;\`, an unclosed ` +
-          "quote or both kinds of quote, which the build cannot carry, so the class is " +
-          "built but no rule is generated for it.",
-      });
+      report(
+        {
+          kind: "unusable-query",
+          message:
+            `${name}("${value}", …) has a ${noun} containing one of \`{ } \\ ;\`, an unclosed ` +
+            "quote or both kinds of quote, which the build cannot carry, so the class is " +
+            "built but no rule is generated for it.",
+        },
+        value,
+      );
     }
   }
 }
@@ -456,7 +459,13 @@ function checkPrefix(text: string | undefined, report: (d: Diagnostic) => void):
 }
 
 /** Inspect one call. */
-function check(call: RawCall, report: (d: Diagnostic) => void): void {
+/**
+ * Where a check sends what it found. `value` is an arbitrary value already reported as
+ * one the build cannot carry, so the class built from it is not reported a second time.
+ */
+type Report = (d: Diagnostic, value?: string) => void;
+
+function check(call: RawCall, report: Report): void {
   const { name, args } = call;
 
   switch (name) {
@@ -897,8 +906,10 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
   const found: Diagnostic[] = [];
   const seen = new Set<string>();
   let suppressed = 0;
+  const uncarriable: string[] = [];
 
-  const report = (d: Diagnostic): void => {
+  const report: Report = (d, value) => {
+    if (value !== undefined) uncarriable.push(value);
     // One call site written twice in a file is one problem, not two.
     const key = `${d.kind} ${d.message}`;
     if (seen.has(key)) return;
@@ -930,13 +941,16 @@ export function diagnose(source: string, file?: string): Diagnostic[] {
       }
     }
     for (const cls of uncarriedClasses(code)) {
+      // `nth("3n{1}", …)` is already named, by the helper that took the value.
+      if (uncarriable.some((value) => cls.includes(value))) continue;
       report({
         kind: "uncarried-class",
         message:
           `"${cls}" is built at runtime, but its "{", "}" or "\\" cannot be handed to ` +
           "Tailwind — @source inline(…) reads them as brace expansion or an escape — so it " +
           "has no rule. Write the class out as a literal somewhere in your source, where " +
-          "Tailwind's own scan finds it, or use a value without the character.",
+          "Tailwind's own scan finds it (one with a backslash in String.raw`…`), or use a " +
+          "value without the character.",
       });
     }
   }
