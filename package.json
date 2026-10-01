@@ -129,7 +129,7 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.1.0",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^5.0.2",
     "clsx": "^2.1.1",
     "esbuild": "^0.28.2",
     "js-yaml": "^5.4.1",
