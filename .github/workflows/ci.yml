@@ -359,8 +359,11 @@ jobs:
           import { readFileSync, readdirSync } from "node:fs";
           import { join } from "node:path";
 
-          const dir = ".next/static/css";
-          const css = readdirSync(dir)
+          // The whole of `static`, not `static/css`: that is where webpack writes a
+          // stylesheet, and Turbopack writes it under `static/chunks`. Reading one
+          // directory would fail the Turbopack build for a rule that is there.
+          const dir = ".next/static";
+          const css = readdirSync(dir, { recursive: true })
             .filter((name) => name.endsWith(".css"))
             .map((name) => readFileSync(join(dir, name), "utf8"))
             .join("\n");
@@ -407,3 +410,22 @@ jobs:
           cd /tmp/next-smoke
           node verify.mjs
           npx tailess check --content app --strict
+
+      # Everything above is Next 15, which builds with webpack. Next 16 builds with
+      # Turbopack unless told otherwise, and 16 is what `create-next-app` installs — so
+      # the README's "works with Turbopack and webpack" was proved for the one bundler a
+      # new project no longer gets by default. Both run PostCSS through their own loader,
+      # and that loader is what has to resolve the string-named `"tailess/postcss"`.
+      # `.next` is removed between builds so each `verify.mjs` reads only what that build
+      # emitted, rather than a stylesheet the one before it left behind.
+      - name: The same app on Next 16, built with Turbopack and with webpack
+        run: |
+          cd /tmp/next-smoke
+          npm install --no-audit --no-fund next@^16.0.0
+          node -p "'next ' + require('next/package.json').version"
+          rm -rf .next
+          npx next build
+          node verify.mjs
+          rm -rf .next
+          npx next build --webpack
+          node verify.mjs
