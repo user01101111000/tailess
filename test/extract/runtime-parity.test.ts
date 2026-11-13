@@ -250,6 +250,22 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
     src: `variants({ base: { md: "gap-2" }, variants: { s: { a: { hover: "underline" } } }, defaults: { s: "a" } })()`,
   },
 
+  // A recipe with no `variants` of its own: parts that never change, and a child that
+  // only builds on its parent. Both are configs, and neither is a base value — read as
+  // one, the first builds `slots:root:md:p-6` and the second drops what it inherited.
+  {
+    src: `variants({ slots: { root: { base: "rounded", md: "p-6" }, title: { hover: "underline" } } })().root`,
+  },
+  { src: `variants({ slots: { root: "rounded", title: { hover: "underline" } } })().title` },
+  { src: `variants({ slots: { root: { base: "rounded", md: "p-6" } } }).slots.root` },
+  {
+    src: `variants({ extend: variants({ base: { md: "p-2" }, variants: { t: { a: { hover: "p-4" } } } }), base: { lg: "p-8" } })({ t: "a" })`,
+  },
+  {
+    src: `variants({ extend: variants({ slots: { root: { md: "p-2" } } }), slots: { foot: { lg: "pt-4" } } })().foot`,
+  },
+  { src: `variants({ base: { md: "p-2" }, defaults: {} })()` },
+
   // `aria` with a value is `aria-[name=value]`, built the way `data` builds its own —
   // and the count of arguments is the only thing that says which form a call is.
   { src: `aria("current", "page", "font-semibold")` },

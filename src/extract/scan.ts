@@ -829,7 +829,18 @@ const declaredKey = {
   slots: /^(?:slots|["']slots["'])\s*(?::|$)/,
   extend: /^(?:extend|["']extend["'])\s*(?::|$)/,
   variants: /^(?:variants|["']variants["'])\s*(?::|$)/,
+  compound: /^(?:compound|["']compound["'])\s*(?::|$)/,
+  compoundVariants: /^(?:compoundVariants|["']compoundVariants["'])\s*(?::|$)/,
+  defaults: /^(?:defaults|["']defaults["'])\s*(?::|$)/,
+  defaultVariants: /^(?:defaultVariants|["']defaultVariants["'])\s*(?::|$)/,
 } as const;
+
+/**
+ * The keys only a recipe's config has — what the types call `ConfigShaped` and the
+ * runtime `configKeys`, in `utils/variants.ts`. The three have to name the same keys:
+ * which of `variants()`' arguments is the config is one question, asked in three places.
+ */
+export const configKeys = Object.keys(declaredKey) as ReadonlyArray<keyof typeof declaredKey>;
 
 /**
  * True when the object literal `config` declares `name` at all — including the shorthand

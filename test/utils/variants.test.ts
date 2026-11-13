@@ -954,13 +954,123 @@ describe("regressions the release-candidate audit found in its own fixes", () =>
     expect(collect(() => button({}, { base: { md: "mt-3" } } as never)).seen).toHaveLength(1);
   });
 
-  it("refuses at compile time a config that lacks variants but is still a config", () => {
-    // Read as base classes (`base` is an ss key too), it inherited nothing at runtime.
-    // @ts-expect-error `extend` makes this a config, and a config needs `variants`.
-    variants({ extend: button, base: "font-medium" });
-    // @ts-expect-error likewise `defaults`.
-    variants({ base: "p-2", defaults: {} });
+  it("builds a config that lacks variants but is still a config", () => {
+    // Read as base classes (`base` is an ss key too), it inherited nothing at runtime —
+    // so the types refused it, which was the audit's fix. The runtime asks what the types
+    // ask now, of the same keys, and the shape builds instead of being turned away.
+    const child = variants({ extend: button, base: "shadow" });
+    expect(child({ tone: "danger" })).toBe(
+      "rounded font-medium hover:brightness-110 shadow bg-red-600 text-sm px-2",
+    );
+    expect(variants({ base: "p-2", defaults: {} })()).toBe("p-2");
     // A plain ss map is still base classes.
     expect(variants({ base: "p-2", md: "p-4" })()).toBe("p-2 md:p-4");
+  });
+});
+
+/**
+ * `variants` was the whole test for "is this a config", and required. But a recipe does
+ * not have to have any of its own: a component whose parts never change is `{ slots }` and
+ * nothing else, and a child that only moves its parent's defaults is `{ extend, defaults }`.
+ * Both were read as base classes — an `ss` map — which emitted `slots:root:p-2` for the
+ * first and dropped the parent entirely for the second.
+ */
+describe("a recipe with no variants of its own", () => {
+  it("is a config because it has slots, and returns its parts", () => {
+    const card = variants({
+      slots: { root: { base: "rounded-lg border", md: "p-6" }, title: "font-semibold" },
+    });
+    expect(card()).toEqual({ root: "rounded-lg border md:p-6", title: "font-semibold" });
+    expect(card({}, { root: "mt-4" }).root).toBe("rounded-lg border md:p-6 mt-4");
+    expectTypeOf(card()).toEqualTypeOf<{ root: string; title: string }>();
+    // Parts that never change need no call at all: each one's own classes, built once.
+    expect(card.slots).toEqual({ root: "rounded-lg border md:p-6", title: "font-semibold" });
+  });
+
+  it("takes no props, rather than any prop at all", () => {
+    // With nothing to infer the groups from, TypeScript falls back to their constraint
+    // unless a default says otherwise — and the constraint is a string index signature.
+    const card = variants({ slots: { root: "rounded" } });
+    expectTypeOf<keyof VariantProps<typeof card>>().toEqualTypeOf<never>();
+
+    const raised = variants({ extend: button, base: "shadow-md" });
+    expectTypeOf<VariantProps<typeof raised>>().toEqualTypeOf<VariantProps<typeof button>>();
+    // @ts-expect-error an inherited variant still only has the options it was given.
+    expect(raised({ tone: "ghost" })).toBeDefined();
+  });
+
+  it("is a config because it extends, and keeps everything it inherited", () => {
+    const loud = variants({ extend: button, defaults: { tone: "danger" } });
+    expect(loud()).toBe(button({ tone: "danger" }));
+    expect(loud({ tone: "primary", size: "lg" })).toBe(button({ tone: "primary", size: "lg" }));
+    expectTypeOf<VariantProps<typeof loud>>().toEqualTypeOf<VariantProps<typeof button>>();
+
+    const raised = variants({ extend: button, base: "shadow-md" });
+    expect(raised({ size: "lg" })).toBe(
+      "rounded font-medium hover:brightness-110 shadow-md bg-blue-600 text-lg px-4 md:px-6",
+    );
+  });
+
+  it("does not infer its groups from the defaults or the compound rules", () => {
+    // Those mention the same type parameter, and with `variants` gone they were the only
+    // places left to infer it from: the result failed the constraint, the constraint was
+    // used instead, and the child took any prop at all.
+    const loud = variants({ extend: button, defaults: { tone: "danger" } });
+    // @ts-expect-error `colour` is not a variant of the parent, so it is not one here.
+    expect(loud({ colour: "red" })).toBe(loud());
+    const ringed = variants({
+      extend: button,
+      compound: [{ tone: "danger", size: "lg", class: "ring-4" }],
+    });
+    // @ts-expect-error nor here.
+    expect(ringed({ colour: "red" })).toBe(ringed());
+    expect(ringed({ tone: "danger", size: "lg" })).toContain("ring-4");
+    expectTypeOf<VariantProps<typeof ringed>>().toEqualTypeOf<VariantProps<typeof button>>();
+
+    // @ts-expect-error a default has to be one of the inherited options.
+    expect(variants({ extend: button, defaults: { tone: "ghost" } })).toBeDefined();
+  });
+
+  it("adds a part to a slotted parent with slots alone", () => {
+    const card = variants({
+      slots: { root: "rounded", title: "font-semibold" },
+      variants: { size: { lg: { root: "p-6" } } },
+    });
+    const withFooter = variants({ extend: card, slots: { footer: "text-xs" } });
+    expect(withFooter({ size: "lg" })).toEqual({
+      root: "rounded p-6",
+      title: "font-semibold",
+      footer: "text-xs",
+    });
+  });
+
+  it("still reads a map with none of a config's keys as base classes", () => {
+    // cva's one-argument call. `base` alone is both things at once, and they agree.
+    expect(variants({ base: "rounded", md: "p-2" })()).toBe("rounded md:p-2");
+    expect(variants({ base: "only" })()).toBe("only");
+    expect(variants(["flex", "gap-2"])()).toBe("flex gap-2");
+  });
+
+  it("is read by the scanner as the config it is", async () => {
+    const { extractClasses } = await import("../../src/extract/extract.js");
+    // No `slots:root:md:p-6`: the slot names are not prefixes.
+    expect(
+      extractClasses(`variants({ slots: { root: { md: "p-6" }, title: { hover: "underline" } } })`),
+    ).toEqual(["hover:underline", "md:p-6"]);
+    expect(extractClasses(`variants({ extend: button, base: { md: "p-3" } })`)).toEqual(["md:p-3"]);
+    expect(extractClasses(`variants({ extend: card, slots: { footer: { lg: "pt-4" } } })`)).toEqual(
+      ["lg:pt-4"],
+    );
+    // No `defaults:tone:danger`: a config's other keys are not buckets either.
+    expect(
+      extractClasses(`variants({ base: { md: "p-3" }, defaults: { tone: "danger" } })`),
+    ).toEqual(["md:p-3"]);
+    expect(
+      extractClasses(`variants({ compound: [{ tone: "danger", class: { hover: "ring-2" } }] })`),
+    ).toEqual(["hover:ring-2"]);
+    // A shorthand key is the same declaration.
+    expect(
+      extractClasses(`variants({ slots, extend, compound: [{ class: { root: { md: "p-1" } } }] })`),
+    ).toEqual(["md:p-1"]);
   });
 });

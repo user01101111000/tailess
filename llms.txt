@@ -50,7 +50,8 @@ finds the literal wherever it really lives.
 - `group` / `peer` / `container` — named variants.
 - `has` / `notHas` / `inside`, `nth` / `nthLast` / `nthOfType` / `nthLastOfType`
 - `variants(...)` — component recipes, with `slots`, `extend`, boolean variants and
-  compound rules. Accepts `cva`'s call shape and key names.
+  compound rules. Accepts `cva`'s call shape and key names. `variants` itself is
+  optional: `{ slots }` or `{ extend, defaults }` is a recipe.
 - `vars(...)` — CSS custom properties for values a class cannot carry.
 - `configure({ merge, onWarn, keys })`
 
@@ -58,6 +59,36 @@ Nesting runs one way: a helper goes **inside** an `ss` bucket, never the reverse
 `ss({ md: on("hover", "underline") })` is right — `"md:hover:underline"`; the bucket key
 and the helper each add their own variant, so do not repeat one in the other.
 `on("hover", { base: … })` builds the class `hover:base`.
+
+## Styles in their own file
+
+Keep a component's classes in a file beside it — `Button.styles.ts` next to `Button.tsx` —
+and have the component pass **state, not classes**:
+
+```ts
+// Button.styles.ts
+export const button = variants({
+  base: { base: "rounded-lg font-medium", hover: "brightness-110", disabled: "opacity-50" },
+  variants: {
+    tone: { primary: "bg-blue-600 text-white", ghost: "text-blue-700" },
+    loading: { true: "cursor-progress opacity-70" },   // on/off: only the difference
+  },
+  defaults: { tone: "primary" },
+});
+
+// Button.tsx — a caller's className is the last argument, never a prop of the recipe
+<button className={button({ tone, loading }, className)} />
+```
+
+- Nothing changes → export a string: `export const title = ss({ base: "text-2xl", md: "text-4xl" })`.
+- A state changes it → export a recipe, and call it with the state.
+- State the markup already carries → `aria("selected", …)` / `data("state", "open", …)` in
+  the styles, and no prop at all.
+- A number from data → a literal `w-[var(--w)]` class, plus `vars({ "--w": … })` on `style`.
+- A shared fragment is a finished `ss(…)` string, used where nothing prefixes it:
+  `base: { base: [focusRing, "rounded-lg"] }`. Never `md: focusRing`.
+- A variant nobody passed adds nothing, its `false` option included — put the resting look
+  in `base`.
 
 ## Checking
 

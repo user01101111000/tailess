@@ -698,6 +698,21 @@ describe("a recipe, walked once for the scanner and the checks alike", () => {
   it("says nothing about a method that only shares the name", () => {
     expect(kinds(`product.variants({ base: "p-4 p-2", variants: {} })`)).toEqual([]);
   });
+
+  it("knows a config that has no variants at all, by the keys only a config has", () => {
+    // Each of these is a config, and `extend: button` is a recipe, not a bucket set to a
+    // variable. Read as a base value — an `ss` map — every one was reported for a key
+    // that prefixes nothing.
+    expect(kinds(`variants({ extend: button, defaults: chosen })`)).toEqual([]);
+    expect(kinds(`variants({ extend: button, base: "shadow-md" })`)).toEqual([]);
+    expect(kinds(`variants({ slots: { root: rootBase, title: "font-semibold" } })`)).toEqual([]);
+    expect(kinds(`variants({ base: "rounded", compound: rules, defaults: chosen })`)).toEqual([]);
+    expect(kinds(`variants({ slots, extend })`)).toEqual([]);
+    // …and what is wrong inside one is still found, a level down where the parts are.
+    expect(kinds(`variants({ slots: { root: { md: pad } } })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`variants({ extend: button, base: { md: pad } })`)).toEqual(["dynamic-value"]);
+    expect(kinds(`variants({ slots: { root: "p-4 p-2" } })`)).toEqual(["dead-class"]);
+  });
 });
 
 describe("aria(), in both of its shapes", () => {

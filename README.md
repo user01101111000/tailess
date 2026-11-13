@@ -101,6 +101,12 @@ so wrap one in an array: `ss([{ "font-bold": isActive }])`.
   - [`configure` — the two things that depend on your project](#configure--the-two-things-that-depend-on-your-project)
   - [Keys your own CSS adds](#keys-your-own-css-adds)
   - [Also exported](#also-exported)
+- [Styles in their own file](#styles-in-their-own-file)
+  - [Every kind of state, and where it is written](#every-kind-of-state-and-where-it-is-written)
+  - [A part with a state of its own](#a-part-with-a-state-of-its-own)
+  - [Sharing between recipes](#sharing-between-recipes)
+  - [Pass state, not classes](#pass-state-not-classes)
+  - [Before the first style is built](#before-the-first-style-is-built)
 - [Keys](#keys)
 - [Framework examples](#framework-examples)
 - [What the scanner can and cannot see](#what-the-scanner-can-and-cannot-see)
@@ -801,6 +807,21 @@ card({ size: "lg" }, { root: className, title: ss({ lg: "text-2xl" }) })
 Each part's extra is a `ClassArg` for the same reason as above: a responsive override
 from the call site goes through `ss()`.
 
+`variants` is optional. A component whose parts never change is still a component with
+parts, and its slots are the whole of its styles:
+
+```ts
+const field = variants({
+  slots: {
+    root:  "grid gap-1.5",
+    label: { base: "text-sm font-medium", dark: "text-neutral-200" },
+    hint:  "text-xs text-neutral-500",
+  },
+});
+
+const { root, label, hint } = field();
+```
+
 #### `extend` — building on another recipe
 
 ```ts
@@ -818,6 +839,14 @@ The parent's base, variants, compounds and defaults come first; anything declare
 wins. Merging per option is what lets a product package add one `tone` to a design
 system's button without forking it. Types merge too, so `VariantProps<typeof brand>`
 includes the inherited options. Slotted recipes extend the same way, gaining parts.
+
+A child does not have to declare variants of its own. Changing what the parent defaults
+to, or adding to its base, is a recipe too:
+
+```ts
+const destructive = variants({ extend: button, defaults: { tone: "danger" } });
+const raised = variants({ extend: button, base: { base: "shadow-md", hover: "shadow-lg" } });
+```
 
 #### Coming from `cva` or `tailwind-variants`
 
@@ -1008,6 +1037,235 @@ The plugin option types are on their own entries: `TailessViteOptions` from
 `tailess/vite`, `TailessPostcssOptions` from `tailess/postcss`, and `CollectOptions`,
 `CollectResult`, `FileDiagnostic`, `Diagnostic`, `DiagnosticMode`, `BreakpointDecl` and
 `CollectedTheme` from [`tailess/build`](#tailessbuild--the-scanner-as-a-library).
+
+## Styles in their own file
+
+A component full of class strings is hard to read, and one full of `ss({ … })` is not
+much better. The classes do not have to live in it. Put them in a file beside the
+component — `Button.styles.ts` next to `Button.tsx` — and the component is left saying
+only **which state it is in**:
+
+```ts
+// Button.styles.ts
+import { variants, type VariantProps } from "tailess";
+
+export const button = variants({
+  base: {
+    base: "inline-flex items-center justify-center rounded-lg font-medium",
+    "focus-visible": "outline-2 outline-offset-2",
+    disabled: "pointer-events-none opacity-50",
+  },
+  variants: {
+    tone: {
+      primary: { base: "bg-blue-600 text-white", hover: "bg-blue-700" },
+      ghost: { base: "text-blue-700", hover: "bg-blue-50" },
+    },
+    size: {
+      sm: "h-8 px-3 text-sm",
+      lg: { base: "h-10 px-4", md: "h-12 px-6 text-lg" },
+    },
+    loading: { true: "cursor-progress opacity-70" },
+  },
+  defaults: { tone: "primary", size: "sm" },
+});
+
+export type ButtonStyle = VariantProps<typeof button>;
+```
+
+```tsx
+// Button.tsx
+import { button, type ButtonStyle } from "./Button.styles";
+
+type ButtonProps = ButtonStyle & React.ComponentProps<"button">;
+
+export function Button({ tone, size, loading, className, ...rest }: ButtonProps) {
+  return <button className={button({ tone, size, loading }, className)} {...rest} />;
+}
+```
+
+The component never mentions a class, and the styles file never mentions an element.
+State goes in; a `className` comes out; a caller's own `className` goes in after the
+state, as the last argument, so it still overrides.
+
+It is ordinary TypeScript — `.ts` rather than `.tsx`, since there is no markup in it — and
+nothing about the name is special. The plugin scans every source file, so a recipe is
+found wherever it is written; `*.styles.ts` is worth having as a convention because it
+says where to look.
+[`examples/vite-react`](https://github.com/user01101111000/tailess/tree/main/examples/vite-react)
+is built this way throughout: there is not one class in its components.
+
+What a styles file exports is one of three things, and which one depends on what can
+change about the element:
+
+| What can change | Written as | Used as |
+| --- | --- | --- |
+| nothing | `export const title = ss({ base: "text-2xl", md: "text-4xl" })` | `className={s.title}` — a string, built once when the file loads |
+| a state | `export const button = variants({ … })` | `className={s.button({ tone, loading })}` |
+| something a recipe's options do not fit | `export const cell = (day) => ss({ … }, day.today && { … })` | `className={s.cell(day)}` |
+
+The third is a plain function, and nothing about it is special either. The
+[one rule](#what-the-scanner-can-and-cannot-see) still holds inside it — every class is a
+literal at the call — so both branches of a condition are read:
+
+```ts
+export const cell = (day: { today: boolean; weekend: boolean }) =>
+  ss(
+    { base: "size-9 rounded-full text-sm", hover: "bg-neutral-100" },
+    day.weekend && "text-neutral-400",
+    day.today && { base: "bg-blue-600 text-white", hover: "bg-blue-700" },
+  );
+```
+
+### Every kind of state, and where it is written
+
+Most of what changes how a component looks is not JavaScript state at all, and each kind
+has its own place in a styles file:
+
+| What changes | Who knows | In the styles file |
+| --- | --- | --- |
+| a choice — tone, size | a prop | a variant: `tone: { primary: …, ghost: … }` |
+| on or off — active, loading, open | a prop, or `useState` | a boolean variant: `loading: { true: … }` |
+| two at once — danger *and* large | props | a `compound` rule |
+| the browser's own — hover, focus, disabled, checked | CSS | a key: `hover`, `focus-visible`, `disabled` |
+| one the markup carries — `data-state`, `aria-selected` | an attribute | `data("state", "open", …)`, `aria("selected", …)` |
+| a parent's — the row is hovered, the field is invalid | CSS | `group-hover`, `peer-invalid`; `group("row", "hover", …)` for a named one |
+| the screen, or the box it sits in | CSS | a breakpoint or container key, in any value |
+| a number — progress, an offset | a custom property | a literal `w-[var(--w)]`, with [`vars`](#vars--values-a-class-cannot-carry) on `style` |
+| the caller's own classes | `className` | nothing — it is the recipe's last argument |
+
+Only the first three reach a recipe as arguments. Everything below them is the element's
+own business, which is the point: a tab already carries `aria-selected` for the screen
+reader, so the selected look can hang off that and no prop has to be threaded to say it
+twice.
+
+```ts
+// Tabs.styles.ts
+import { aria, ss } from "tailess";
+
+export const tab = ss({
+  base: [
+    "border-b-2 border-transparent px-3 py-2 text-neutral-500",
+    aria("selected", "border-blue-600 text-blue-700"),
+  ],
+  hover: "text-neutral-900",
+});
+```
+
+```tsx
+<button role="tab" aria-selected={id === current} className={s.tab} />
+```
+
+For a state that *is* a prop, a variant nobody passed adds nothing — its `false` option
+included. So put the resting look in `base` and only the difference under `true`; later
+wins, so it overrides, and the element is styled whether or not the prop arrived:
+
+```ts
+export const row = variants({
+  base: { base: "flex w-full items-center px-2 py-3", hover: "bg-neutral-50" },
+  variants: {
+    selected: { true: { base: "bg-blue-50 font-medium", hover: "bg-blue-50" } },
+  },
+});
+```
+
+A number is the one thing no class can carry, because its value is not in the source to
+be read. The class stays literal and names a custom property, and the styles file exports
+the `style` that sets it beside the class that uses it:
+
+```ts
+// Meter.styles.ts
+import { ss, vars } from "tailess";
+
+export const fill = ss({ base: "h-full w-[var(--fill)] bg-blue-600", dark: "bg-blue-400" });
+export const fillTo = (ratio: number) => vars({ "--fill": `${ratio * 100}%` });
+```
+
+```tsx
+<div className={s.fill} style={s.fillTo(done / total)} />
+```
+
+### A part with a state of its own
+
+A component with parts is one [slotted recipe](#slots--a-component-with-named-parts): one
+call, one class per part. That call happens once per component, so it suits state the
+whole component shares — a `size`, a `tone`.
+
+State that belongs to *one item* — which row is selected, which day is today — wants a
+recipe of its own, called once per item, rather than a variant on its parent's. The `row`
+above is one:
+
+```tsx
+<ul>
+  {items.map((item, i) => (
+    <li key={item.id} className={s.row({ selected: i === current })} />
+  ))}
+</ul>
+```
+
+### Sharing between recipes
+
+A fragment several components share is a **finished string**: build it with `ss(…)` where
+it is defined, which is where the scanner reads it, and use it anywhere that adds no
+prefix — a `base` bucket, an array, a trailing argument.
+
+```ts
+// tokens.styles.ts
+import { ss } from "tailess";
+
+export const focusRing = ss({ "focus-visible": "outline-2 outline-offset-2 outline-blue-600" });
+```
+
+```ts
+// Button.styles.ts
+import { variants } from "tailess";
+import { focusRing } from "./tokens.styles";
+
+export const button = variants({
+  base: { base: [focusRing, "rounded-lg font-medium"], hover: "brightness-110" },
+});
+```
+
+Under a prefixed key it would be the thing the scanner cannot read — `md: focusRing` is a
+variable — and the [build says so](#build-time-checks), in a recipe exactly as in `ss`. For
+a recipe that is another recipe plus a little, there is
+[`extend`](#extend--building-on-another-recipe).
+
+### Pass state, not classes
+
+The scanner reads a recipe **where it is defined**. The function it returns can be called
+anything, from any file, so there is no call for a scan to look for — which makes the call
+site the one place a class can still be built out of sight. That is why what a recipe
+takes after its props is a `ClassArg` and never an `ss` map:
+
+```tsx
+s.button({ size: "lg" }, className)             // ✅ a string passes straight through
+s.button({ size: "lg" }, ss({ xl: "px-10" }))   // ✅ `ss` is a call the scanner knows
+s.button({ size: "lg" }, { xl: "px-10" })       // ❌ refused by the types; from JavaScript, a warning
+```
+
+The same goes for a part's extra classes. And if a component needs a class at one
+breakpoint, that is a variant: give it a name and put it in the styles file.
+
+### Before the first style is built
+
+A string exported from a styles file is built when that file is first imported — and
+imports run before the importing module's own code. So a
+[`configure`](#configure--the-two-things-that-depend-on-your-project) call written in the
+body of your entry file runs *after* every static style has already been merged with the
+defaults. Give it a module of its own and import that first:
+
+```ts
+// main.tsx
+import "./tailess.setup";   // calls configure({ … })
+import { App } from "./App";
+```
+
+Recipes are not affected — a recipe builds its string when it is called — so this only
+matters for a project that both calls `configure` and exports plain `ss(…)` strings.
+
+Shipping the styles as a package of their own is the
+[component-library case](#tailess-emit--the-stylesheet-as-a-file) of `tailess emit`: your
+consumer's scan never reaches `node_modules`, so enumerate the classes at your build.
 
 ## Keys
 
@@ -1279,7 +1537,7 @@ every slot, every option and every compound rule:
 
 ```ts
 variants({ variants: { size: { lg: { md: pad } } } })   // ❌ reported — "md" cannot be read
-variants({ base: "p-4 p-2", variants: {} })             // ❌ reported — "p-4" is dead
+variants({ base: "p-4 p-2" })                           // ❌ reported — "p-4" is dead
 variants({ variants: { tone: { primary: brand } } })    // ✅ `primary` is a name, not a prefix
 ```
 
