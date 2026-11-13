@@ -1,9 +1,16 @@
 import { twMerge } from "tailwind-merge";
-import { maxScreenKeys, screenKeys, stateKeys } from "../constants.js";
-import { uncarriedClasses } from "./extract.js";
 import {
+  containerKeys,
+  maxContainerKeys,
+  maxScreenKeys,
+  screenKeys,
+  stateKeys,
+} from "../constants.js";
+import { uncarriedClasses } from "./extract.js";
+import { recipeValues } from "./recipe.js";
+import {
+  argCount,
   arrayBody,
-  declaresKey,
   dictionaryKeys,
   extractStrings,
   helperNames,
@@ -137,8 +144,21 @@ function deadClasses(text: string | undefined, report: (d: Diagnostic) => void):
   }
 }
 
-/** Every key `ss` knows, for telling a bucket map from a `clsx` dictionary. */
-const everyKey = new Set<string>(["base", ...screenKeys, ...maxScreenKeys, ...stateKeys]);
+/**
+ * Every key `ss` knows, for telling a bucket map from a `clsx` dictionary.
+ *
+ * The container keys belong here as much as the breakpoints do. They were left out when
+ * the family was added, so `on("hover", { "@md": "grid-cols-2" })` — the same mistake as
+ * `{ md: … }`, building the class `hover:@md` — was the one spelling of it not reported.
+ */
+const everyKey = new Set<string>([
+  "base",
+  ...screenKeys,
+  ...maxScreenKeys,
+  ...containerKeys,
+  ...maxContainerKeys,
+  ...stateKeys,
+]);
 
 /**
  * The keys that are also plausible class names of someone's own.
@@ -433,6 +453,31 @@ function unusableValues(name: string, arg: string, report: Report): void {
   }
 }
 
+/**
+ * Report whitespace in the name or the value of a `data` / `aria` attribute variant.
+ *
+ * A space in either half lands inside `data-[name=value]`, which then reads as two
+ * class names — the same failure a spaced prefix has.
+ */
+function spacedAttribute(
+  name: string,
+  args: readonly string[],
+  report: (d: Diagnostic) => void,
+): void {
+  for (const part of [args[0], args[1]]) {
+    for (const value of extractStrings(part ?? "")) {
+      if (!whitespace.test(value)) continue;
+      report({
+        kind: "spaced-prefix",
+        message:
+          `${name}(…, "${value}", …) puts whitespace inside the variant, so the class ` +
+          `splits in two and neither half matches. Write the space as "_": ` +
+          `"${value.replace(/\s+/g, "_")}".`,
+      });
+    }
+  }
+}
+
 /** Report a prefix that cannot form a working class name. */
 function checkPrefix(text: string | undefined, report: (d: Diagnostic) => void): void {
   if (!text) return;
@@ -529,22 +574,21 @@ function check(call: RawCall, report: Report): void {
 
     case "data": {
       if (args.length < 3) return;
-      // A space in either half lands inside `data-[name=value]`, which then reads as
-      // two class names — the same failure a spaced prefix has.
-      for (const part of [args[0], args[1]]) {
-        for (const value of extractStrings(part ?? "")) {
-          if (!whitespace.test(value)) continue;
-          report({
-            kind: "spaced-prefix",
-            message:
-              `data(…, "${value}", …) puts whitespace inside the variant, so the class ` +
-              `splits in two and neither half matches. Write the space as "_": ` +
-              `"${value.replace(/\s+/g, "_")}".`,
-          });
-        }
-      }
+      spacedAttribute(name, args, report);
       deadClasses(args[2], report);
       bucketMapAsDictionary(name, args[2], report);
+      return;
+    }
+
+    // Two shapes, told apart by the count exactly as the runtime tells them:
+    // aria("expanded", classes) and aria("current", "page", classes). Reading the
+    // second by the first's positions would take the value for the class list.
+    case "aria": {
+      const valued = argCount(args) >= 3;
+      if (valued) spacedAttribute(name, args, report);
+      const classes = args[valued ? 2 : 1];
+      deadClasses(classes, report);
+      bucketMapAsDictionary(name, classes, report);
       return;
     }
 
@@ -567,8 +611,7 @@ function check(call: RawCall, report: Report): void {
       return;
     }
 
-    case "until":
-    case "aria": {
+    case "until": {
       deadClasses(args[1], report);
       bucketMapAsDictionary(name, args[1], report);
       return;
@@ -622,50 +665,22 @@ function check(call: RawCall, report: Report): void {
     // compound rule — and each is an `ss` argument, or with slots a map of them. They
     // were never looked at, so `{ lg: { md: size } }`, the shape a responsive option
     // naturally takes, shipped `md:<size>` with no rule and no word.
+    //
+    // Where those places are is `recipeValues`' to say — the same walk the scanner
+    // enumerates from. It was written out a second time here, and the copy read each
+    // value only for a bucket it could not read: a conflict inside one string, the
+    // oldest check there is, was reported in `ss` and passed over in a recipe.
     case "variants": {
-      const first = objectLiterals(args[0] ?? "")[0];
-      const isConfig = first !== undefined && declaresKey(first, "variants");
-      const cva = args.length > 1 && !isConfig;
-      if (cva) dynamicBuckets(args[0], report);
-      // A lone argument with no `variants` key is a base, as the scanner reads it.
-      if (args.length === 1 && !isConfig) {
-        dynamicBuckets(args[0], report);
-        return;
-      }
-      const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
-      if (config === undefined) return;
-      // The same test the scanner uses for whether option values are one level deeper.
-      const slotted = declaresKey(config, "slots");
-      const classValue = (text: string): void => {
-        if (!slotted) {
-          dynamicBuckets(text, report);
-          return;
-        }
-        for (const parts of objectLiterals(text)) {
-          for (const part of parseObject(parts)) dynamicBuckets(part.value, report);
-        }
-      };
-      for (const { key, value } of parseObject(config)) {
-        if (key === "base") dynamicBuckets(value, report);
-        else if (key === "slots") {
-          for (const parts of objectLiterals(value)) {
-            for (const part of parseObject(parts)) dynamicBuckets(part.value, report);
-          }
-        } else if (key === "variants") {
-          for (const groups of objectLiterals(value)) {
-            for (const group of parseObject(groups)) {
-              for (const options of objectLiterals(group.value)) {
-                for (const option of parseObject(options)) classValue(option.value);
-              }
-            }
-          }
-        } else if (key === "compound" || key === "compoundVariants") {
-          for (const rule of objectLiterals(arrayBody(value))) {
-            for (const field of parseObject(rule)) {
-              if (field.key === "class" || field.key === "className") classValue(field.value);
-            }
-          }
-        }
+      // A spread can bring in anything — a `slots` field above all, which moves every
+      // option's classes one level down and turns what reads as a bucket key into a
+      // part's name: `{ ...card, variants: { size: { lg: { root: rootLarge } } } }` was
+      // reported for a `root` bucket that is no bucket, on code that works. A conflict
+      // inside one string is dead whatever the shape turns out to be, but "this bucket
+      // cannot be read" is only provable for a recipe that is all in view.
+      const inView = !args.some((arg) => maskLiterals(arg, true).includes("..."));
+      for (const value of recipeValues(args)) {
+        deadClasses(value, report);
+        if (inView) dynamicBuckets(value, report);
       }
       return;
     }

@@ -1,9 +1,10 @@
 import { stateKeys } from "../constants.js";
 import { escapeCondition } from "../internal/condition.js";
+import { recipeValues } from "./recipe.js";
 import {
+  argCount,
   arrayBody,
   arrayLiterals,
-  declaresKey,
   dictionaryKeys,
   extractStrings,
   isObjectLiteral,
@@ -127,6 +128,52 @@ function staticValues(text: string): string[] {
  */
 function literalWord(text: string, word: string): boolean {
   return new RegExp(`(?<![\\w$.])${word}(?![\\w$])`).test(text);
+}
+
+/**
+ * Every `data-[…]` / `aria-[…]` prefix one name-and-value pair of arguments can build.
+ *
+ * Both helpers take `string | number | boolean | null | undefined` for the value. A
+ * number or a boolean is every bit as static as a string — it just isn't a string
+ * *literal*, so the string sweep finds nothing and the presence form would be emitted
+ * for a call the runtime builds the value form for. That is wrong twice:
+ * `data-[checked=true]:` never gets CSS, and the `data-[checked]:` that does is a
+ * selector matching whenever the attribute is merely present. `data-checked={true}` is
+ * what React writes, so this is a mainstream path.
+ *
+ * And not only when it is the whole argument: `open ? 1 : 2`, `on ? true : false` and
+ * `state ? "open" : null` are each two values, and reading only the strings left one
+ * branch — or both — with no rule. So the non-string literals are swept for with the
+ * strings blanked, which is how `nth` reads the same shape. A whole-argument literal
+ * first, since only it resolves a sign and an exponent (`-1.5`, `2e-2`) — the sweep
+ * reads unsigned tokens, which is what a ternary's branches almost always are.
+ */
+function attributePrefixes(
+  kind: "data" | "aria",
+  nameArg: string | undefined,
+  valueArg = "",
+): string[] {
+  const values = extractStrings(valueArg);
+  const masked = maskLiterals(valueArg, true);
+  const whole = staticValue(valueArg.trim());
+  if (whole !== null) {
+    if (!values.includes(whole)) values.push(whole);
+  } else {
+    for (const value of staticValues(masked)) if (!values.includes(value)) values.push(value);
+  }
+  for (const word of ["true", "false"]) {
+    if (literalWord(masked, word) && !values.includes(word)) values.push(word);
+  }
+  // `null`/`undefined` (or a non-literal value) means the presence form — in any
+  // branch, not only as the whole argument.
+  const presence =
+    values.length === 0 || literalWord(masked, "null") || literalWord(masked, "undefined");
+  const prefixes: string[] = [];
+  for (const name of extractStrings(nameArg ?? "")) {
+    if (presence) prefixes.push(`${kind}-[${name}]`);
+    for (const value of values) prefixes.push(`${kind}-[${name}=${value}]`);
+  }
+  return prefixes;
 }
 
 /**
@@ -471,48 +518,20 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
 
     case "data": {
       if (args.length < 3) return;
-      const valueArg = args[1] ?? "";
-      const values = extractStrings(valueArg);
-      // `data` takes `string | number | boolean | null | undefined`. A number or a
-      // boolean is every bit as static as a string — it just isn't a string
-      // *literal*, so the sweep above finds nothing and the presence form would be
-      // emitted for a call the runtime builds the value form for. That is wrong
-      // twice: `data-[checked=true]:` never gets CSS, and the `data-[checked]:` that
-      // does is a selector matching whenever the attribute is merely present.
-      // `data-checked={true}` is what React writes, so this is a mainstream path.
-      //
-      // And not only when it is the whole argument: `open ? 1 : 2`, `on ? true : false`
-      // and `state ? "open" : null` are each two values, and reading only the strings
-      // left one branch — or both — with no rule. So the non-string literals are swept
-      // for with the strings blanked, which is how `nth` reads the same shape.
-      // A whole-argument literal first, since only it resolves a sign and an exponent
-      // (`-1.5`, `2e-2`) — the sweep reads unsigned tokens, which is what a ternary's
-      // branches almost always are.
-      const masked = maskLiterals(valueArg, true);
-      const whole = staticValue(valueArg.trim());
-      if (whole !== null) {
-        if (!values.includes(whole)) values.push(whole);
-      } else {
-        for (const value of staticValues(masked)) if (!values.includes(value)) values.push(value);
-      }
-      for (const word of ["true", "false"]) {
-        if (literalWord(masked, word) && !values.includes(word)) values.push(word);
-      }
-      // `null`/`undefined` (or a non-literal value) means the presence form — in any
-      // branch, not only as the whole argument.
-      const presence =
-        values.length === 0 || literalWord(masked, "null") || literalWord(masked, "undefined");
-      const prefixes: string[] = [];
-      for (const name of extractStrings(args[0] ?? "")) {
-        if (presence) prefixes.push(`data-[${name}]`);
-        for (const value of values) prefixes.push(`data-[${name}=${value}]`);
-      }
-      emitValue(args[2] ?? "", prefixes, add, follow);
+      emitValue(args[2] ?? "", attributePrefixes("data", args[0], args[1]), add, follow);
       return;
     }
 
+    // aria("expanded", "…") is the bare `aria-expanded:`; aria("current", "page", "…")
+    // is `aria-[current=page]:`, built the way `data` builds its own. Which one a call
+    // is turns on how many arguments it has, exactly as it does at runtime.
     case "aria": {
-      if (args.length < 2) return;
+      const count = argCount(args);
+      if (count < 2) return;
+      if (count >= 3) {
+        emitValue(args[2] ?? "", attributePrefixes("aria", args[0], args[1]), add, follow);
+        return;
+      }
       const names = extractStrings(args[0] ?? "");
       emitValue(
         args[1] ?? "",
@@ -579,93 +598,12 @@ function enumerate(call: RawCall, add: Add, depth = 0, follow = maxFollow): void
 
     // variants({ base, variants: { name: { option: … } }, compound: [{ …, class }] })
     //
-    // The one call site here whose object keys are *not* prefixes. `tone` and `size`
-    // name variants, `primary` and `lg` name options, and neither reaches a class —
-    // only the leaves do. Reading the config as an `ss` map would enumerate
-    // `tone:size:primary:bg-blue-600` and, worse, miss the map inside an option that
-    // does need enumerating. So each of the three places a class can hide is walked
-    // to explicitly, and everything else in the config is left alone.
+    // The one call site here whose object keys are *not* prefixes, so only its leaves
+    // are read — and each of those is an `ss` argument like any other. Where the leaves
+    // are is `recipeValues`' to say, because the diagnostics have to walk to exactly
+    // the same places.
     case "variants": {
-      // `cva`'s shape puts the base classes first and the config second. Which argument
-      // is which is decided by the `variants` key: a config always has one, and a base
-      // value never does — including when it is an `ss` map, which a string-only test
-      // would have read as the config.
-      const first = objectLiterals(args[0] ?? "")[0];
-      const isConfig = first !== undefined && declaresKey(first, "variants");
-      const cva = args.length > 1 && !isConfig;
-      if (cva) emitMaps(args[0] ?? "", depth, add, follow);
-      // cva's one-argument call — `variants("flex")`, or an ss map with no `variants`
-      // key — is a base and nothing else, which is how the runtime reads it. Taken for a
-      // config, only its `base` key was read and every breakpoint in it was lost.
-      if (args.length === 1 && !isConfig) {
-        emitMaps(args[0] ?? "", depth, add, follow);
-        return;
-      }
-      const [config] = objectLiterals(args[cva ? 1 : 0] ?? "");
-      if (config === undefined) return;
-      const fields = parseObject(config);
-
-      // Whether an option's value is one level deeper — `{ root: …, title: … }` rather
-      // than a class value — turns on the *presence* of a `slots` field, never on whether
-      // its names could be read. `variants({ slots, … })` with the map hoisted to a const,
-      // and `slots: { ...shared, title: … }`, both leave the names invisible while the
-      // recipe is still slotted; reading those as flat emitted `root:md:p-8` — junk
-      // matching no utility — and lost the `md:p-8` the runtime does build.
-      const slotted = declaresKey(config, "slots");
-
-      /**
-       * Emit one per-slot value, or a plain class value when there are no slots.
-       *
-       * A recipe that inherits its parts rather than declaring them — `extend` pointing
-       * at a slotted recipe, with no `slots` of its own — used to break the parity here:
-       * the scanner read it as flat while the runtime followed the parent's slots. It is
-       * the runtime that changed. That shape is refused by the types and, when a cast
-       * gets it through, `resolve` stops at the boundary and stays flat rather than
-       * switching what the component returns — so the flat reading is now the right one
-       * on both sides, and this needs no second guess about which it is looking at.
-       */
-      const emitPart = (text: string): void => {
-        if (!slotted) {
-          emitMaps(text, depth, add, follow);
-          return;
-        }
-        // Every key, not only those a readable `slots:` named. A key that is not a slot
-        // yields a candidate the runtime never builds, which `@source inline(…)` ignores;
-        // a slot whose name could not be read would otherwise lose its classes outright.
-        for (const group of objectLiterals(text)) {
-          for (const part of parseObject(group)) emitMaps(part.value, depth, add, follow);
-        }
-      };
-
-      for (const { key, value } of fields) {
-        if (key === "base") {
-          emitMaps(value, depth, add, follow);
-        } else if (key === "slots") {
-          for (const group of objectLiterals(value)) {
-            for (const slot of parseObject(group)) emitMaps(slot.value, depth, add, follow);
-          }
-        } else if (key === "variants") {
-          for (const group of objectLiterals(value)) {
-            for (const option of parseObject(group)) {
-              for (const choices of objectLiterals(option.value)) {
-                for (const leaf of parseObject(choices)) emitPart(leaf.value);
-              }
-            }
-          }
-        } else if (key === "compound" || key === "compoundVariants") {
-          // A real array of rule objects, which is not what an array means anywhere
-          // else here: inside an `ss` value an object is a `clsx` dictionary, so
-          // `objectLiterals` deliberately skips brace groups within brackets. Unwrap
-          // the one level so the rules themselves are visible to it.
-          for (const rule of objectLiterals(arrayBody(value))) {
-            for (const field of parseObject(rule)) {
-              // `className` is the `cva`/`tv` spelling, accepted so a ported recipe
-              // does not lose its compound classes without a word.
-              if (field.key === "class" || field.key === "className") emitPart(field.value);
-            }
-          }
-        }
-      }
+      for (const value of recipeValues(args)) emitMaps(value, depth, add, follow);
       return;
     }
 

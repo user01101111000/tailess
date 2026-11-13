@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  argCount,
   extractStrings,
   isArrayLiteral,
   parseObject,
@@ -146,5 +147,26 @@ describe("isArrayLiteral", () => {
   it("detects array literals ignoring leading whitespace", () => {
     expect(isArrayLiteral(`  ["dark", "hover"]`)).toBe(true);
     expect(isArrayLiteral(`"hover"`)).toBe(false);
+  });
+});
+
+describe("argCount", () => {
+  it("counts the arguments a call was written with", () => {
+    expect(argCount(splitArgs(`"a", "b"`))).toBe(2);
+    expect(argCount(splitArgs(`"a", "b", "c"`))).toBe(3);
+    expect(argCount(splitArgs(""))).toBe(0);
+  });
+
+  it("does not count the slot a trailing comma leaves behind", () => {
+    // What a formatter writes for any call it wraps across lines. `splitArgs` keeps the
+    // empty slot, which is right for a helper read by position and wrong for one whose
+    // meaning turns on how many arguments there are.
+    expect(splitArgs(`"a", "b",`)).toEqual(['"a"', '"b"', ""]);
+    expect(argCount(splitArgs(`"a", "b",`))).toBe(2);
+    expect(argCount(splitArgs(`\n  "a",\n  "b",\n`))).toBe(2);
+  });
+
+  it("still counts an empty slot in the middle, which is a position", () => {
+    expect(argCount(splitArgs(`"a", , "c"`))).toBe(3);
   });
 });

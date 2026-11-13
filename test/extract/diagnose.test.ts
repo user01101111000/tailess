@@ -648,6 +648,93 @@ describe("a bucket the scanner cannot read", () => {
   });
 });
 
+/**
+ * The walk over a recipe's class values was written out twice — once to enumerate them,
+ * once to check them — and the second copy only ever asked one question. Both read
+ * `recipeValues` now, so what is checked in `ss` is checked in a recipe.
+ */
+describe("a recipe, walked once for the scanner and the checks alike", () => {
+  it("reports a class the merge always discards, wherever the recipe keeps it", () => {
+    // The oldest check there is, and a recipe is where a design system keeps most of
+    // its classes: every one of these was reported in `ss` and passed over here.
+    for (const code of [
+      `variants({ base: "p-4 p-2", variants: {} })`,
+      `variants({ variants: { s: { lg: { md: "text-sm text-lg" } } } })`,
+      `variants({ variants: { s: { a: "p-1" } }, compound: [{ s: "a", class: "flex block" }] })`,
+      `variants({ slots: { root: "p-4 p-2" }, variants: {} })`,
+      `variants({ slots: { root: "p-1" }, variants: { s: { a: { root: "mt-1 mt-2" } } } })`,
+      `variants("flex block", { variants: {} })`,
+      `variants("flex block")`,
+    ]) {
+      expect(kinds(code), code).toEqual(["dead-class"]);
+    }
+  });
+
+  it("says nothing when one place overrides another, which is what they are for", () => {
+    // An option over the base, a compound rule over an option: each is its own string,
+    // and which of them applies is decided by the props, not by the merge.
+    expect(kinds(`variants({ base: "p-2", variants: { s: { a: "p-4", b: "p-6" } } })`)).toEqual([]);
+    expect(
+      kinds(`variants({ variants: { s: { a: "p-4" } }, compound: [{ s: "a", class: "p-8" }] })`),
+    ).toEqual([]);
+    expect(kinds(`variants({ slots: { root: "p-2", title: "p-4" }, variants: {} })`)).toEqual([]);
+  });
+
+  it("says nothing about a bucket it cannot read in a recipe built with a spread", () => {
+    // A spread can bring in `slots`, which makes `root` below a part's name rather than a
+    // bucket — and `rootLarge` a perfectly good class value under it. Nothing in view
+    // says which, and reporting it was a warning fired at code that works.
+    const spread = `variants({ ...cardConfig, variants: { size: { lg: { root: rootLarge } } } })`;
+    expect(kinds(spread)).toEqual([]);
+    expect(kinds(`variants({ ...shared, variants: { s: { a: { md: pad } } } })`)).toEqual([]);
+    // What is true of either shape is still said.
+    expect(kinds(`variants({ ...shared, variants: {}, base: "p-4 p-2" })`)).toEqual(["dead-class"]);
+    // A `...` inside a string is not a spread.
+    expect(
+      kinds(`variants({ base: { md: pad, after: "content-['...']" }, variants: {} })`),
+    ).toEqual(["dynamic-value"]);
+  });
+
+  it("says nothing about a method that only shares the name", () => {
+    expect(kinds(`product.variants({ base: "p-4 p-2", variants: {} })`)).toEqual([]);
+  });
+});
+
+describe("aria(), in both of its shapes", () => {
+  it("reads the class argument from where the count puts it", () => {
+    expect(kinds(`aria("expanded", "flex block")`)).toEqual(["dead-class"]);
+    expect(kinds(`aria("current", "page", "flex block")`)).toEqual(["dead-class"]);
+    expect(kinds(`aria("current", "page", { base: "underline" })`)).toEqual([
+      "bucket-as-dictionary",
+    ]);
+  });
+
+  it("reports whitespace inside the variant, as data() does", () => {
+    const [first] = diag(`aria("label", "close menu", "p-2")`);
+    expect(first?.kind).toBe("spaced-prefix");
+    expect(first?.message).toContain('aria(…, "close menu", …)');
+    expect(first?.message).toContain("close_menu");
+  });
+
+  it("says nothing about the spellings that work", () => {
+    expect(kinds(`aria("expanded", "rotate-180")`)).toEqual([]);
+    expect(kinds(`aria("current", "page", "font-semibold")`)).toEqual([]);
+    expect(kinds(`aria("label", "close_menu", "p-2")`)).toEqual([]);
+    // Two arguments: the second is the class list, and a class list has spaces in it.
+    expect(kinds(`aria("expanded", "rotate-180 opacity-100")`)).toEqual([]);
+    expect(kinds(`aria(\n  "expanded",\n  "rotate-180 opacity-100",\n)`)).toEqual([]);
+  });
+});
+
+describe("a container key handed to a helper that takes a flat class value", () => {
+  it("is reported like any other bucket key", () => {
+    // `@md` is as much an `ss` key as `md` is, and the family was missing from the set
+    // this check compares against — so it was the one spelling of the mistake let through.
+    expect(kinds(`on("hover", { "@md": "grid-cols-2" })`)).toEqual(["bucket-as-dictionary"]);
+    expect(kinds(`until("md", { "@max-lg": "hidden" })`)).toEqual(["bucket-as-dictionary"]);
+  });
+});
+
 describe("a file saved with a byte order mark", () => {
   it("is checked like any other", () => {
     // Common on Windows. The BOM sat in front of the first-line import, which the

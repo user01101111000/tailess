@@ -35,7 +35,8 @@ Source lives in `src/`, tests mirror it in `test/`:
 src/
   utils/        # the runtime helpers — ss, cn, on, has, nth, variants, vars…
   extract/      # the scanner: scan.ts tokenises, extract.ts enumerates candidates,
-                # diagnose.ts proves what cannot work, collect.ts walks the files
+                # diagnose.ts proves what cannot work, collect.ts walks the files,
+                # recipe.ts says where the class values are in a variants() config
   integration/  # inject.ts writes the @source inline(…) prelude, theme.ts reads
                 # @theme / @custom-variant, entry.ts finds the Tailwind entry,
                 # sidecar.ts and report.ts serve the plugins

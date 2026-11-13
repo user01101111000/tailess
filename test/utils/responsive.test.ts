@@ -26,4 +26,15 @@ describe("responsive", () => {
   it("merges conflicts through cn", () => {
     expect(responsive("text-sm text-base", { md: "p-2 p-4" })).toBe("text-base md:p-4");
   });
+
+  it("takes a map behind a condition, and drops it whole when the condition is false", () => {
+    // `cond ? map : null` threw `Cannot read properties of null` out of a render: the
+    // default parameter only ever covered `undefined`. `cond && map` was a compile error
+    // for a shape every other helper here accepts.
+    const wide = false as boolean;
+    expect(responsive("flex", wide && { md: "grid" })).toBe("flex");
+    expect(responsive("flex", wide ? { md: "grid" } : null)).toBe("flex");
+    expect(responsive("flex", undefined)).toBe("flex");
+    expect(responsive("flex", !wide && { md: "grid" })).toBe("flex md:grid");
+  });
 });
