@@ -1,10 +1,11 @@
 name: CI
 
 on:
-  # `dev` too, and by hand: this ran only on `main`, so the branch the work actually
-  # happens on was never checked and every failure was found at merge time.
+  # `main` only: there is no `dev` any more. It was listed so the branch the work
+  # happened on was checked before merge time, and `pull_request` below does that for
+  # every branch that opens one. By hand too, for a branch that has not opened one yet.
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
   workflow_dispatch:
   # Called by release.yml, so the publish waits on this exact matrix rather than
