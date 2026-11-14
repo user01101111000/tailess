@@ -9,7 +9,7 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 permissions:
   contents: write
   pull-requests: write
-  id-token: write # required for npm provenance
+  id-token: write # required for npm trusted publishing, and for provenance
 
 jobs:
   # The matrix that motivates the re-verification below, run *before* the publish rather
@@ -34,14 +34,25 @@ jobs:
       # whatever it points at inside it. setup-node's post step even runs after the publish.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # 22, not 20: `@changesets/cli` v3 declares `node: "^22.11 || ^24 || >=26"` and its
+      # 24, for two floors at once.
+      #
+      # Not 20: `@changesets/cli` v3 declares `node: "^22.11 || ^24 || >=26"` and its
       # `bin.js` calls `module.enableCompileCache()`, which Node 20 does not have — so the
       # publish step died with `TypeError: enableCompileCache is not a function` before it
-      # could do anything. This is the *development* floor moving, not the package's:
-      # `engines` still promises consumers Node >= 20.19, and the CI matrix still proves it.
+      # could do anything.
+      #
+      # And not 22: it ships npm 10, and npm's trusted publishing — the job proving who it
+      # is with its own OIDC token rather than a stored secret — needs npm 11.5.1 or later.
+      # npm 10 can only send the token in `NPM_TOKEN`, and that is what failed the 0.14.0
+      # release: the registry no longer accepted the token that had published 0.13.0, and
+      # answered with `E404 Not Found - PUT https://registry.npmjs.org/tailess` — what it
+      # says to any publish it does not recognise, naming nothing that was wrong.
+      #
+      # This is the *development* floor moving, not the package's: `engines` still promises
+      # consumers Node >= 20.19, and the CI matrix still proves it.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
 
@@ -85,5 +96,10 @@ jobs:
           pr-title: "chore: release"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A fallback, not the credential. With a trusted publisher configured for this
+          # workflow file on npmjs.com (the package's Settings), npm authenticates with
+          # the job's OIDC token first and only falls back to a stored token if that
+          # fails. A stored token expires on its own schedule, between releases, and
+          # nothing says so until the one job that needs it.
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
