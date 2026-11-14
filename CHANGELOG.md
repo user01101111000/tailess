@@ -1,5 +1,136 @@
 # tailess
 
+## 0.14.0
+
+### Minor Changes
+
+- [#85](https://github.com/user01101111000/tailess/pull/85) [`fe91116`](https://github.com/user01101111000/tailess/commit/fe911163c1f47c04055b4d5716e858a84b4c6d43) Thanks [@user01101111000](https://github.com/user01101111000)! - A pass over the helpers: one crash, one warning fired at working code, a check that
+  recipes were missing, and four places where the types refused code the runtime was happy
+  with.
+  
+  **`aria` takes a value.** `aria("expanded", …)` is `[aria-expanded="true"]`, which covers
+  the boolean states and none of the others — `aria-current="page"`, `aria-sort`,
+  `aria-orientation` had no spelling short of `withPrefix`. `aria("current", "page", …)`
+  builds `aria-[current=page]:`, the way `data` always has, `null` for bare presence
+  included. The two-argument form is unchanged, and the scanner tells the two apart by the
+  argument count — not counting the empty slot a formatter's trailing comma leaves behind.
+  
+  **`responsive(base, null)` threw.** The default parameter only covered `undefined`, so
+  `cond ? map : null` read a key off `null` and took the render down. A falsy map now drops
+  whole, and the type says so — `cond && { md: … }` was a compile error.
+  
+  **`match` takes what a component has.** The discriminant was typed `string`; a number
+  (`cols: 1 | 2 | 3`), a boolean and an optional prop all worked at runtime and none
+  compiled. All three do now, and every case still has to be covered. `null`/`undefined`
+  take the fallback — and no longer find a case that happens to be spelled `"undefined"`.
+  
+  **`vars` drops `false`.** `vars({ "--w": open && "42%" })` is how the docs say a
+  conditional variable reads. It was a compile error, and from JavaScript it wrote
+  `--w: false`.
+  
+  **`on` takes a declared key.** A `@custom-variant` named in `CustomKeys` worked in
+  `ss({ … })` and was a compile error in `on(…)`.
+  
+  **A recipe is checked for dead classes.** The walk over a recipe's class values was
+  written twice — once in the scanner, once in the checks — and the second copy only looked
+  for a bucket it could not read. `variants({ base: "p-4 p-2" })` was reported in `ss` and
+  passed over in a recipe. Both read one walk now (`extract/recipe.ts`), so the two cannot
+  drift again. Projects running `check --strict` or `diagnostics: "error"` may see new
+  findings; each one is a class that never reaches the element.
+  
+  **A recipe built with a spread is no longer reported for a bucket that is not one.**
+  `variants({ ...card, variants: { size: { lg: { root: rootLarge } } } })` — a spread can
+  bring in `slots`, which makes `root` a part's name and `rootLarge` a perfectly good class
+  value under it. It was reported as a `root` bucket the scanner could not read. Where a
+  recipe is not all in view, only what is true of either shape is said.
+  
+  Also: the `bucket-as-dictionary` check now knows the container keys, so
+  `on("hover", { "@md": … })` is reported like `{ md: … }` is.
+
+- [#86](https://github.com/user01101111000/tailess/pull/86) [`0732d35`](https://github.com/user01101111000/tailess/commit/0732d35cebf675fa8a5b988ddf9f213c4c38b8cf) Thanks [@user01101111000](https://github.com/user01101111000)! - **Breaking, in a minor as the stability table allows: a variant nobody passed is now
+  `false`.** A recipe with a `false` option and no default used to add nothing when the prop
+  was omitted; it now adds the `false` option's classes, and a compound rule asking for
+  `false` applies. To keep the old output for one variant, give its third state a name of
+  its own — `state: { on: …, off: … }` instead of `{ true: …, false: … }` — since an option
+  that is not `false` is never chosen for you. A recipe that already sets
+  `defaults: { disabled: false }` reads exactly as before.
+  
+  ```ts
+  const tab = variants({
+    variants: { active: { true: "text-blue-700", false: "text-neutral-500" } },
+    compound: [{ active: false, class: { hover: "text-neutral-900" } }],
+  });
+  
+  tab();                     // 0.13: ""    now: "text-neutral-500 hover:text-neutral-900"
+  tab({ active: isActive }); // isActive may be undefined, and the tab is still styled
+  ```
+  
+  For something that is on or off, "not passed" means off everywhere else — `<Tab />` is
+  not active — and a component forwards an optional prop as `undefined` far more often than
+  as `false`. Read as *nothing*, the `false` half of a boolean variant, and every compound
+  rule written against `false`, silently did not apply until someone remembered
+  `defaults: { active: false }`. No error and no warning could say so: the element was just
+  missing the classes written for exactly that state, which is the one failure this package
+  exists to rule out.
+  
+  This is what `tailwind-variants` does, and it was listed in the migration table as a
+  difference from it. It is now a difference from `cva` instead, which applies nothing —
+  measured against `class-variance-authority` 0.7.1 and `tailwind-variants` 4.0.2. `cva`'s
+  own documentation sets `defaultVariants: { disabled: false }` on its boolean example, and
+  a recipe written that way is unaffected.
+  
+  A variant that is a choice between options — `size`, `tone` — has no `false` option to
+  fall to, so one nobody passed still adds nothing.
+  
+  Two things reported as open in the same review are deliberately unchanged:
+  
+  - `class` / `className` in a recipe's props is still not applied, and still warns. Extra
+    classes are the argument after the props, which keeps the props a statement of state
+    alone — and unlike the boolean case this one is loud: a compile error in TypeScript, a
+    warning from JavaScript.
+  - `match(value, { true: …, false: … })` sends `null` and `undefined` to its fallback, not
+    to `false`. It has a fallback argument for exactly that, and it is a lookup, not a
+    state.
+
+- [#86](https://github.com/user01101111000/tailess/pull/86) [`1466d62`](https://github.com/user01101111000/tailess/commit/1466d62a5d827750d6fe5666cfd5dc71b013dc80) Thanks [@user01101111000](https://github.com/user01101111000)! - Recipes as a design system's styles file — `Button.styles.ts` beside `Button.tsx`, with
+  the component passing **state, not classes** — and a README section on how to lay one out.
+  
+  **A recipe no longer needs `variants`.** It was the test for "is this a config" at
+  runtime, and required by the types — but a component whose parts never change is
+  `{ slots }` and nothing else, and a child that only moves its parent's defaults is
+  `{ extend, defaults }`. The runtime read both as base classes, an `ss` map: the first
+  emitted `slots:root:p-2`, the second dropped the parent entirely. 0.13 closed that by
+  refusing the shape at compile time. This makes it work instead: a config is whatever has
+  a key only a config can have, and the types, the runtime and the scanner now ask that
+  one question of the same seven keys.
+  
+  ```ts
+  const field = variants({ slots: { root: "grid gap-1.5", label: "text-sm font-medium" } });
+  const destructive = variants({ extend: button, defaults: { tone: "danger" } });
+  ```
+  
+  So `variants({ extend: button, base: "font-medium" })` and
+  `variants({ base: "p-2", defaults: {} })`, both compile errors in 0.13, now build. A plain
+  `ss` map with none of those keys is still base classes — `cva`'s one-argument call.
+  
+  A variant-less child does not have its groups inferred from `defaults` or `compound`:
+  with nothing else to infer them from TypeScript did, the result failed the constraint,
+  and the constraint — a string index signature — was used instead, so the child took any
+  prop at all.
+  
+  **Docs and example.**
+  
+  - New README section,
+    [Styles in their own file](https://github.com/user01101111000/tailess#styles-in-their-own-file):
+    which of a string, a recipe or a function a style should be; every kind of state and
+    where it is written — a prop, the browser's own, an attribute the markup carries, a
+    parent's, a number — sharing fragments between recipes; and why a `configure` call
+    belongs in a module imported before any styles file.
+  - `examples/vite-react` is rebuilt around `*.styles.ts` files: there is not one class in
+    its components.
+  - `test/integration/styles-file.test.ts` compiles that layout with the real Tailwind and
+    drives every recipe through every state a component could pass.
+
 ## 0.13.0
 
 ### Minor Changes
