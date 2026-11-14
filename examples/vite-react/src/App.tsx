@@ -1,154 +1,118 @@
 import { useState } from "react";
-import {
-  aria,
-  container,
-  data,
-  group,
-  has,
-  inside,
-  nth,
-  on,
-  ss,
-  supports,
-  type VariantProps,
-  variants,
-  vars,
-} from "tailess";
+import * as s from "./App.styles.js";
+import { Button } from "./ui/Button.js";
+import { Card } from "./ui/Card.js";
+import { Meter } from "./ui/Meter.js";
+import { Tabs } from "./ui/Tabs.js";
 
 /**
- * Every class on this page is built at runtime, which means Tailwind never sees one of
- * them in this file. The plugin in `vite.config.ts` is what puts them in the stylesheet,
- * and `npm run check` is what proves it did — delete the plugin and the page renders
- * with the right `class` attributes and no styles at all, which is the whole point.
+ * There is not one class in this file. Each component's styles live beside it in a
+ * `*.styles.ts`, and what a component hands them is the state it is in — never a class.
+ *
+ * Every variant on the page is still built at runtime, so Tailwind never sees one of them
+ * in the source. The plugin in `vite.config.ts` is what puts them in the stylesheet, and
+ * `npm run check` is what proves it did.
  */
 
-const button = variants({
-  base: {
-    base: "rounded-lg font-medium transition-colors",
-    hover: "brightness-110",
-    "focus-visible": "outline-2 outline-offset-2",
-    disabled: "opacity-50",
-  },
-  variants: {
-    tone: {
-      primary: "bg-blue-600 text-white outline-blue-600",
-      ghost: { base: "bg-transparent text-blue-700", hover: "bg-blue-50" },
-    },
-    size: {
-      sm: "px-3 py-1.5 text-sm",
-      // A variant option that carries its own breakpoint — the thing a flat string
-      // cannot say, and the reason this lives here rather than in cva.
-      lg: { base: "px-4 py-2 text-base", md: "px-6 py-3 text-lg" },
-    },
-  },
-  compound: [{ tone: "primary", size: "lg", class: "shadow-md" }],
-  defaults: { tone: "primary", size: "sm" },
-});
+const tabs = [
+  { id: "recipes", label: "Recipes" },
+  { id: "state", label: "State" },
+  { id: "layout", label: "Layout" },
+] as const;
 
-type ButtonProps = VariantProps<typeof button> & {
-  children: React.ReactNode;
-  onClick?: () => void;
-};
+type TabId = (typeof tabs)[number]["id"];
 
-function Button({ tone, size, children, onClick }: ButtonProps) {
-  return (
-    <button type="button" className={button({ tone, size })} onClick={onClick}>
-      {children}
-    </button>
-  );
-}
+const parts = ["Scanner", "Runtime", "Gate"];
 
 export default function App() {
-  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<TabId>("recipes");
   const [count, setCount] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState(0);
+  const [open, setOpen] = useState(false);
 
   return (
-    <main
-      className={ss({
-        base: "min-h-dvh bg-white p-6 text-neutral-900",
-        md: "p-10",
-        dark: "bg-neutral-950 text-neutral-100",
-      })}
-    >
-      <div className={ss({ base: "mx-auto max-w-2xl", md: "space-y-8" })}>
-        <header className={ss({ base: "space-y-2", md: "space-y-3" })}>
-          <h1 className={ss({ base: "text-2xl font-bold", md: "text-4xl" })}>tailess</h1>
-          <p className={ss({ base: "text-sm text-neutral-600", dark: "text-neutral-400" })}>
-            Every class below is built at runtime. View source, then run{" "}
-            <code className={ss({ base: "rounded bg-neutral-100 px-1", dark: "bg-neutral-800" })}>
-              npm run check
-            </code>
-            .
+    <main className={s.page}>
+      <div className={s.shell}>
+        <header className={s.header}>
+          <h1 className={s.title}>tailess</h1>
+          <p className={s.lede}>
+            No class is written in a component here. View source, then run{" "}
+            <code className={s.code}>npm run check</code>.
           </p>
         </header>
 
-        <section className={ss({ base: "flex flex-wrap gap-3" })}>
-          <Button onClick={() => setCount((n) => n + 1)}>Clicked {count}×</Button>
-          <Button tone="ghost">Ghost</Button>
-          <Button size="lg">Large at md and up</Button>
-          <Button tone="ghost" size="lg">
-            Both
-          </Button>
-        </section>
+        <Tabs value={tab} onChange={setTab} items={tabs} />
 
-        {/* A named group, so the child reaches *this* row rather than the nearest one. */}
-        <ul className={ss({ base: "divide-y divide-neutral-200", dark: "divide-neutral-800" })}>
-          {["Scanner", "Runtime", "Gate"].map((label, i) => (
-            <li key={label} className="group/row flex items-center justify-between py-3">
-              <span className={group("row", "hover", "underline")}>{label}</span>
-              {/* nth() counts from 1, and the scanner reads both branches of the ternary. */}
-              <span className={nth(i % 2 === 0 ? 1 : 2, "text-xs text-neutral-500")}>
-                row {i + 1}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {tab === "recipes" && (
+          <Card title="A recipe per component">
+            <p>A choice, a size that carries its own breakpoint, and a caller's own class.</p>
+            <div className={s.actions}>
+              <Button onClick={() => setCount((n) => n + 1)}>Clicked {count}×</Button>
+              <Button tone="ghost">Ghost</Button>
+              <Button size="lg">Large at md and up</Button>
+              <Button tone="ghost" className={s.emphasis}>
+                With a className
+              </Button>
+            </div>
+            <Meter value={Math.min(count, 10)} max={10} />
+          </Card>
+        )}
 
-        {/* A container query: sized by this box, not the viewport. */}
-        <div className="@container/panel rounded-xl border border-neutral-200 p-4">
-          <div className={container("panel", "@md", "grid grid-cols-2 gap-4")}>
-            <p className={ss({ base: "text-sm" })}>Two columns once the panel is wide.</p>
-            <p className={ss({ base: "text-sm" })}>Not once the window is.</p>
-          </div>
-        </div>
+        {tab === "state" && (
+          <Card title="State in, classes out" tone={saving ? "accent" : "plain"}>
+            <div className={s.actions}>
+              <Button loading={saving} onClick={() => setSaving((on) => !on)}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+              <Button disabled>Disabled</Button>
+            </div>
 
-        <details
-          className={ss({ base: "rounded-lg border border-neutral-200 p-4", open: "shadow-sm" })}
-          onToggle={(event) => setOpen(event.currentTarget.open)}
-        >
-          <summary
-            className={ss({ base: "cursor-pointer select-none text-sm font-medium" })}
-            {...{ "data-state": open ? "open" : "closed" }}
-          >
-            <span className={data("state", open ? "open" : "closed", "text-blue-700")}>
-              Attribute variants
-            </span>
-          </summary>
-          <div className={ss({ base: "pt-3 text-sm text-neutral-600" })}>
-            <p className={aria("expanded", "font-semibold")}>
-              Both branches of the ternary above are enumerated, so both have CSS.
-            </p>
-            {/* A feature query, written the way CSS spells it. */}
-            <p className={supports("display: grid", "mt-2 grid gap-1")}>
-              Only where <code>display: grid</code> is supported.
-            </p>
-          </div>
-        </details>
+            <ul className={s.rows}>
+              {parts.map((label, i) => (
+                <li key={label}>
+                  <button
+                    type="button"
+                    className={s.row({ selected: i === selected })}
+                    onClick={() => setSelected(i)}
+                  >
+                    <span className={s.rowLabel}>{label}</span>
+                    <span className={s.rowIndex(i)}>row {i + 1}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
 
-        {/* A value no class can carry: keep the class literal, put the number in a var. */}
-        <div className={ss({ base: "h-2 rounded-full bg-neutral-200" })}>
-          <div
-            className={ss({ base: "h-2 w-[var(--fill)] rounded-full bg-blue-600" })}
-            style={vars({ "--fill": `${Math.min(count, 10) * 10}%` })}
-          />
-        </div>
+            <details className={s.details} onToggle={(event) => setOpen(event.currentTarget.open)}>
+              <summary className={s.summary}>
+                <span className={s.summaryText} data-state={open ? "open" : "closed"}>
+                  State the element carries
+                </span>
+              </summary>
+              <div className={s.notes}>
+                <p>The colour above follows an attribute, not a prop.</p>
+                <p>These two lines are a grid only where grid is supported.</p>
+              </div>
+            </details>
+          </Card>
+        )}
 
-        <div className={inside(".prose", "italic")}>
-          <p className={has("> code", "text-blue-700")}>
-            A paragraph that contains <code>code</code>.
-          </p>
-          <p className={on(["dark", "hover"], "text-white")}>Compound variant, one call.</p>
-        </div>
+        {tab === "layout" && (
+          <Card title="Sized by the box, not the window">
+            <div className={s.panel}>
+              <div className={s.panelGrid}>
+                <p>Two columns once the panel is wide.</p>
+                <p>Not once the window is.</p>
+              </div>
+            </div>
+            <div className={s.quote}>
+              <p className={s.withCode}>
+                A paragraph that contains <code>code</code>.
+              </p>
+              <p className={s.darkHover}>Compound variant, one call.</p>
+            </div>
+          </Card>
+        )}
       </div>
     </main>
   );

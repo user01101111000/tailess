@@ -25,6 +25,8 @@ Do these instead:
 - `vars({ "--w": `${n}%` })` with `w-[var(--w)]` for a value that comes from data
 - `button(props, ss({ md: "w-auto" }))` for a responsive override at a component's call
   site — the build reads `ss(…)` calls, never `button(…)`, so a bare map there is unstyled
+- Keep a component's classes in a `*.styles.ts` beside it, as `variants(…)` recipes, and
+  pass the recipe **state, not classes**: `button({ tone, loading }, className)`
 
 `base` is exempt: it adds no prefix, so Tailwind finds the literal wherever it lives.
 

@@ -44,6 +44,21 @@ describe("configure({ merge })", () => {
     configure({ merge: (classes) => classes });
     expect(ss({ base: "p-2 p-4" })).toBe("p-2 p-4");
   });
+
+  it("reaches a recipe built before it, but not a string built before it", async () => {
+    // What "call it before anything renders" leaves out. A styles file that exports
+    // `ss(…)` builds that string when it is imported, and imports run before the
+    // importing module's own code — so a `configure` in the body of an entry file runs
+    // after every such string is already merged. A recipe only builds when it is called.
+    const { variants } = await import("../../src/utils/variants.js");
+    const heading = ss({ base: "text-sm text-hero" });
+    const title = variants({ base: "text-sm text-hero" });
+
+    configure({ merge: (classes) => classes.split(" ").slice(-1).join(" ") });
+
+    expect(heading).toBe("text-sm text-hero");
+    expect(title()).toBe("text-hero");
+  });
 });
 
 describe("configure({ onWarn })", () => {

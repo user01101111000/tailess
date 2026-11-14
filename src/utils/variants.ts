@@ -32,6 +32,22 @@ export type SlottedGroups<S extends SlotDefaults> = Record<string, Record<string
  */
 type Empty = Record<never, never>;
 
+/**
+ * `T`, written where TypeScript must not infer it *from*.
+ *
+ * A recipe's groups are inferred from its `variants` field. `defaults` and `compound`
+ * mention the same type parameter, and while `variants` was required that never
+ * mattered — it always supplied the candidate. Leave `variants` out and those two
+ * become the only places left to look: `{ extend: button, defaults: { tone: "danger" } }`
+ * had its groups "inferred" from the defaults, the result failed the constraint, and the
+ * constraint itself — a string index signature — was used instead. The child then took
+ * any prop at all.
+ *
+ * Spelled as the lookup it is rather than the built-in `NoInfer`, which would raise the
+ * TypeScript a consumer needs to 5.4 for the sake of one annotation.
+ */
+type Settled<T> = [T][T extends unknown ? 0 : never];
+
 /** Either shape of variant group, for the parts that only ever read the option *names*. */
 type AnyGroups = Record<string, Record<string, unknown>>;
 
@@ -138,8 +154,15 @@ export type VariantProps<T> = T extends { variants: infer V extends AnyGroups }
 export interface VariantsConfig<V extends VariantGroups, P extends AnyGroups = Empty> {
   /** Classes every instance gets, before any variant applies. */
   base?: SsArg;
-  /** The variants themselves. */
-  variants: V;
+  /**
+   * The variants themselves.
+   *
+   * Optional, because a recipe does not have to have any of its own: a child that only
+   * changes its parent's `defaults`, or adds to its base, declares none. What marks a
+   * config is any key only a config has — see `ConfigShaped` — and a lone argument with
+   * none of them is read as base classes, which is `cva`'s one-argument call.
+   */
+  variants?: V;
   /**
    * Extra classes for a *combination* of variants, applied after the singles.
    *
@@ -149,13 +172,13 @@ export interface VariantsConfig<V extends VariantGroups, P extends AnyGroups = E
    * an error TypeScript blamed on the property name, whose only way out was `as any` over
    * the whole config.
    */
-  compound?: ReadonlyArray<CompoundRule<V & P>>;
+  compound?: ReadonlyArray<CompoundRule<Settled<V> & P>>;
   /** `cva` / `tailwind-variants` spelling of {@link VariantsConfig.compound}. */
-  compoundVariants?: ReadonlyArray<CompoundRule<V & P>>;
+  compoundVariants?: ReadonlyArray<CompoundRule<Settled<V> & P>>;
   /** What each variant is when the caller does not say — inherited ones included. */
-  defaults?: PropsOf<V & P>;
+  defaults?: PropsOf<Settled<V> & P>;
   /** `cva` / `tailwind-variants` spelling of {@link VariantsConfig.defaults}. */
-  defaultVariants?: PropsOf<V & P>;
+  defaultVariants?: PropsOf<Settled<V> & P>;
   /**
    * A recipe to build on. Its base, variants, compounds and defaults come first, and
    * anything declared here wins — per option, not per group, so adding one `tone` does
@@ -178,13 +201,18 @@ export interface SlottedConfig<
 > {
   /** The parts, each with the classes it always gets. Replaces `base`. */
   slots: S;
-  /** The variants themselves; every option says what it adds to each part. */
-  variants: V;
+  /**
+   * The variants themselves; every option says what it adds to each part.
+   *
+   * Optional: a component whose parts never change is still a component with parts, and
+   * `variants({ slots: { root: …, title: … } })` is the whole of its styles.
+   */
+  variants?: V;
   /** Matched against inherited variants too, and free to name an inherited slot. */
-  compound?: ReadonlyArray<CompoundRule<V & P, SlotValue<MergedSlots<S, PS>>>>;
-  compoundVariants?: ReadonlyArray<CompoundRule<V & P, SlotValue<MergedSlots<S, PS>>>>;
-  defaults?: PropsOf<V & P>;
-  defaultVariants?: PropsOf<V & P>;
+  compound?: ReadonlyArray<CompoundRule<Settled<V> & P, SlotValue<MergedSlots<S, PS>>>>;
+  compoundVariants?: ReadonlyArray<CompoundRule<Settled<V> & P, SlotValue<MergedSlots<S, PS>>>>;
+  defaults?: PropsOf<Settled<V> & P>;
+  defaultVariants?: PropsOf<Settled<V> & P>;
   /** A slotted recipe to build on. Its slots and variants are merged, then overridden. */
   extend?: AnySlottedRecipe;
 }
@@ -318,6 +346,40 @@ function warnFlatExtendsSlotted(slots: string[]): void {
       `its own, so there is nothing to spread the inherited parts into. The parent's slot ` +
       `classes are ignored and this stays a flat component. Declare slots here too, or ` +
       `extend a recipe without them.`,
+  );
+}
+
+/** The keys only a config has — `ConfigShaped`, as the runtime reads it. */
+const configKeys = [
+  "variants",
+  "slots",
+  "extend",
+  "compound",
+  "compoundVariants",
+  "defaults",
+  "defaultVariants",
+];
+
+/**
+ * True for a recipe's config, as opposed to the base classes `cva`'s call shape puts first.
+ *
+ * `variants` used to be the whole test, and required. But a recipe does not have to have
+ * any of its own: a component whose parts never change is `{ slots }` and nothing else,
+ * and a child that only moves its parent's defaults is `{ extend, defaults }`. Both were
+ * read as a base value — an `ss` map — which emitted `slots:root:p-2` for the first and
+ * dropped the parent entirely for the second. The types refused both, which is how
+ * anyone found out; from JavaScript nothing did but an unknown-key warning.
+ *
+ * So a config is whatever has a key only a config can have. None of them is an `ss` key,
+ * so a map handed in as the base cannot be mistaken for one. The scanner asks the same
+ * question of the same keys, in `extract/recipe.ts`.
+ */
+function isConfig(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    configKeys.some((key) => key in value)
   );
 }
 
@@ -535,8 +597,11 @@ type KnownParts<V, S> = {
 /**
  * An object with any key only a config has. Testing for `variants` alone let
  * `variants({ extend: button, base: "font-medium" })` through as base classes — `base` is
- * an `ss` key too — and the runtime, which reads an object without `variants` the same
+ * an `ss` key too — and the runtime, which read an object without `variants` the same
  * way, rendered `font-medium` and inherited nothing.
+ *
+ * The runtime asks the same question now, of the same keys — `configKeys` below — so
+ * such an object is a config on both sides, `variants` or not.
  */
 type ConfigShaped =
   | { variants: unknown }
@@ -546,6 +611,11 @@ type ConfigShaped =
   | { compoundVariants: unknown }
   | { defaults: unknown }
   | { defaultVariants: unknown };
+
+// `V` defaults to nothing in every overload that takes a config, and has to: with
+// `variants` left out there is nothing to infer it from, and without a default TypeScript
+// falls back to the *constraint* — a string index signature that would let a recipe with
+// no variants of its own be called with any prop at all.
 
 /** `cva`'s one-argument call: base classes and nothing else. */
 export function variants<const B extends SsArg>(
@@ -559,7 +629,7 @@ export function variants<const B extends SsArg>(
  * and nothing else, which is why there is no codemod to write.
  */
 export function variants<
-  const V extends VariantGroups,
+  const V extends VariantGroups = Empty,
   const E extends AnyRecipe | undefined = undefined,
 >(
   base: SsArg,
@@ -567,15 +637,15 @@ export function variants<
 ): VariantComponent<V & Inherited<E>>;
 export function variants<
   const S extends SlotDefaults,
-  const V extends SlottedGroups<S>,
+  const V extends SlottedGroups<S> = Empty,
   const E extends AnySlottedRecipe | undefined = undefined,
 >(
   config: SlottedConfig<S, V, Inherited<E>, InheritedSlots<E>> & { extend?: E } & {
-    variants: KnownParts<V, MergedSlots<S, InheritedSlots<E>>>;
+    variants?: KnownParts<V, MergedSlots<S, InheritedSlots<E>>>;
   },
 ): SlottedComponent<V & Inherited<E>, MergedSlots<S, InheritedSlots<E>>>;
 export function variants<
-  const V extends VariantGroups,
+  const V extends VariantGroups = Empty,
   const E extends AnyRecipe | undefined = undefined,
 >(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
 
@@ -591,6 +661,10 @@ export function variants<
  * Emission order is `base`, then each variant in the order it was declared, then the
  * compound rules, then whatever the caller passed. Later wins, as everywhere else, so
  * a trailing `className` still overrides — see {@link cn}.
+ *
+ * A variant nobody passed, and that has no default, is `false`: an on/off variant's
+ * `false` option applies, and so does a compound rule asking for `false`. A variant
+ * with no `false` option has nothing to fall to and adds nothing.
  *
  * Declare `slots` instead of `base` and it builds a *multi-part* component: every
  * option says what it adds to each named part, and the call returns one class string
@@ -629,13 +703,10 @@ export function variants<
 // to serve both, which no shared type would be without giving up on either.
 // biome-ignore lint/suspicious/noExplicitAny: an implementation signature, never called
 export function variants(first: any, second?: any): any {
-  // `cva`'s shape: base classes first, config second. A config object always has
-  // `variants`; a base value never does, so the two cannot be confused.
-  // A lone base value is `cva("flex items-center")`, which has no config at all. It is
-  // told apart the same way the scanner tells it apart: a config always has `variants`,
-  // and a base value never does.
-  const bare =
-    second === undefined && (typeof first !== "object" || first === null || !("variants" in first));
+  // `cva`'s shape: base classes first, config second. A lone argument is either one, and
+  // `cva("flex items-center")` has no config at all — so it is told apart the way the
+  // types and the scanner tell it apart, by the keys only a config has. See `isConfig`.
+  const bare = second === undefined && !isConfig(first);
   const config = snapshot(
     bare
       ? { base: first, variants: {} }
@@ -659,8 +730,16 @@ export function variants(first: any, second?: any): any {
     // `{ size: undefined }` is what a component writes when it forwards an optional
     // prop it did not receive.
     const chosen: Record<string, string | undefined> = {};
+    // A variant nobody chose is `false`. For an on/off state that is what "not passed"
+    // means everywhere else — `<Tab />` is not active — and reading it as *nothing*
+    // left a boolean's `false` option, and every compound rule asking for `false`,
+    // unapplied until someone remembered `defaults: { active: false }`: no error, no
+    // warning, an element missing the classes written for exactly this state. It costs
+    // a group with no `false` option nothing, since there is nothing there to look up.
+    for (const name of names) own(chosen, name, "false");
     for (const name of Object.keys(resolved.defaults)) {
-      own(chosen, name, optionKey(resolved.defaults[name]));
+      const key = optionKey(resolved.defaults[name]);
+      if (key !== undefined) own(chosen, name, key);
     }
     if (props) {
       for (const name of Object.keys(props)) {

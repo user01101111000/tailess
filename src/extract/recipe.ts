@@ -1,4 +1,4 @@
-import { arrayBody, declaresKey, objectLiterals, parseObject } from "./scan.js";
+import { arrayBody, configKeys, declaresKey, objectLiterals, parseObject } from "./scan.js";
 
 /**
  * Every place a class value sits in one `variants(…)` call, as raw source text.
@@ -24,11 +24,14 @@ export function recipeValues(args: readonly string[]): string[] {
   const out: string[] = [];
 
   // `cva`'s shape puts the base classes first and the config second. Which argument is
-  // which is decided by the `variants` key: a config always has one, and a base value
-  // never does — including when it is an `ss` map, which a string-only test would have
-  // read as the config.
+  // which is decided by the keys only a config can have — `variants`, `slots`, `extend`
+  // and the rest of `configKeys` — exactly as the runtime decides it. A base value has
+  // none of them, including when it is an `ss` map, which a string-only test would have
+  // read as the config. `variants` alone used to be the test, back when it was required;
+  // a recipe with parts and no variants, or a child that only extends, is a config all
+  // the same — and read as a base value, its `slots` and `defaults` became buckets.
   const first = objectLiterals(args[0] ?? "")[0];
-  const isConfig = first !== undefined && declaresKey(first, "variants");
+  const isConfig = first !== undefined && configKeys.some((key) => declaresKey(first, key));
   const cva = args.length > 1 && !isConfig;
 
   // A first argument that is not a config is the base, whether or not a config follows.
