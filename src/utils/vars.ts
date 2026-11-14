@@ -4,8 +4,13 @@ import { firstTime, warn } from "../internal/settings.js";
 /** A CSS custom property name, which is any identifier starting with `--`. */
 export type CssVarName = `--${string}`;
 
-/** What {@link vars} accepts: custom property names to values, or nothing. */
-export type CssVarInput = Record<CssVarName, string | number | null | undefined>;
+/**
+ * What {@link vars} accepts: custom property names to values, or nothing.
+ *
+ * `false` is in the union for the same reason it is in a class value — `cond && "50%"`
+ * is how a condition is written, and it is `false` when the condition is.
+ */
+export type CssVarInput = Record<CssVarName, string | number | false | null | undefined>;
 
 /**
  * What {@link vars} returns — assignable to React's `CSSProperties` and to the
@@ -46,13 +51,14 @@ function warnNotACustomProperty(key: string): void {
  * ```
  *
  * Numbers are stringified, and a value that cannot produce a usable declaration —
- * `null`, `undefined`, `""`, `NaN`, `Infinity` — drops its property instead of
- * writing an invalid one, so a conditional variable reads the same way a
+ * `null`, `undefined`, `false`, `""`, `NaN`, `Infinity` — drops its property instead
+ * of writing an invalid one, so a conditional variable reads the same way a
  * conditional class does. `0` is kept: it is a perfectly good value.
  *
  * @example
  * vars({ "--w": "42%", "--gap": 8 });        // => { "--w": "42%", "--gap": "8" }
  * vars({ "--w": "42%", "--h": undefined });  // => { "--w": "42%" }
+ * vars({ "--w": isOpen && "42%" });          // isOpen === false => {}
  */
 export function vars(map: CssVarInput): CssVars {
   const out: Record<string, string> = {};
@@ -64,8 +70,9 @@ export function vars(map: CssVarInput): CssVars {
     // declaration. `NaN` and `Infinity` are among them — they stringify into a
     // declaration CSS happily parses and then discards at computed-value time, which
     // looks exactly like the property having been absent, so drop them and be
-    // consistent rather than write `--w: NaN`.
-    if (value == null || value === "") continue;
+    // consistent rather than write `--w: NaN`. `false` goes the same way: it is what
+    // `cond && "50%"` leaves behind, and it used to be written out as `--w: false`.
+    if (value == null || value === "" || value === false) continue;
     if (typeof value === "number" && !Number.isFinite(value)) continue;
     if (isDev && !key.startsWith("--")) warnNotACustomProperty(key);
     out[key] = typeof value === "string" ? value : String(value);

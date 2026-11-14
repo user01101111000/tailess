@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { SsInput, SsKey } from "../src/index.js";
-import { ss, withPrefix } from "../src/index.js";
+import { on, ss, withPrefix } from "../src/index.js";
 
 /**
  * A `@theme` that adds `--breakpoint-screen-wide`, or a `@custom-variant sidebar-open`, creates
@@ -44,6 +44,15 @@ describe("keys a project declares for itself", () => {
 
   it("leaves withPrefix as the escape hatch it was", () => {
     expect(withPrefix("screen-wide", "p-12")).toBe("screen-wide:p-12");
+  });
+
+  it("is a state on() takes too, alone or stacked", () => {
+    // `on("hover", x)` is documented as a shape of `ss({ hover: x })`, so a key one
+    // of them accepts and the other refuses made the two disagree about one variant.
+    expect(on("sidebar-open", "translate-x-0")).toBe("sidebar-open:translate-x-0");
+    expect(on(["dark", "sidebar-open"], "bg-black")).toBe("dark:sidebar-open:bg-black");
+    // @ts-expect-error still a closed union: this one was never declared.
+    expect(on("sidebar-closed", "hidden")).toBe("sidebar-closed:hidden");
   });
 });
 

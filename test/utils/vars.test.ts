@@ -23,6 +23,15 @@ describe("vars", () => {
     expect(vars({ "--w": "" })).toEqual({});
   });
 
+  it("drops `false`, which is what a condition leaves behind", () => {
+    // `open && "42%"` is how a conditional class is written, and the docs promise a
+    // conditional variable reads the same way. It was a compile error, and from
+    // JavaScript it wrote the declaration `--w: false`.
+    const open = false as boolean;
+    expect(vars({ "--w": open && "42%", "--h": "1px" })).toEqual({ "--h": "1px" });
+    expect(vars({ "--w": !open && "42%" })).toEqual({ "--w": "42%" });
+  });
+
   it("drops a number that cannot produce a usable declaration", () => {
     // `--w: NaN` parses and is then discarded at computed-value time, which looks
     // exactly like the property having been absent — so be absent, and keep the

@@ -43,7 +43,9 @@ finds the literal wherever it really lives.
   `max-*` ranges, container queries (`@md`, `@max-md`), and states (`hover`, `dark`,
   `group-hover`, `peer-checked`, `has-focus`, `not-first`, …). 305 keys, closed union.
 - `cn(...)` — join + `tailwind-merge`, nothing else.
-- `responsive`, `on`, `until`, `between`, `data`, `aria`, `match`, `withPrefix`
+- `responsive`, `on`, `until`, `between`, `match`, `withPrefix`
+- `data(name, value, classes)` / `aria(name, classes)` — attribute variants. `aria` takes a
+  value too: `aria("current", "page", …)` is `aria-[current=page]:`.
 - `supports` / `notSupports` — feature queries. Negation is only ever `not-supports-*`.
 - `group` / `peer` / `container` — named variants.
 - `has` / `notHas` / `inside`, `nth` / `nthLast` / `nthOfType` / `nthLastOfType`

@@ -163,6 +163,50 @@ describe("extractClasses", () => {
     ]);
   });
 
+  it("reads aria() with a value the way it reads data()", () => {
+    expect(extractClasses(`aria("current", "page", "font-semibold")`)).toEqual([
+      "aria-[current=page]:font-semibold",
+    ]);
+    // Both branches of a ternary, a number, a boolean, and the presence form.
+    expect(extractClasses(`aria("sort", up ? "ascending" : "descending", "underline")`)).toEqual([
+      "aria-[sort=ascending]:underline",
+      "aria-[sort=descending]:underline",
+    ]);
+    expect(extractClasses(`aria("level", 2, "text-lg")`)).toEqual(["aria-[level=2]:text-lg"]);
+    expect(extractClasses(`aria("hidden", false, "block")`)).toEqual(["aria-[hidden=false]:block"]);
+    expect(extractClasses(`aria("current", null, "underline")`)).toEqual([
+      "aria-[current]:underline",
+    ]);
+    expect(extractClasses(`aria("current", value, "underline")`)).toEqual([
+      "aria-[current]:underline",
+    ]);
+    // A value that is one thing or nothing: the value form and the presence form both.
+    expect(extractClasses(`aria("current", here ? "page" : null, "underline")`)).toEqual([
+      "aria-[current=page]:underline",
+      "aria-[current]:underline",
+    ]);
+  });
+
+  it("is not thrown by the trailing comma a formatter adds", () => {
+    // The form is decided by the argument count, and a wrapped call ends in a comma.
+    // Counting the empty slot after it read the two-argument form as the three-argument
+    // one: the classes were taken for the value, and there was nothing left to enumerate.
+    const wrapped = `aria(
+      "expanded",
+      "rotate-180 opacity-100",
+    )`;
+    expect(extractClasses(wrapped)).toEqual([
+      "aria-expanded:opacity-100",
+      "aria-expanded:rotate-180",
+    ]);
+    const valued = `aria(
+      "current",
+      "page",
+      "font-semibold",
+    )`;
+    expect(extractClasses(valued)).toEqual(["aria-[current=page]:font-semibold"]);
+  });
+
   it("handles supports() and notSupports(), escaping the query as the runtime does", () => {
     expect(extractClasses(`supports("display: grid", "grid")`)).toEqual([
       "supports-[display:_grid]:grid",

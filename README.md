@@ -519,6 +519,9 @@ refuses a function outright.
 ```ts
 responsive("text-sm", { md: "text-lg", xl: "text-2xl" });
 // → "text-sm md:text-lg xl:text-2xl"
+
+responsive("text-sm", isWide && { md: "text-lg" });
+// isWide === false → "text-sm"   (a falsy map drops whole, like a falsy class)
 ```
 
 ### `until` / `between` — max-width ranges
@@ -558,7 +561,14 @@ For headless UI libraries (Radix, Ark, React Aria).
 data("state", "open", "opacity-100");           // → "data-[state=open]:opacity-100"
 data("disabled", null, "pointer-events-none");  // → "data-[disabled]:pointer-events-none"
 aria("expanded", "rotate-180");                 // → "aria-expanded:rotate-180"
+aria("current", "page", "font-semibold");       // → "aria-[current=page]:font-semibold"
 ```
+
+`aria` with two arguments is the bare variant, which Tailwind compiles to
+`[aria-expanded="true"]` — every boolean ARIA state. The ones that are not boolean need
+the value said — `aria-current="page"`, `aria-sort="ascending"`,
+`aria-orientation="vertical"` — so give it as a middle argument, exactly as `data` takes
+its own. `null` there is the attribute merely being present, again as in `data`.
 
 A value containing a space can't appear in a class name, so write it Tailwind's way —
 with `_`, which Tailwind reads back as a space:
@@ -685,6 +695,18 @@ function Button({ size }: { size: "sm" | "md" | "lg" }) {
 match(tone, { primary: "bg-blue-600", danger: "bg-red-600" }, "bg-gray-200");
 // unknown tone at runtime → the fallback
 ```
+
+The discriminant is whatever the component already has — a string union, a number, a
+boolean, or any of those made optional:
+
+```ts
+match(cols, { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3" });  // cols: 1 | 2 | 3
+match(isOpen, { true: "rotate-180", false: "rotate-0" });               // both halves required
+match(size, { sm: "p-2", lg: "p-8" }, "p-4");                           // size?: "sm" | "lg"
+```
+
+`null` and `undefined` name no case, so an optional prop that nobody passed takes the
+fallback rather than needing a `??` in front of it.
 
 Every class here is already a literal, so `match` needs no build integration.
 
@@ -879,12 +901,14 @@ put the value in a custom property:
 />
 ```
 
-Numbers are stringified, and `null`, `undefined` or `""` drops the property rather than
-writing an invalid declaration — so a conditional variable reads like a conditional class.
+Numbers are stringified, and `null`, `undefined`, `false` or `""` drops the property
+rather than writing an invalid declaration — so a conditional variable reads like a
+conditional class.
 
 ```ts
 vars({ "--w": "42%", "--gap": 8 });        // → { "--w": "42%", "--gap": "8" }
 vars({ "--w": "42%", "--h": undefined });  // → { "--w": "42%" }
+vars({ "--w": isOpen && "42%" });          // isOpen === false → {}
 ```
 
 ### `configure` — the two things that depend on your project
@@ -953,6 +977,7 @@ same block in a file of each kind: `tailess.d.ts` and a copy named `tailess-cjs.
 
 ```ts
 ss({ md: "p-6", "3xl": "p-12", "sidebar-open": "translate-x-0" });
+on(["dark", "sidebar-open"], "bg-black");   // on() takes a declared key too
 ```
 
 Name them in `configure({ keys: [...] })` too, or the runtime — which cannot see a type —
@@ -1135,6 +1160,7 @@ ss({ md: withPrefix("has-[:x]", "underline") })     // a helper inside a group s
 on(["dark", "hover"], "bg-black")                   // compound variants
 data("state", open ? "open" : "closed", "p-2")      // both values
 data("level", 2, "p-2")                             // numbers and booleans
+aria("current", "page", "font-bold")                // aria-[current=page]:font-bold
 supports("display: grid", "grid")                   // the space is escaped for you
 group("row", "hover", "underline")                  // group-hover/row:underline
 has("> img", "p-0")                                 // the space is escaped for you
@@ -1244,6 +1270,22 @@ ss({ md: cond && "p-4" })        // ✅ the sweep reads both halves
 
 A helper call inside a bucket — `ss({ md: on("hover", size) })` — is read as its own
 call, and its arguments are not checked from here.
+
+**A recipe is read the same way.** The config of
+[`variants`](#variants--component-recipes) is not a bucket map — `tone` and `lg` name
+things, they prefix nothing — but every leaf of it is an `ss` argument, and that is where
+a design system keeps most of its classes. So both of these checks reach into `base`,
+every slot, every option and every compound rule:
+
+```ts
+variants({ variants: { size: { lg: { md: pad } } } })   // ❌ reported — "md" cannot be read
+variants({ base: "p-4 p-2", variants: {} })             // ❌ reported — "p-4" is dead
+variants({ variants: { tone: { primary: brand } } })    // ✅ `primary` is a name, not a prefix
+```
+
+A recipe built with a spread is not all in view — a spread can bring in `slots`, which
+turns what reads as a bucket key into a part's name — so there only the conflict inside a
+single string is reported, which is dead whatever the shape turns out to be.
 
 **An `ss` map in the wrong place.** Composition runs one way — a helper nests *inside*
 an `ss` bucket, never the reverse. Every helper's class argument is a `ClassValue`, where

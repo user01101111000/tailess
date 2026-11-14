@@ -250,6 +250,32 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
     src: `variants({ base: { md: "gap-2" }, variants: { s: { a: { hover: "underline" } } }, defaults: { s: "a" } })()`,
   },
 
+  // `aria` with a value is `aria-[name=value]`, built the way `data` builds its own —
+  // and the count of arguments is the only thing that says which form a call is.
+  { src: `aria("current", "page", "font-semibold")` },
+  { src: `aria("sort", dir ? "ascending" : "descending", "underline")`, env: { dir: true } },
+  { src: `aria("sort", dir ? "ascending" : "descending", "underline")`, env: { dir: false } },
+  { src: `aria("level", 2, "text-lg")` },
+  { src: `aria("hidden", false, "block")` },
+  { src: `aria("current", null, "underline")` },
+  { src: `aria("current", here ? "page" : null, "underline")`, env: { here: true } },
+  { src: `aria("current", here ? "page" : null, "underline")`, env: { here: false } },
+  { src: `aria("current", "page", { underline: yes })`, env: { yes: true } },
+  { src: `ss({ md: aria("current", "page", "font-semibold") })` },
+  { src: `on("hover", aria("current", "page", "underline"))` },
+  { src: `aria("current", "page", on("hover", "underline"))` },
+  // A formatter's trailing comma leaves an empty slot behind, and must not turn the
+  // two-argument form into the three-argument one.
+  { src: `aria("expanded", "rotate-180",)` },
+  { src: `aria("current", "page", "font-semibold",)` },
+
+  // A lookup keyed by a number or a boolean, inside a bucket.
+  { src: `ss({ md: match(cols, { 1: "grid-cols-1", 2: "grid-cols-2" }) })`, env: { cols: 2 } },
+  { src: `ss({ md: match(open, { true: "block", false: "hidden" }) })`, env: { open: false } },
+
+  // A whole responsive map behind a condition.
+  { src: `responsive("text-sm", wide ? { md: "text-lg" } : null)`, env: { wide: true } },
+
   // Every spelling of a numeric literal, since the runtime interpolates the *number*.
   { src: `data("count", 1e3, "opacity-100")` },
   { src: `data("count", 1_000, "opacity-100")` },

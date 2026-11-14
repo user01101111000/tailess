@@ -412,6 +412,21 @@ export function splitArgs(text: string): string[] {
 }
 
 /**
+ * How many arguments a call really has.
+ *
+ * {@link splitArgs} keeps the empty slot a trailing comma leaves behind, and a formatter
+ * adds that comma to every call it wraps across lines. For a helper read by *position*
+ * that is harmless. For one whose meaning turns on the *count* — `aria` — it is not: the
+ * two-argument form, wrapped, would be read as the three-argument one, with its classes
+ * taken for the value and nothing left to enumerate.
+ */
+export function argCount(args: readonly string[]): number {
+  let count = args.length;
+  while (count > 0 && args[count - 1] === "") count -= 1;
+  return count;
+}
+
+/**
  * Collect the contents of every string literal in `text`: `'...'`, `"..."`, and
  * interpolation-free `` `...` `` templates. Templates containing `${` are dynamic
  * and skipped.

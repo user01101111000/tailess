@@ -37,6 +37,11 @@ const expected = [
   "data-[state=closed]:opacity-100",
   "data-[disabled]:pointer-events-none",
   "aria-expanded:rotate-180",
+  // The value form, both branches of its ternary, and bare presence.
+  "aria-[current=page]:font-semibold",
+  "aria-[sort=ascending]:underline",
+  "aria-[sort=descending]:underline",
+  "aria-[busy]:opacity-50",
   "supports-[display:grid]:grid",
   // The escaped spelling is the whole point of the helper: written as CSS spells
   // it, this only has a rule because the space became `_` on both sides.
@@ -79,6 +84,9 @@ export const cls = cn(
   data("state", open ? "open" : "closed", "opacity-100"),
   data("disabled", null, "pointer-events-none"),
   aria("expanded", "rotate-180"),
+  aria("current", "page", "font-semibold"),
+  aria("sort", open ? "ascending" : "descending", "underline"),
+  aria("busy", null, "opacity-50"),
   withPrefix("supports-[display:grid]", "grid"),
   supports("display: grid", "gap-4"),
   supports("gap", "gap-2"),
