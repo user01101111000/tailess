@@ -178,6 +178,84 @@ describe("a boolean variant", () => {
   });
 });
 
+/**
+ * For an on/off state, "not passed" means off — `<Tab />` is not active. Reading it as
+ * *nothing* left the `false` option, and every compound rule asking for `false`, unapplied
+ * until someone remembered `defaults: { active: false }`: no error and no warning, just an
+ * element missing the classes written for exactly this state.
+ */
+describe("a boolean variant nobody passed", () => {
+  const tab = variants({
+    base: "px-3",
+    variants: {
+      active: { true: "text-blue-700", false: "text-neutral-500" },
+      loading: { true: "animate-pulse" },
+      tone: { primary: "bg-blue-600", ghost: "bg-transparent" },
+    },
+    compound: [
+      { active: false, tone: "primary", class: "hover:bg-blue-700" },
+      { loading: false, class: "cursor-pointer" },
+    ],
+  });
+
+  it("is false, so its false option applies with no default", () => {
+    expect(tab()).toBe("px-3 text-neutral-500 cursor-pointer");
+    expect(tab({})).toBe(tab({ active: false }));
+    // What a component writes when it forwards an optional prop it did not receive.
+    expect(tab({ active: undefined })).toBe(tab({ active: false }));
+    expect(tab({ active: true })).toBe("px-3 text-blue-700 cursor-pointer");
+  });
+
+  it("satisfies a compound rule that asks for false", () => {
+    expect(tab({ tone: "primary" })).toBe(
+      "px-3 text-neutral-500 bg-blue-600 hover:bg-blue-700 cursor-pointer",
+    );
+    expect(tab({ tone: "primary", active: true })).not.toContain("hover:bg-blue-700");
+    // `loading` has no `false` option at all, and the rule asking for it holds anyway.
+    expect(tab({ loading: true })).not.toContain("cursor-pointer");
+    expect(tab({ loading: true })).toContain("animate-pulse");
+  });
+
+  it("still gives way to a default, and to a prop", () => {
+    const on = variants({
+      variants: { active: { true: "underline", false: "no-underline" } },
+      defaults: { active: true },
+    });
+    expect(on()).toBe("underline");
+    expect(on({ active: undefined })).toBe("underline");
+    expect(on({ active: false })).toBe("no-underline");
+  });
+
+  it("adds nothing for a variant that has no false to fall to", () => {
+    // A choice between options is still a choice nobody made.
+    const sized = variants({
+      base: "rounded",
+      variants: { size: { sm: "p-1", lg: "p-4" } },
+      compound: [{ size: "sm", class: "text-sm" }],
+    });
+    expect(sized()).toBe("rounded");
+  });
+
+  it("holds for a part of a slotted recipe too", () => {
+    const card = variants({
+      slots: { root: "rounded", title: "font-semibold" },
+      variants: {
+        selected: {
+          true: { root: "border-blue-600", title: "text-blue-700" },
+          false: { root: "border-neutral-200" },
+        },
+      },
+    });
+    expect(card()).toEqual({ root: "rounded border-neutral-200", title: "font-semibold" });
+    expect(card({ selected: true }).title).toBe("font-semibold text-blue-700");
+  });
+
+  it("is inherited with the variant", () => {
+    const child = variants({ extend: tab, base: "rounded" });
+    expect(child()).toBe("px-3 rounded text-neutral-500 cursor-pointer");
+  });
+});
+
 describe("class or className passed in the props, the cva and tv habit", () => {
   it("is not applied, and says where extra classes go", () => {
     // cva and tv both read `class`/`className` off the props; here extra classes are a

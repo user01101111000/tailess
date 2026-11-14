@@ -87,8 +87,8 @@ export const button = variants({
 - A number from data → a literal `w-[var(--w)]` class, plus `vars({ "--w": … })` on `style`.
 - A shared fragment is a finished `ss(…)` string, used where nothing prefixes it:
   `base: { base: [focusRing, "rounded-lg"] }`. Never `md: focusRing`.
-- A variant nobody passed adds nothing, its `false` option included — put the resting look
-  in `base`.
+- A variant nobody passed is `false`: `active: { true: …, false: … }` works for an
+  optional prop with no default, and so does a compound rule asking for `active: false`.
 
 ## Checking
 

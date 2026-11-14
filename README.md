@@ -749,6 +749,24 @@ merge once, across all of it.
 `{ size: undefined }` leaves the default in place, which is what a component writes when
 it forwards an optional prop it did not receive.
 
+A variant nobody passed, and that has no default, is `false`. For a choice between
+options that changes nothing — there is no `false` option to find. For something that is
+on or off it is what "not passed" means everywhere else, so both halves of a boolean
+variant work with no default, and so does a compound rule that asks for `false`:
+
+```ts
+const tab = variants({
+  base: "border-b-2",
+  variants: {
+    active: { true: "border-blue-600 text-blue-700", false: "border-transparent text-neutral-500" },
+  },
+  compound: [{ active: false, class: { hover: "text-neutral-900" } }],
+});
+
+tab();                       // → "border-b-2 border-transparent text-neutral-500 hover:text-neutral-900"
+tab({ active: isActive });   // isActive may be undefined, and the tab is still styled
+```
+
 An extra argument is a `ClassArg` — a class string, an array, a falsy value — **not an
 `ss` map**. The build reads your recipe and your `ss(…)` calls, never the calls of the
 component the recipe builds, so a map there would put `md:w-auto` on the element with no
@@ -867,7 +885,7 @@ against the current build.
 | `extend` | `extend` | merges per option, so an inherited one is not dropped |
 | `{ intent: ["a", "b"] }` in a compound | same | |
 | `disabled?: boolean` | same | |
-| `tv`: an omitted boolean prop picks its `false` option | an omitted prop picks nothing, as in `cva` | **a difference:** add `defaults: { disabled: false }` to keep tv's behaviour — a `false` option or a `false` compound rule does not apply otherwise |
+| `cva`: an omitted boolean prop picks nothing | an omitted prop is `false`, as in `tv` | **a difference:** the `false` option applies, and so does a compound rule asking for `false`. A recipe that sets `defaultVariants: { disabled: false }` — as cva's own docs do — reads the same either way |
 
 ```diff
 - import { cva } from "class-variance-authority";
@@ -902,6 +920,7 @@ the strings `"true"`/`"false"`, and both spellings are accepted:
 ```tsx
 const box = variants({ variants: { disabled: { true: "opacity-50", false: "opacity-100" } } });
 box({ disabled: isDisabled });   // forward the prop you already have
+box();                           // → "opacity-100": not passed is false, as in tv
 ```
 
 ### `withPrefix` — the escape hatch
@@ -1155,15 +1174,16 @@ export const tab = ss({
 <button role="tab" aria-selected={id === current} className={s.tab} />
 ```
 
-For a state that *is* a prop, a variant nobody passed adds nothing — its `false` option
-included. So put the resting look in `base` and only the difference under `true`; later
-wins, so it overrides, and the element is styled whether or not the prop arrived:
+For a state that *is* a prop, a variant nobody passed is `false` — so an optional prop
+needs no default, and the element is styled whether or not it arrived. Write both halves,
+or only the difference, with the resting look in `base`; later wins, so it overrides:
 
 ```ts
 export const row = variants({
   base: { base: "flex w-full items-center px-2 py-3", hover: "bg-neutral-50" },
   variants: {
     selected: { true: { base: "bg-blue-50 font-medium", hover: "bg-blue-50" } },
+    dimmed: { true: "opacity-50", false: "opacity-100" },
   },
 });
 ```

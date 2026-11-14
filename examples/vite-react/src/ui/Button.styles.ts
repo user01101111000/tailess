@@ -30,12 +30,16 @@ export const button = variants({
       // An option that carries its own breakpoint — the thing a flat string cannot say.
       lg: { base: "h-10 gap-2 px-4 text-base", md: "h-12 px-6 text-lg" },
     },
-    // On or off. Only the difference goes under `true`: a variant nobody passed adds
-    // nothing, so the resting look belongs in `base` rather than under `false`.
-    loading: { true: "cursor-progress opacity-70" },
+    // On or off. A variant nobody passed is `false`, so an optional prop needs no
+    // default: a plain `<Button>` gets the `false` half without anyone saying so.
+    loading: { true: "cursor-progress opacity-70", false: "cursor-pointer" },
   },
-  // Two states at once.
-  compound: [{ tone: "primary", size: "lg", class: "shadow-md" }],
+  compound: [
+    // Two states at once…
+    { tone: "primary", size: "lg", class: "shadow-md" },
+    // …and one of them being *off*: press feedback only while it is not loading.
+    { loading: false, class: { active: "scale-95" } },
+  ],
   defaults: { tone: "primary", size: "sm" },
 });
 

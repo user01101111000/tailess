@@ -190,8 +190,8 @@ describe("the browser bundle", () => {
     // every jsdom and happy-dom test file that a correctly wired build was not. +28 in the
     // arbitrary-value helpers, whose underscore advice pointed at a spelling that is dropped.
     //
-    // Raised to 16,500 for two things, neither of them in `ss` + `cn`: 16,006 -> 16,256
-    // chars (6,775 gzipped). +107 across the small helpers: `aria` takes a value, the way
+    // Raised to 16,500 for three things, none of them in `ss` + `cn`: 16,006 -> 16,307
+    // chars (6,784 gzipped). +107 across the small helpers: `aria` takes a value, the way
     // `data` does — `aria-current="page"` and `aria-sort` had no spelling short of
     // `withPrefix` — `responsive(base, null)` threw out of a render, a `match` keyed by
     // `null` found a case spelled "null", and `vars` wrote `--w: false` for a condition
@@ -199,11 +199,15 @@ describe("the browser bundle", () => {
     // and `{ extend, defaults }` were read as base classes, emitting `slots:root:p-2` for
     // one and dropping the parent for the other. The types refused both, which is how
     // anyone found out; the runtime asks the question the types ask now, of the same keys.
+    // And +51 for a variant nobody passed being `false`: read as nothing, a boolean's
+    // `false` option and every compound rule asking for `false` went unapplied until
+    // someone remembered `defaults: { active: false }` — no error, no warning, an element
+    // missing the classes written for exactly that state.
     //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
     // 6,123 chars (2,874 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 4,757 (10,880). Measured with the
+    // most projects actually pay; `variants` on top costs 4,808 (10,931). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
     expect(code.length).toBeLessThan(16_500);
   });

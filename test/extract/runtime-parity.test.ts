@@ -266,6 +266,15 @@ const cases: Array<{ src: string; env?: Record<string, unknown> }> = [
   },
   { src: `variants({ base: { md: "p-2" }, defaults: {} })()` },
 
+  // A boolean variant nobody passed is `false`, so its `false` option and a compound rule
+  // asking for `false` are both built by a bare call — and both have to be enumerated.
+  {
+    src: `variants({ variants: { on: { true: { md: "p-4" }, false: { md: "p-2" } } }, compound: [{ on: false, class: { hover: "ring-2" } }] })()`,
+  },
+  {
+    src: `variants({ slots: { root: "rounded" }, variants: { on: { false: { root: { lg: "p-6" } } } } })().root`,
+  },
+
   // `aria` with a value is `aria-[name=value]`, built the way `data` builds its own —
   // and the count of arguments is the only thing that says which form a call is.
   { src: `aria("current", "page", "font-semibold")` },

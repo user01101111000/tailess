@@ -662,6 +662,10 @@ export function variants<
  * compound rules, then whatever the caller passed. Later wins, as everywhere else, so
  * a trailing `className` still overrides — see {@link cn}.
  *
+ * A variant nobody passed, and that has no default, is `false`: an on/off variant's
+ * `false` option applies, and so does a compound rule asking for `false`. A variant
+ * with no `false` option has nothing to fall to and adds nothing.
+ *
  * Declare `slots` instead of `base` and it builds a *multi-part* component: every
  * option says what it adds to each named part, and the call returns one class string
  * per part rather than one string.
@@ -726,8 +730,16 @@ export function variants(first: any, second?: any): any {
     // `{ size: undefined }` is what a component writes when it forwards an optional
     // prop it did not receive.
     const chosen: Record<string, string | undefined> = {};
+    // A variant nobody chose is `false`. For an on/off state that is what "not passed"
+    // means everywhere else — `<Tab />` is not active — and reading it as *nothing*
+    // left a boolean's `false` option, and every compound rule asking for `false`,
+    // unapplied until someone remembered `defaults: { active: false }`: no error, no
+    // warning, an element missing the classes written for exactly this state. It costs
+    // a group with no `false` option nothing, since there is nothing there to look up.
+    for (const name of names) own(chosen, name, "false");
     for (const name of Object.keys(resolved.defaults)) {
-      own(chosen, name, optionKey(resolved.defaults[name]));
+      const key = optionKey(resolved.defaults[name]);
+      if (key !== undefined) own(chosen, name, key);
     }
     if (props) {
       for (const name of Object.keys(props)) {
