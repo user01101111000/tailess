@@ -178,6 +178,20 @@ This creates a small markdown file under `.changeset/`. Commit it with your PR. 
 
 Docs-only or tooling-only PRs that don't affect the published package don't need a changeset.
 
+### How the release job proves who it is
+
+The publish step authenticates to npm with **trusted publishing** when the package has a
+trusted publisher set up for this repository's `release.yml` — on npmjs.com, under the
+package's Settings, with direct `npm publish` allowed, since that is what
+`changeset publish` runs. The job then needs no stored credential at all. The `NPM_TOKEN`
+secret is only a fallback, tried if that fails.
+
+A publish that ends in `E404 Not Found - PUT https://registry.npmjs.org/tailess` is not a
+missing package. It is what the registry answers to a publish it does not recognise: an
+expired or revoked token, or a trusted publisher entry whose owner, repository or workflow
+filename does not match. Rerunning the failed job is enough once the npm side is right —
+the version is already bumped, and the job publishes whatever is not on the registry yet.
+
 ### Trying a release before it is one
 
 An npm version cannot be unpublished, so anything large goes out on a tag first:
