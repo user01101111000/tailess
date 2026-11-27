@@ -884,6 +884,49 @@ export function configuresMerge(source: string): boolean {
   return anyTailessImport.test(masked) && configureMerge.test(masked);
 }
 
+/** The array in `configure({ … keys: [ … ] })`. Bounded like {@link configureMerge}. */
+const configureKeys = /\bconfigure\s*\(\s*\{[\s\S]{0,2000}?\bkeys\s*:\s*\[([^\]]{0,2000})\]/g;
+
+/** `declare module "tailess"` — where a `CustomKeys` that adds to the package's lives. */
+const tailessAugmentation = /\bdeclare\s+module\s*["']tailess["']/;
+
+/** The body of `interface CustomKeys { … }`, whose property names are the keys. */
+const customKeysBody = /\binterface\s+CustomKeys\b[^{]{0,200}\{([^}]{0,4000})\}/g;
+
+/** One property name in that body — quoted or bare — before its `:` or `?:`. */
+const propertyName = /(?:^|[\s;,{])(?:"([^"\n]+)"|'([^'\n]+)'|([A-Za-z_$][\w$]*))\s*\??\s*:/g;
+
+/**
+ * The keys `source` declares for the project's own CSS: named in `configure({ keys })`,
+ * or in a `CustomKeys` augmentation of tailess's types.
+ *
+ * The build reads the project's CSS and notes every breakpoint or `@custom-variant` it
+ * adds, with the way to declare a key for it. For a key that *is* declared, that note asks
+ * the project to do what it has already done, on every build and every dev start. So the
+ * declaration is read back here, and the note goes quiet for that key. Either half is
+ * enough: the other one is reported anyway, by the compiler or by the runtime.
+ */
+export function declaredKeys(source: string): string[] {
+  const code = source.startsWith("﻿") ? source.slice(1) : source;
+  if (!code.includes("tailess")) return [];
+  const masked = maskLiterals(code);
+  const keys = new Set<string>();
+  if (anyTailessImport.test(masked)) {
+    for (const [, list = ""] of masked.matchAll(configureKeys)) {
+      for (const key of extractStrings(list)) keys.add(key);
+    }
+  }
+  if (tailessAugmentation.test(masked)) {
+    for (const [, body = ""] of masked.matchAll(customKeysBody)) {
+      for (const [, double, single, bare] of body.matchAll(propertyName)) {
+        const key = double ?? single ?? bare;
+        if (key) keys.add(key);
+      }
+    }
+  }
+  return [...keys];
+}
+
 /**
  * True for a file a bundler wrote rather than a person: it carries a source-map comment,
  * or a minified line — long and dense with statements, where an inline SVG path is long

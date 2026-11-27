@@ -328,13 +328,19 @@ function sameWidth(a: string, b: string): boolean {
  *
  * Nothing is reported for a theme that merely restates a default — in any unit — or
  * that customises anything other than the breakpoints.
+ *
+ * `keys` are the keys the project has declared itself (`CollectResult.keys`). A note
+ * about a breakpoint or variant the CSS adds says how to declare a key for it, so it is
+ * left out for one that already is.
  */
 export function themeDiagnostics(
   declared: readonly BreakpointDecl[],
   variants: readonly string[] = [],
   prefix?: string | undefined,
+  keys: Iterable<string> = [],
 ): Diagnostic[] {
   const out: Diagnostic[] = [];
+  const own = new Set(keys);
 
   // Reported first and on its own, because it is not drift — it is total. With a
   // prefix every class tailess builds is the wrong name, so nothing else this
@@ -355,6 +361,7 @@ export function themeDiagnostics(
   // are notes, and `informational` keeps `diagnostics: "error"` from failing a project
   // that declared its keys exactly as the README says to.
   for (const name of variants) {
+    if (own.has(name)) continue;
     out.push({
       kind: "theme-drift",
       informational: true,
@@ -393,7 +400,7 @@ export function themeDiagnostics(
   }
 
   for (const name of resolved.keys()) {
-    if (known.has(name)) continue;
+    if (known.has(name) || own.has(name)) continue;
     out.push({
       kind: "theme-drift",
       informational: true,

@@ -270,7 +270,9 @@ const config = {
 export default config;
 ```
 
-Works with Turbopack and webpack, in `dev` and `build`.
+Works with Turbopack and webpack, in `dev` and `build`. If you call
+[`configure`](#configure--the-two-things-that-depend-on-your-project), call it on both
+sides — [the server and the browser](#on-nextjs-and-anywhere-else-that-renders-on-the-server).
 
 ### Other PostCSS setups
 
@@ -996,6 +998,36 @@ or per tenant in a shared SSR process — is not supported;
 two requests configuring different `merge` functions produce wrong output for one of
 them, with no error.
 
+#### On Next.js, and anywhere else that renders on the server
+
+A server-rendered app has two entries, not one: the server renders the HTML and the
+browser hydrates it, each with its own copy of the settings. Configure only one side and
+the other merges with the defaults. The browser then computes a different `className`
+from the one in the HTML. React reports a hydration mismatch and keeps the server's
+class, and every declared key warns as unknown in the browser console.
+
+Put the call in a module of its own and import it on both sides:
+
+```ts
+// src/tailess.setup.ts
+import { configure } from "tailess";
+configure({ keys: ["3xl", "sidebar-open"], merge: /* … */ });
+```
+
+```tsx
+// src/app/layout.tsx — the server; first, so it runs before any styles file is built
+import "../tailess.setup";
+```
+
+```ts
+// src/instrumentation-client.ts — the browser, before the page hydrates (Next.js 15.3+)
+import "./tailess.setup";
+```
+
+`instrumentation.ts` is not a substitute for the layout import. `next build` prerenders
+static pages without calling its `register()`, so a static page would be built with the
+defaults.
+
 ### Keys your own CSS adds
 
 The built-in keys are a closed union on purpose — that is what makes a typo a compile
@@ -1604,6 +1636,10 @@ names `withPrefix("midnight", …)`, which does — [declaring it](#keys-your-ow
 is the other answer. Redefining a name that *is* a key is not
 reported: Tailwind just replaces the variant and the key still resolves.
 
+Once a key is declared — in a `CustomKeys` augmentation or in `configure({ keys })`,
+either is enough — the note about it stops. A project that has done what the note says
+does not hear it on every build.
+
 A `@config` pointing at a v3-style JS config can set `theme.screens` and add variants of
 its own. That is a JavaScript file this never opens, so one anywhere in your stylesheet
 chain silences this check entirely — no answer rather than a wrong one.
@@ -1709,6 +1745,11 @@ all. Rather than demand a rule for every candidate — which would report all of
 check asks whether the *utility inside* each class resolves on its own first. `p-4` works
 and `md:p-4` does not, so something between the two is broken; `md:state` has no working
 half, so it was never a class and is not reported.
+
+"On its own" means Tailwind generates it. A rule your stylesheet writes by hand doesn't
+count, such as shadcn/ui's `.dark { … }`. Neither does a class that only appears inside
+another rule's selector, as `.open` does in `group-[.open]:`. Tailwind never puts a
+variant on a hand-written class, so `md:dark` having no rule tells you nothing.
 
 It uses your Tailwind, resolved from your tree, and loads your `@plugin`s and `@config`
 the way Tailwind itself does — so a variant or utility that only exists because of a
@@ -1825,8 +1866,9 @@ tailess({ diagnostics: process.env.CI ? "error" : "warn" })
 
 The theme notes about CSS that *works* — a breakpoint or `@custom-variant` your CSS adds,
 a width it moves — are printed in every mode and fail nothing, so a project that
-[declared its own keys](#keys-your-own-css-adds) builds under `"error"` too. A removed
-breakpoint still fails it: that one leaves classes with no rule.
+[declared its own keys](#keys-your-own-css-adds) builds under `"error"` too; the note
+for a key it declared is not printed at all. A removed breakpoint still fails it: that
+one leaves classes with no rule.
 
 The PostCSS plugin takes one more, `cacheDir`, since it has no host to borrow one
 from — on Vite it is not an option at all, and Vite's own `cacheDir` is used. Instances

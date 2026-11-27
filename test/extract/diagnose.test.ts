@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diagnose } from "../../src/extract/diagnose.js";
+import { declaredKeys, diagnose } from "../../src/extract/diagnose.js";
 
 /**
  * These run on every file in a consumer's project, on every build. A false positive
@@ -866,5 +866,51 @@ describe("a file a bundler wrote", () => {
     const path = `M0 0${" L1 1".repeat(300)}`;
     const code = `import { ss as tw } from "tailess";\nexport const Icon = () => <svg><path d="${path}" /></svg>;\n`;
     expect(diagnose(code, "Icon.tsx").map((d) => d.kind)).toEqual(["renamed-import"]);
+  });
+});
+
+describe("keys a project declares for its own CSS", () => {
+  // Read back so the build's note about a breakpoint or variant the CSS adds can go quiet
+  // for one that already has its key. See `declaredKeys`.
+  const lines = (...parts: string[]) => parts.join("\n");
+
+  it("reads configure({ keys }) in a file that imports tailess", () => {
+    const esm = lines(
+      `import { configure } from "tailess";`,
+      `configure({ keys: ["3xl", 'sidebar-open'] });`,
+    );
+    expect(declaredKeys(esm).sort()).toEqual(["3xl", "sidebar-open"]);
+    const cjs = lines(
+      `const { configure } = require("tailess");`,
+      `configure({ merge: m, keys: ["hocus"] });`,
+    );
+    expect(declaredKeys(cjs)).toEqual(["hocus"]);
+  });
+
+  it("reads a CustomKeys augmentation, quoted or bare", () => {
+    const code = lines(
+      "export {};",
+      `declare module "tailess" {`,
+      "  interface CustomKeys {",
+      `    "3xl": true;`,
+      "    'sidebar-open': true;",
+      "    hocus?: true",
+      "  }",
+      "}",
+    );
+    expect(declaredKeys(code).sort()).toEqual(["3xl", "hocus", "sidebar-open"]);
+  });
+
+  it("ignores a configure() that is not tailess's, and a commented-out one", () => {
+    expect(
+      declaredKeys(lines(`import { configure } from "other";`, `configure({ keys: ["3xl"] });`)),
+    ).toEqual([]);
+    expect(
+      declaredKeys(lines(`import { ss } from "tailess";`, `// configure({ keys: ["3xl"] });`)),
+    ).toEqual([]);
+  });
+
+  it("ignores a CustomKeys that does not add to tailess's types", () => {
+    expect(declaredKeys(lines("// tailess", `interface CustomKeys { "3xl": true }`))).toEqual([]);
   });
 });

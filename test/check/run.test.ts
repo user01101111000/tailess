@@ -196,6 +196,56 @@ describe("the check itself", () => {
     expect(code).toBe(0);
   });
 
+  it("passes the junk when another class's selector or a hand-written rule names it", async () => {
+    // Two healthy projects the gate used to fail. `group-[.open]` puts `.open` in a
+    // selector and shadcn/ui's `.dark { … }` is a rule — so `md:open` and `md:dark`, junk
+    // from helper arguments inside an `md` bucket, looked like classes that lost their CSS.
+    await writeFile(
+      join(dir, "a.tsx"),
+      `cn(withPrefix("group-[.open]", "rotate-90"), ss({ md: data("state", "open", "flex") }),` +
+        ` ss({ md: on(["dark", "hover"], "underline") }))`,
+    );
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@custom-variant dark (&:is(.dark *));\n.dark { --background: black; }`,
+    );
+    const { code, output } = await check({ strict: true });
+    expect(output).not.toContain("md:open");
+    expect(output).not.toContain("md:dark");
+    expect(code).toBe(0);
+  });
+
+  it("still fails a broken class in a stylesheet that writes rules of its own", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4", lg: on("hover", "underline") })`);
+    await writeFile(
+      join(dir, "a.css"),
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }\n.dark { --background: black; }`,
+    );
+    const { code, output } = await check();
+    expect(code).toBe(1);
+    expect(output).toContain("md:p-4");
+    expect(output).not.toContain("lg:hover:underline");
+  });
+
+  it("leaves out the note for a breakpoint the project declared a key for", async () => {
+    await writeFile(
+      join(dir, "a.tsx"),
+      [
+        `import { configure, ss } from "tailess";`,
+        `configure({ keys: ["3xl"] });`,
+        `ss({ "3xl": "p-4" });`,
+      ].join("\n"),
+    );
+    await writeFile(
+      join(dir, "a.css"),
+      [`@import "tailwindcss";`, "@theme { --breakpoint-3xl: 120rem; }"].join("\n"),
+    );
+    const { code, output } = await check({ strict: true });
+    expect(output).not.toContain('adds the "3xl" breakpoint');
+    expect(output).toContain("every one has CSS");
+    expect(code).toBe(0);
+  });
+
   it("says so when there is no stylesheet to compile against", async () => {
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
     const { code, output } = await check();

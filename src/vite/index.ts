@@ -166,9 +166,10 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
     css: string;
     changed: boolean;
     wrote: boolean;
+    keys: string[];
   }> {
     const scanned = roots();
-    const { classes, files, diagnostics } = await collect({
+    const { classes, files, diagnostics, keys } = await collect({
       roots: scanned,
       ignore: options.ignore,
       extensions: options.extensions,
@@ -186,7 +187,7 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
 
     try {
       const { css, changed } = await sidecar.refresh(classes);
-      return { files, css, changed, wrote: true };
+      return { files, css, changed, wrote: true, keys };
     } catch (error) {
       if (!warnedAboutSidecar) {
         warnedAboutSidecar = true;
@@ -197,7 +198,7 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
           error,
         );
       }
-      return { files, css: buildPrelude(classes), changed: false, wrote: false };
+      return { files, css: buildPrelude(classes), changed: false, wrote: false, keys };
     }
   }
 
@@ -274,12 +275,15 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
 
         entries.add(entry);
 
+        const { files, css, wrote, keys } = await refresh();
+
         // The keys are compiled in, so a `@theme` that moves the breakpoints under
         // them is invisible from the source scan — and three of the four ways it can
-        // are silent. This is the one place the CSS itself is in hand.
+        // are silent. This is the one place the CSS itself is in hand. After the scan,
+        // which is what knows the keys the project has declared for itself.
         const theme = await collectTheme(code, entry);
         reportDiagnostics(
-          themeDiagnostics(theme.breakpoints, theme.variants, theme.prefix).map((d) => ({
+          themeDiagnostics(theme.breakpoints, theme.variants, theme.prefix, keys).map((d) => ({
             ...d,
             file: entry,
           })),
@@ -287,7 +291,6 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
           options.diagnostics,
         );
 
-        const { files, css, wrote } = await refresh();
         // Watch the sources so `build --watch` retriggers, and so Vite's watcher is
         // listening on them in dev even outside its own module graph.
         for (const dependency of files) this.addWatchFile(dependency);

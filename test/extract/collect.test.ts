@@ -332,6 +332,30 @@ describe("dead-class under a merge the project configures", () => {
   });
 });
 
+describe("keys the project declares", () => {
+  it("gathers them from every file, sorted", async () => {
+    await writeFile(
+      join(dir, "tailess.d.ts"),
+      [
+        "export {};",
+        `declare module "tailess" {`,
+        `  interface CustomKeys { "sidebar-open": true }`,
+        "}",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(dir, "setup.ts"),
+      [`import { configure } from "tailess";`, `configure({ keys: ["3xl"] });`].join("\n"),
+    );
+    expect((await collect({ roots: [dir] })).keys).toEqual(["3xl", "sidebar-open"]);
+  });
+
+  it("is empty for a project that declares none", async () => {
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    expect((await collect({ roots: [dir] })).keys).toEqual([]);
+  });
+});
+
 describe("the per-file cache", () => {
   it("rereads a same-size edit that kept its mtime", async () => {
     // NTFS left most back-to-back rewrites with the same mtime, and FAT's is 2 s: a
