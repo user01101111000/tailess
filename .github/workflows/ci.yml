@@ -275,7 +275,17 @@ jobs:
     # `"tailess/postcss"` resolves for Next — and nothing built one. The app is
     # scaffolded here rather than committed: it is a smoke test of the host, not an
     # example anyone reads.
+    #
+    # Once per major, each scaffolded on that major from the start. 16 is what
+    # `create-next-app` installs, and it builds with Turbopack unless told otherwise. It
+    # used to be reached by upgrading the 15 app in place, so it built on the tsconfig 15
+    # had written, and never ran at all when a 15 step failed first. 15 stays because it
+    # still gets backport releases, and webpack is what its `next build` uses.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        next: [16, 15]
     steps:
       - uses: actions/checkout@v7
 
@@ -310,7 +320,7 @@ jobs:
             "name": "next-smoke",
             "private": true,
             "scripts": { "build": "next build" },
-            "dependencies": { "next": "^15.5.0", "react": "^19.2.0", "react-dom": "^19.2.0" },
+            "dependencies": { "next": "^${{ matrix.next }}", "react": "^19.2.0", "react-dom": "^19.2.0" },
             "devDependencies": {
               "@tailwindcss/postcss": "^4.3.3",
               "tailwindcss": "^4.3.3",
@@ -393,10 +403,12 @@ jobs:
           console.log("all " + want.length + " runtime-built classes have a rule");
           MJS
 
+      # No bundler flag: each major's own default, so Turbopack on 16 and webpack on 15.
       - name: Build it
         run: |
           cd /tmp/next-smoke
           npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$TARBALL"
+          node -p "'next ' + require('next/package.json').version"
           npx next build
           # Next only type-checks when there is a tsconfig, and it writes one itself. If
           # that ever stops, the build would still pass having checked nothing — and this
@@ -411,21 +423,17 @@ jobs:
           node verify.mjs
           npx tailess check --content app --strict
 
-      # Everything above is Next 15, which builds with webpack. Next 16 builds with
-      # Turbopack unless told otherwise, and 16 is what `create-next-app` installs — so
-      # the README's "works with Turbopack and webpack" was proved for the one bundler a
-      # new project no longer gets by default. Both run PostCSS through their own loader,
-      # and that loader is what has to resolve the string-named `"tailess/postcss"`.
-      # `.next` is removed between builds so each `verify.mjs` reads only what that build
-      # emitted, rather than a stylesheet the one before it left behind.
-      - name: The same app on Next 16, built with Turbopack and with webpack
+      # The README promises webpack as well as Turbopack, and a 16 project can still opt
+      # back into it, so 16 builds a second time with `--webpack`. Each bundler runs
+      # PostCSS through its own loader, and that loader is what has to resolve the
+      # string-named `"tailess/postcss"`, so one passing proves nothing about the other.
+      # `.next` goes first: `verify.mjs` reads all of `.next/static` and cannot tell which
+      # build wrote a stylesheet. Next empties it before building, but only by its
+      # `cleanDistDir` default, and the proof should not rest on a default.
+      - name: The same app, built again with webpack
+        if: matrix.next == 16
         run: |
           cd /tmp/next-smoke
-          npm install --no-audit --no-fund next@^16.0.0
-          node -p "'next ' + require('next/package.json').version"
-          rm -rf .next
-          npx next build
-          node verify.mjs
           rm -rf .next
           npx next build --webpack
           node verify.mjs
