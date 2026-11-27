@@ -195,6 +195,28 @@ describe("PostCSS integration (Next.js and any PostCSS setup)", () => {
     expect(said.some((m) => m.includes('defines the "midnight-only" variant'))).toBe(true);
   });
 
+  it("says nothing about a breakpoint or variant the project declared a key for", async () => {
+    // README "Keys your own CSS adds", followed to the letter. The notes said to declare
+    // the key — on every build, to a project that had.
+    await writeFile(
+      join(dir, "tailess.d.ts"),
+      [
+        "export {};",
+        `declare module "tailess" {`,
+        `  interface CustomKeys { "3xl": true; "midnight-only": true }`,
+        "}",
+      ].join("\n"),
+    );
+    const said = await warningsFrom(
+      [
+        `@import "tailwindcss";`,
+        "@theme { --breakpoint-3xl: 120rem; }",
+        "@custom-variant midnight-only (&:where([data-theme=midnight] *));",
+      ].join("\n"),
+    );
+    expect(said.filter((m) => m.includes("no built-in key"))).toEqual([]);
+  });
+
   it("stays quiet about a stylesheet with no @theme", async () => {
     const said = await warningsFrom(`@import "tailwindcss";`);
     expect(said.filter((m) => m.includes("breakpoint"))).toEqual([]);
@@ -581,6 +603,29 @@ describe("Vite integration", () => {
     );
     expect(missingRules(compiled.css, expected)).toEqual([]);
     warn.mockRestore();
+  });
+
+  it("says nothing about a breakpoint the project declared a key for", async () => {
+    // The theme check runs after the scan, which is what knows the declared keys.
+    await writeFile(
+      join(dir, "setup.ts"),
+      [`import { configure } from "tailess";`, `configure({ keys: ["3xl"] });`].join("\n"),
+    );
+    clearReported();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { run } = makePlugin();
+      const css = [
+        `@import "tailwindcss";`,
+        "@theme { --breakpoint-3xl: 120rem; --breakpoint-4xl: 140rem; }",
+      ].join("\n");
+      await run(css, entryId());
+      const said = warn.mock.calls.map((args) => String(args[0]));
+      expect(said.some((m) => m.includes('"4xl" breakpoint'))).toBe(true);
+      expect(said.some((m) => m.includes('"3xl" breakpoint'))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("handles the query-suffixed ids Vite actually passes", async () => {

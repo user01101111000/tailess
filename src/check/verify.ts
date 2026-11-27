@@ -46,6 +46,38 @@ export interface BrokenClass {
 }
 
 /**
+ * One stylesheet, read at three points in one compiler's life.
+ *
+ * Tailwind's `build()` only ever adds: each call returns everything offered so far. So
+ * offering nothing, then the bare utilities, then every candidate gives three answers
+ * from a single compile — and the check needs all three, because a stylesheet holding
+ * every candidate cannot say on its own which of its rules are *utilities*.
+ */
+export interface CompiledSheet {
+  /** Every candidate offered: the answer to "does this class have a rule". */
+  css: string;
+  /**
+   * Only the bare utilities offered: the answer to "does the utility resolve on its own".
+   *
+   * Asked of {@link css} instead, a selector some *other* candidate generated answered
+   * for a class it merely mentions. `group-[.open]:rotate-90` compiles to
+   * `…:is(:where(.group):is(.open) *)`, so `open` looked like a utility, and the junk
+   * candidate `md:open` — the value of a `data()` call — failed a healthy build.
+   */
+  utilities?: string | undefined;
+  /**
+   * Nothing offered: the rules the stylesheet writes by hand.
+   *
+   * A class there is not a utility, whatever else it is. shadcn/ui's `.dark { … }` is the
+   * common one: `dark` "resolved", so `md:dark` — junk from `on(["dark", "hover"], …)`
+   * inside an `md` bucket — was reported, and the gate went red on working code. Tailwind
+   * never puts a variant on a hand-written class either, so there is nothing to vouch
+   * for there in the first place.
+   */
+  baseline?: string | undefined;
+}
+
+/**
  * Every candidate whose utility resolves on its own but which has no rule with its
  * prefix attached.
  *
@@ -56,9 +88,14 @@ export interface BrokenClass {
  * out. What is left is the case that matters: `p-4` works, `md:p-4` does not, and
  * something between the two is broken.
  */
-export function findBroken(candidates: readonly string[], css: string): BrokenClass[] {
+export function findBroken(
+  candidates: readonly string[],
+  css: string | CompiledSheet,
+): BrokenClass[] {
   return findBrokenAcross(candidates, [css]);
 }
+
+type Answer = "css" | "utilities" | "baseline";
 
 /**
  * {@link findBroken} over several stylesheets: a class is broken when at least one of
@@ -68,29 +105,48 @@ export function findBroken(candidates: readonly string[], css: string): BrokenCl
  * broken only when every stylesheet failed it let one that generates nothing — a reset
  * file, a theme-only partial, a v3 `@tailwind` leftover — clear every broken class in
  * the project, since a candidate whose utility does not resolve is never "failed".
+ *
+ * A plain string is a stylesheet read once, with every candidate offered: it answers
+ * all three questions, as it did before {@link CompiledSheet} existed.
  */
 export function findBrokenAcross(
   candidates: readonly string[],
-  sheets: readonly string[],
+  sheets: ReadonlyArray<string | CompiledSheet>,
 ): BrokenClass[] {
-  const broken: BrokenClass[] = [];
-  const memo = sheets.map(() => new Map<string, boolean>());
-  const inAny = (cls: string): boolean =>
-    sheets.some((css, i) => {
-      const seen = memo[i] as Map<string, boolean>;
-      let known = seen.get(cls);
-      if (known === undefined) {
-        known = hasRule(css, cls);
-        seen.set(cls, known);
-      }
-      return known;
-    });
+  const parts: CompiledSheet[] = sheets.map((sheet) =>
+    typeof sheet === "string" ? { css: sheet } : sheet,
+  );
+  const memo = parts.map(() => new Map<string, boolean>());
 
+  const has = (i: number, answer: Answer, cls: string): boolean => {
+    const part = parts[i] as CompiledSheet;
+    const text =
+      answer === "css"
+        ? part.css
+        : answer === "utilities"
+          ? (part.utilities ?? part.css)
+          : part.baseline;
+    if (text === undefined) return false;
+    const key = `${answer} ${cls}`;
+    const seen = memo[i] as Map<string, boolean>;
+    let known = seen.get(key);
+    if (known === undefined) {
+      known = hasRule(text, cls);
+      seen.set(key, known);
+    }
+    return known;
+  };
+
+  const resolves = (utility: string): boolean =>
+    parts.some((_, i) => has(i, "utilities", utility) && !has(i, "baseline", utility));
+  const ruled = (cls: string): boolean => parts.some((_, i) => has(i, "css", cls));
+
+  const broken: BrokenClass[] = [];
   for (const candidate of candidates) {
     const split = splitCandidate(candidate);
     if (split === null) continue;
-    if (!inAny(split.utility)) continue;
-    if (inAny(candidate)) continue;
+    if (!resolves(split.utility)) continue;
+    if (ruled(candidate)) continue;
     broken.push({ candidate, utility: split.utility });
   }
 
@@ -110,7 +166,12 @@ export const utilitySentinel = "flex";
  * only answerable if `p-4` was offered to the compiler in the first place.
  */
 export function probeList(candidates: readonly string[]): string[] {
-  const out = new Set<string>(candidates);
+  return [...new Set<string>([...candidates, ...utilityList(candidates)])];
+}
+
+/** Each candidate's bare utility, once — what {@link CompiledSheet.utilities} is built from. */
+export function utilityList(candidates: readonly string[]): string[] {
+  const out = new Set<string>();
   for (const candidate of candidates) {
     const split = splitCandidate(candidate);
     if (split !== null) out.add(split.utility);

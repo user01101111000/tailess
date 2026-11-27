@@ -12,7 +12,13 @@ import { collectTheme, themeDiagnostics } from "../integration/theme.js";
 import { hasRule } from "../internal/selector.js";
 import { type Command, commands, jsonResult } from "./result.js";
 import { findHost, readWiring, runDoctor, runInit } from "./setup.js";
-import { findBrokenAcross, probeList, utilitySentinel } from "./verify.js";
+import {
+  type CompiledSheet,
+  findBrokenAcross,
+  probeList,
+  utilityList,
+  utilitySentinel,
+} from "./verify.js";
 
 /**
  * `tailess check` — compile the project for real and prove every class the runtime
@@ -768,7 +774,12 @@ async function runCheck(options: Options): Promise<number> {
     const css = await readFile(entry, "utf8").catch(() => undefined);
     if (css === undefined) continue;
     const theme = await collectTheme(css, entry);
-    for (const found of themeDiagnostics(theme.breakpoints, theme.variants)) {
+    for (const found of themeDiagnostics(
+      theme.breakpoints,
+      theme.variants,
+      undefined,
+      scanned.keys,
+    )) {
       diagnostics.push({ ...found, file: entry });
     }
   }
@@ -846,11 +857,12 @@ async function runCheck(options: Options): Promise<number> {
 
   const compile = await loadCompiler(options.cwd);
   const probe = probeList(classes);
+  const utilities = [...utilityList(classes), utilitySentinel];
 
   // A class only has to work in *one* stylesheet — a project can have several, and a
   // component is styled by whichever one its page loads. So a class is broken only if
   // no entry has its rule — and only an entry that generates utilities at all has a say.
-  const sheets: string[] = [];
+  const sheets: CompiledSheet[] = [];
   const silent: string[] = [];
   // Compiling runs the project's `@plugin`s in this process, and some print — daisyUI's
   // banner goes through console.log. Under --json stdout is the one JSON object, so
@@ -859,8 +871,13 @@ async function runCheck(options: Options): Promise<number> {
     for (const entry of entries) {
       const source = await readFile(entry, "utf8");
       const compiler = await compile(source, { base: dirname(entry), loadModule, loadStylesheet });
+      // In this order: `build` only ever adds, so each call returns everything offered
+      // so far — what the stylesheet writes itself, then the bare utilities on top, then
+      // every candidate. See `CompiledSheet` for why the check needs all three.
+      const baseline = compiler.build([]);
+      const bare = compiler.build(utilities);
       const css = compiler.build([...probe, utilitySentinel]);
-      if (hasRule(css, utilitySentinel)) sheets.push(css);
+      if (hasRule(css, utilitySentinel)) sheets.push({ css, utilities: bare, baseline });
       else silent.push(entry);
     }
   });

@@ -53,7 +53,9 @@ finds the literal wherever it really lives.
   compound rules. Accepts `cva`'s call shape and key names. `variants` itself is
   optional: `{ slots }` or `{ extend, defaults }` is a recipe.
 - `vars(...)` — CSS custom properties for values a class cannot carry.
-- `configure({ merge, onWarn, keys })`
+- `configure({ merge, onWarn, keys })` — once per JavaScript environment. On Next.js that
+  is two imports of one setup module: first in the root `layout.tsx` (server) and in
+  `instrumentation-client.ts` (browser). One side alone is a hydration mismatch.
 
 Nesting runs one way: a helper goes **inside** an `ss` bucket, never the reverse.
 `ss({ md: on("hover", "underline") })` is right — `"md:hover:underline"`; the bucket key

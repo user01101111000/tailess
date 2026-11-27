@@ -3,7 +3,13 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { compile } from "tailwindcss";
 import { describe, expect, it } from "vitest";
-import { findBroken, probeList, splitCandidate } from "../../src/check/verify.js";
+import {
+  type CompiledSheet,
+  findBroken,
+  probeList,
+  splitCandidate,
+  utilityList,
+} from "../../src/check/verify.js";
 import { extractClasses } from "../../src/extract/extract.js";
 import { hasRule } from "../../src/internal/selector.js";
 
@@ -33,6 +39,15 @@ const loadStylesheet = async (id: string, base: string) => {
 async function build(entry: string, candidates: readonly string[]): Promise<string> {
   const compiler = await compile(entry, { base: process.cwd(), loadStylesheet });
   return compiler.build([...candidates]);
+}
+
+/** Compile `entry` the way `tailess check` does: nothing, then bare utilities, then all. */
+async function sheet(entry: string, candidates: readonly string[]): Promise<CompiledSheet> {
+  const compiler = await compile(entry, { base: process.cwd(), loadStylesheet });
+  const baseline = compiler.build([]);
+  const utilities = compiler.build(utilityList(candidates));
+  const css = compiler.build(probeList(candidates));
+  return { css, utilities, baseline };
 }
 
 describe("splitting a candidate", () => {
@@ -73,6 +88,69 @@ describe("the probe list", () => {
 
   it("de-duplicates", () => {
     expect(probeList(["md:p-4", "lg:p-4", "p-4"]).sort()).toEqual(["lg:p-4", "md:p-4", "p-4"]);
+  });
+
+  it("lists the bare utilities on their own, once", () => {
+    expect(utilityList(["md:p-4", "lg:p-4", "p-4", "dark:hover:bg-black"]).sort()).toEqual([
+      "bg-black",
+      "p-4",
+    ]);
+  });
+});
+
+describe("which rules count as a utility resolving on its own", () => {
+  // Both of these failed a healthy build, with `tailess check` exiting 1 on code the
+  // README tells people to write. The junk is the scanner's, on purpose; what changed is
+  // which rules are allowed to say a junk word is a utility.
+
+  it("does not let a selector another candidate generated vouch for a word in it", async () => {
+    // `withPrefix("group-[.open]", …)` compiles to `…:is(:where(.group):is(.open) *)`, and
+    // `data("state", "open", …)` inside an `md` bucket hands the scanner `md:open`.
+    const source = `cn(withPrefix("group-[.open]", "rotate-90"), ss({ md: data("state", "open", "flex") }))`;
+    const classes = extractClasses(source);
+    expect(classes).toContain("md:open");
+    const compiled = await sheet(`@import "tailwindcss";`, classes);
+    expect(findBroken(classes, compiled)).toEqual([]);
+    // Read from the one stylesheet holding every candidate, `.open` looks like a rule.
+    expect(findBroken(classes, compiled.css)).toContainEqual({
+      candidate: "md:open",
+      utility: "open",
+    });
+  });
+
+  it("does not count a class the stylesheet writes by hand, which no variant reaches", async () => {
+    // shadcn/ui's globals.css, trimmed: a class-based dark variant and a `.dark` rule.
+    const entry =
+      `@import "tailwindcss";\n@custom-variant dark (&:is(.dark *));\n` +
+      ":root { --background: white; }\n.dark { --background: black; }";
+    const source = `ss({ base: "text-sm", md: on(["dark", "hover"], "underline") })`;
+    const classes = extractClasses(source);
+    expect(classes).toContain("md:dark");
+    const compiled = await sheet(entry, classes);
+    expect(findBroken(classes, compiled)).toEqual([]);
+    expect(findBroken(classes, compiled.css)).toContainEqual({
+      candidate: "md:dark",
+      utility: "dark",
+    });
+  });
+
+  it("still reports a breakpoint the theme removed", async () => {
+    const entry = `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }\n.card { padding: 0; }`;
+    const classes = ["md:p-4", "lg:p-6", "md:card"];
+    expect(findBroken(classes, await sheet(entry, classes))).toEqual([
+      { candidate: "md:p-4", utility: "p-4" },
+    ]);
+  });
+
+  it("still reports a utility of the project's own that a variant cannot reach", async () => {
+    // An `@utility` is generated on demand, so it is a utility like any other.
+    const entry =
+      `@import "tailwindcss";\n@theme { --breakpoint-md: initial; }\n` +
+      "@utility brand { color: rebeccapurple; }";
+    const classes = ["md:brand"];
+    expect(findBroken(classes, await sheet(entry, classes))).toEqual([
+      { candidate: "md:brand", utility: "brand" },
+    ]);
   });
 });
 

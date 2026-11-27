@@ -260,6 +260,25 @@ describe("what the theme changed", () => {
     expect(first).toContain("declare");
   });
 
+  it("leaves out a breakpoint or variant the project has declared a key for", () => {
+    // The note says how to declare a key. For one that is declared it asked the project,
+    // on every build and every dev start, to do what it had already done.
+    const added = breakpointsIn(`@theme { --breakpoint-3xl: 120rem; --breakpoint-4xl: 140rem; }`);
+    const said = themeDiagnostics(added, ["sidebar-open", "hocus"], undefined, [
+      "3xl",
+      "sidebar-open",
+    ]).map((d) => d.message);
+    expect(said).toHaveLength(2);
+    expect(said.some((m) => m.includes('"4xl"'))).toBe(true);
+    expect(said.some((m) => m.includes('"hocus"'))).toBe(true);
+    expect(said.some((m) => m.includes('"3xl"') || m.includes('"sidebar-open"'))).toBe(false);
+  });
+
+  it("still reports a removal, whatever the project declared", () => {
+    const removed = breakpointsIn(`@theme { --breakpoint-sm: initial; }`);
+    expect(themeDiagnostics(removed, [], undefined, ["sm"])).toHaveLength(1);
+  });
+
   it("does not report a removal twice when a reset and a key agree", () => {
     expect(messages(`@theme { --breakpoint-*: initial; --breakpoint-sm: initial; }`)).toHaveLength(
       5,

@@ -270,7 +270,7 @@ const tailessPostcss = Object.assign(
           return;
         }
 
-        const { classes, files, roots, extensions, diagnostics } = await collect({
+        const { classes, files, roots, extensions, diagnostics, keys } = await collect({
           roots: options.content?.length ? options.content : [process.cwd()],
           ignore: options.ignore,
           extensions: options.extensions,
@@ -290,7 +290,7 @@ const tailessPostcss = Object.assign(
         // silent. This is the one place the CSS itself is in hand.
         const theme = await collectTheme(themeSource(root), from);
         reportDiagnostics(
-          themeDiagnostics(theme.breakpoints, theme.variants, theme.prefix).map((d) => ({
+          themeDiagnostics(theme.breakpoints, theme.variants, theme.prefix, keys).map((d) => ({
             ...d,
             file: from ?? "your stylesheet",
           })),

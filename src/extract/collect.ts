@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { shared } from "../internal/shared.js";
-import { configuresMerge, type Diagnostic, diagnose } from "./diagnose.js";
+import { configuresMerge, type Diagnostic, declaredKeys, diagnose } from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
 /** File extensions scanned by default. */
@@ -124,6 +124,12 @@ export interface CollectResult {
    */
   diagnostics: FileDiagnostic[];
   /**
+   * Keys the project declares for its own CSS — in `configure({ keys })` or a
+   * `CustomKeys` augmentation — sorted. The build's notes about a breakpoint or variant
+   * the CSS adds go quiet for these, since they say how to declare one.
+   */
+  keys: string[];
+  /**
    * Class name to the absolute paths of the files that build it, present only when
    * `provenance` was asked for. Sorted, so a report reads the same on every run.
    */
@@ -143,6 +149,8 @@ interface CacheEntry {
   readAt: number;
   /** Whether the file configures a merge of its own; see `configuresMerge`. */
   merge: boolean;
+  /** Keys the file declares; see `declaredKeys`. */
+  keys: string[];
   classes: string[];
   diagnostics: Diagnostic[];
 }
@@ -168,7 +176,7 @@ const mtimeTick = 2000;
  * this module, so a module-level map left `clearCache()` from `tailess/build` unable to
  * reach the plugin's. The key names this entry shape.
  */
-const cache = shared("tailess.scan-cache.2", () => new Map<string, CacheEntry>());
+const cache = shared("tailess.scan-cache.3", () => new Map<string, CacheEntry>());
 
 /**
  * Scans already running, keyed by their options. A build with many stylesheets asks
@@ -296,6 +304,7 @@ async function scanFile(file: string): Promise<CacheEntry> {
     size: -1,
     readAt: 0,
     merge: false,
+    keys: [],
     classes: [],
     diagnostics: [],
   };
@@ -329,6 +338,7 @@ async function scanFile(file: string): Promise<CacheEntry> {
     size,
     readAt,
     merge: configuresMerge(code),
+    keys: declaredKeys(code),
     classes: extractClasses(code),
     diagnostics: diagnose(code, file),
   };
@@ -375,6 +385,7 @@ async function run(options: CollectOptions): Promise<CollectResult> {
   const files = [...new Set(walked)].sort();
 
   const classes = new Set<string>();
+  const keys = new Set<string>();
   const diagnostics: FileDiagnostic[] = [];
   const sources = options.provenance ? new Map<string, string[]>() : undefined;
   const perFile = await Promise.all(files.map(scanFile));
@@ -382,6 +393,7 @@ async function run(options: CollectOptions): Promise<CollectResult> {
   const ownMerge = perFile.some((entry) => entry.merge);
   perFile.forEach((entry, index) => {
     const file = files[index] as string;
+    for (const key of entry.keys) keys.add(key);
     for (const cls of entry.classes) {
       classes.add(cls);
       if (!sources) continue;
@@ -400,6 +412,7 @@ async function run(options: CollectOptions): Promise<CollectResult> {
     roots,
     extensions: [...extensions],
     diagnostics,
+    keys: [...keys].sort(),
     ...(sources ? { sources } : {}),
   };
 }
