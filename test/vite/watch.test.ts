@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -26,12 +26,17 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** The slice of Vite's dev server the plugin touches, with the events it emitted. */
+/**
+ * The slice of Vite's dev server the plugin touches, with the events it emitted and the
+ * paths it asked the watcher to add.
+ */
 function fakeServer() {
   const listeners = new Map<string, Array<(file: string) => void>>();
   const emitted: Array<[string, string]> = [];
+  const added: string[] = [];
   return {
     emitted,
+    added,
     fire(event: string, file: string): void {
       for (const listener of listeners.get(event) ?? []) listener(file);
     },
@@ -45,6 +50,10 @@ function fakeServer() {
       emit(event: string, file: string) {
         emitted.push([event, file]);
         return true;
+      },
+      add(paths: string[]) {
+        added.push(...paths);
+        return this;
       },
     },
   };
@@ -142,6 +151,40 @@ describe("the dev-server watcher", () => {
     await settle(() => client.emitted.length > 1 && ssr.emitted.length > 1);
     expect(client.emitted).toHaveLength(2);
     expect(ssr.emitted).toHaveLength(2);
+  });
+
+  it("watches a content root outside Vite's root, where a new file raised no event", async () => {
+    // A monorepo's design system: `content` names `packages/ui/src` from `apps/web`.
+    // Vite watches only its own root, and the scanned files were added one by one — so a
+    // new file in the package was seen only if something else rebuilt the stylesheet.
+    const app = join(dir, "apps", "web");
+    const ui = join(dir, "packages", "ui", "src");
+    await mkdir(app, { recursive: true });
+    await mkdir(ui, { recursive: true });
+    await writeFile(join(ui, "button.ts"), `ss({ md: "p-4" })`);
+
+    const plugin = tailess({ content: ["src", "../../packages/ui/src"] });
+    plugin.configResolved({ root: app, cacheDir: join(app, ".vite") });
+    const entry = join(app, "app.css");
+    await plugin.transform.handler.call({ addWatchFile() {} }, '@import "tailwindcss";', entry);
+
+    const server = fakeServer();
+    plugin.configureServer(server);
+    // Only the package: `src` is inside the root, which Vite already watches.
+    expect(server.added).toEqual([ui]);
+
+    await writeFile(join(ui, "probe.ts"), `ss({ lg: "gap-7" })`);
+    server.fire("add", join(ui, "probe.ts"));
+    await settle(() => server.emitted.length > 0);
+    expect(server.emitted).toEqual([["change", entry]]);
+  });
+
+  it("adds nothing to the watcher when every content root is inside Vite's", async () => {
+    const plugin = tailess({ content: ["src", "."] });
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".vite") });
+    const server = fakeServer();
+    plugin.configureServer(server);
+    expect(server.added).toEqual([]);
   });
 
   it("ignores a file whose extension is not scanned", async () => {

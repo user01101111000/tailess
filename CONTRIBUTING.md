@@ -142,6 +142,17 @@ The SvelteKit, Nuxt, React Router and Astro apps beside it carry the same probe 
 `npm run smoke`, and `npm run verify` for the build and the gate — what CI's `frameworks`
 job runs in each.
 
+**Touching the types?** CI checks them on TypeScript 7 as well, which reports a call no
+overload accepts against the last overload alone, so the order of `variants()`'s overloads
+decides what a mistake reads as there. `test/types` compiles against `dist/` with this
+repository's TypeScript; point `TAILESS_TSC` at another one's `bin/tsc` to ask that one:
+
+```sh
+npm install --prefix ../ts7 typescript@7
+node ../ts7/node_modules/typescript/bin/tsc --noEmit
+TAILESS_TSC=../ts7/node_modules/typescript/bin/tsc npx vitest run test/types
+```
+
 Handy extras: `npm run lint:fix` (auto-fix formatting), `npm run test:coverage`,
 `npm run test:watch`, and `node dist/cli.js check --content src` to run the gate against
 this repo itself.

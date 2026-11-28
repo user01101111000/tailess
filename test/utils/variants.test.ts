@@ -436,11 +436,11 @@ describe("slots — a component with named parts", () => {
   it("refuses an option naming a part that does not exist, even beside one that does", () => {
     // Only an option whose every key was unknown failed; one typo next to a real part
     // compiled, and its classes reached no part at all.
+    // One line, since the directive covers only the next one: TypeScript 6 reports this at
+    // the call, 7 at `titel`.
+    const parts = { root: "r", title: "t" } as const;
     // @ts-expect-error `titel` is not a part.
-    variants({
-      slots: { root: "r", title: "t" },
-      variants: { s: { a: { root: "p-2", titel: "text-xl" } } },
-    });
+    variants({ slots: parts, variants: { s: { a: { root: "p-2", titel: "text-xl" } } } });
     const parent = variants({ slots: { root: "r" }, variants: {} });
     // An inherited part is a part.
     const child = variants({
@@ -653,6 +653,21 @@ describe("extend given something it cannot build on", () => {
     expect(seen.some((m) => m.includes("names a recipe without slots"))).toBe(true);
     expect(slotted?.({ tone: "b" })).toEqual({ base: "block", root: "r" });
     expect(Object.keys(slotted?.variants ?? { x: 1 })).toEqual([]);
+  });
+
+  it("refuses that config held in a variable too, which compiled as a flat recipe", () => {
+    // Written inline, the flat overload refused it for the unknown `slots` key. Held in a
+    // variable, no key is unknown, so it compiled as a *flat* component — typed as
+    // returning a string, while the runtime went by `slots` and built parts. The flat
+    // overload now steps aside whenever a config has `slots`, however it is written.
+    const flat = variants({ base: "flex", variants: { tone: { a: "p-1" } } });
+    const config = { slots: { root: "rounded" }, extend: flat };
+    let built: unknown;
+    warned(() => {
+      // @ts-expect-error a recipe with slots cannot extend one without.
+      built = variants(config)();
+    });
+    expect(built).toEqual({ root: "rounded" });
   });
 });
 

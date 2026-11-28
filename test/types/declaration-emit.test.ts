@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { diagnose } from "../helpers/compiler.js";
 
 /**
  * A consumer's declaration emit over values that hold a tailess plugin.
@@ -24,23 +24,20 @@ async function emitErrors(source: string, module: "esm" | "cjs"): Promise<string
   try {
     await mkdir(join(dir, "node_modules"));
     await symlink(root, join(dir, "node_modules", "tailess"), "junction");
-    const file = join(dir, module === "cjs" ? "config.cts" : "config.mts");
-    await writeFile(file, source);
-    const program = ts.createProgram([file], {
+    const file = module === "cjs" ? "config.cts" : "config.mts";
+    await writeFile(join(dir, file), source);
+    return await diagnose(dir, [file], {
       declaration: true,
       emitDeclarationOnly: true,
       outDir: join(dir, "out"),
       rootDir: dir,
       strict: true,
       skipLibCheck: true,
-      module: ts.ModuleKind.NodeNext,
-      moduleResolution: ts.ModuleResolutionKind.NodeNext,
-      target: ts.ScriptTarget.ES2022,
+      module: "nodenext",
+      moduleResolution: "nodenext",
+      target: "es2022",
       types: [],
     });
-    return ts
-      .getPreEmitDiagnostics(program)
-      .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -216,6 +216,47 @@ jobs:
               || { echo "::error::\`$args\` did not print one JSON object with ok:false"; exit 1; }
           done
 
+  typescript:
+    # The newest TypeScript, which no other job runs. The lockfile pins 6, because the
+    # build's declaration step and the type tests call TypeScript's API, and 7 ships none.
+    # But 7 is what `npm i typescript` installs now, and it reports a call no overload
+    # accepts against the last overload alone: every mistake in a slotted recipe read as
+    # the flat config's — "'root' does not exist in type 'SsInput'", at the part that was
+    # right — while 6 listed the slotted complaint too and every job here passed. `@7`
+    # rather than a pin, for the reason the weekly schedule exists.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install TypeScript 7 beside the lockfile's
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ts7" --no-audit --no-fund typescript@7
+          node "$RUNNER_TEMP/ts7/node_modules/typescript/bin/tsc" --version
+
+      # src and every test, `@ts-expect-error` lines included: each marks a mistake the
+      # types must refuse, and one that no longer errors fails as surely as a new error.
+      - name: Typecheck
+        run: node "$RUNNER_TEMP/ts7/node_modules/typescript/bin/tsc" --noEmit
+
+      - name: Build
+        run: npm run build
+
+      # What a consumer's compiler makes of the published declarations: the message for a
+      # mistake in a recipe, the compiler options a project may have, declaration emit.
+      # `TAILESS_TSC` has them ask 7's binary, since there is no API to ask instead.
+      - name: The consumer-side type tests
+        run: npx vitest run test/types
+        env:
+          TAILESS_TSC: ${{ runner.temp }}/ts7/node_modules/typescript/bin/tsc
+
   example:
     # A real Vite build, where everything but the `frameworks` job below calls the
     # plugin's hooks directly — which cannot catch a plugin that is shaped wrong for the
