@@ -1,0 +1,9 @@
+/* What a consumer imports: `@import "@acme/ui/styles.css";` beside its own Tailwind.
+   It needs neither the tailess plugin nor a scan of this package's source. */
+
+/* The bundle: every literal class in it — a recipe's base, a plain className. */
+@source "./dist";
+
+/* The classes tailess builds at runtime, which no scan can see: `tailess emit` writes
+   them at this package's build, from its source. */
+@import "./dist/tailess.css";

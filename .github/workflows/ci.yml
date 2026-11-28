@@ -481,11 +481,16 @@ jobs:
     # configure() goes. Every one runs its own production build, the gate, and the dev
     # server probe — the three places a framework's own pipeline could lose a class. They
     # install from ranges with no lockfile, so the weekly run meets each new release.
+    #
+    # And a design system: examples/monorepo, whose packages/ui one app compiles from
+    # source and another uses from its build with no plugin at all. The first is where a
+    # missing `@source` left every literal class unstyled while the gate passed; the second
+    # is the README's recipe for publishing a component library, in a real Vite build.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        example: [sveltekit, nuxt, react-router, astro]
+        example: [sveltekit, nuxt, react-router, astro, monorepo]
     steps:
       - uses: actions/checkout@v7
 

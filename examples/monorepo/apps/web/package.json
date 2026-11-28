@@ -1,0 +1,26 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "tailess check --content src,../../packages/ui/src --strict",
+    "smoke": "node ../../../../scripts/hmr-smoke.mjs --url http://127.0.0.1:5194/ --css src/app.css --expect hover:bg-violet-800 --edit ../../packages/ui/src/button.styles.ts --new-file ../../packages/ui/src/hmr-probe.ts -- node ../../node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5194 --strictPort"
+  },
+  "dependencies": {
+    "@acme/ui": "*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailess": "file:../../../.."
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.8"
+  }
+}

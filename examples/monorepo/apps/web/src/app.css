@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Tailwind's own scan stops at this app's root, and the design system lives outside it.
+   The plugin's `content` hands Tailwind the classes tailess builds there; this hands it
+   the literal ones — a recipe's base, a plain className. Both are needed. */
+@source "../../../packages/ui/src";

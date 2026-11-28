@@ -1,0 +1,12 @@
+{
+  "name": "tailess-example-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "build": "npm run build -w @acme/ui && npm run build -w web && npm run build -w consumer",
+    "check": "npm run check -w web && npm run check -w consumer",
+    "verify": "npm run build && npm run check",
+    "smoke": "npm run smoke -w web"
+  }
+}

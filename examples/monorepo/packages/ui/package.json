@@ -1,0 +1,26 @@
+{
+  "name": "@acme/ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./styles.css": "./styles.css"
+  },
+  "files": ["dist", "styles.css"],
+  "scripts": {
+    "build": "tsup src/index.ts --no-config --format esm --external react --external tailess && tailess emit --content src --out dist/tailess.css"
+  },
+  "dependencies": {
+    "tailess": "file:../../../.."
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "react": "^19.2.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}
