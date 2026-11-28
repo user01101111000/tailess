@@ -1,5 +1,31 @@
 # tailess
 
+## 0.16.2
+
+### Patch Changes
+
+- [#101](https://github.com/user01101111000/tailess/pull/101) [`575c654`](https://github.com/user01101111000/tailess/commit/575c6545909ac09e1af2f4de27491f2ada427a8f) Thanks [@user01101111000](https://github.com/user01101111000)! - A mistake in a slotted `variants()` recipe now reads as one on TypeScript 7.
+  
+  TypeScript 7 reports a call no overload accepts against the last overload alone, and that was the flat config's. So every mistake in a recipe with `slots` came out as the flat config's complaint, at a key that was right:
+  
+  - a typo in a part name read "'root' does not exist in type 'SsInput'";
+  - an unknown key read "'slots' does not exist".
+  
+  The flat overload now steps aside whenever a config has `slots`. The error is the slotted overload's, at the mistake:
+  
+  - "'sise' does not exist in type 'CompoundRule<…>'";
+  - `Type '"md"' is not assignable to type '"sm"'`.
+  
+  On TypeScript 6, the overload list it prints no longer includes the flat config's entry.
+  
+  The same change closes a gap. A slotted config held in a variable — for example one that extends a recipe without slots — could still resolve to the flat overload. It compiled, typed as returning a `string`, while the runtime built parts and warned. It is refused now, as the same config written inline always was.
+
+- [#101](https://github.com/user01101111000/tailess/pull/101) [`575c654`](https://github.com/user01101111000/tailess/commit/575c6545909ac09e1af2f4de27491f2ada427a8f) Thanks [@user01101111000](https://github.com/user01101111000)! - `tailess/vite`: a new file in a `content` folder outside Vite's root, such as a monorepo's `packages/ui`, now reaches the stylesheet while the dev server runs.
+  
+  Vite watches only its own root. Outside it, tailess watched the files it had already scanned one by one, and Tailwind's `@source` registers a glob, which Vite does not watch. So on Linux, a new file in such a folder raised no event. Its classes reached the stylesheet only when something else rebuilt it. Windows reports the new file anyway, which is why it seemed to work there.
+  
+  The plugin now adds those folders to Vite's watcher.
+
 ## 0.16.1
 
 ### Patch Changes
