@@ -31,7 +31,7 @@
  *   --timeout   seconds to wait at each step after that (default 60). A working server
  *               takes about a second, so this only decides how long a broken one costs.
  *
- * Once `--expect` is served:
+ * Once `--expect` is served, and with the server left alone for a moment before each change:
  *   1. append `void ss({ md: "<fresh>" })` to `--edit`  → its rule is served;
  *   2. restore the file                                → the rule is gone;
  *   3. write `--new-file` with another fresh class     → its rule is served;
@@ -209,6 +209,16 @@ async function waitFor(what, test, timeout, server) {
   throw new Error(`timed out after ${timeout / 1000}s waiting for ${what}${why}`);
 }
 
+/**
+ * How long the server is left alone before each change. A step passes the moment its rule
+ * is served or gone, which can be while work that step set off is still running — a
+ * debounced rescan, a rebuild — and that work can pick up the *next* change by accident.
+ * A new file in a monorepo package outside Vite's root was "seen" that way while nothing
+ * watched the package, so the probe passed or failed by timing. Waiting it out makes every
+ * step answer for itself.
+ */
+const quiet = 2000;
+
 const used = new Set();
 
 /** A utility no file holds yet: a fresh arbitrary value every time. */
@@ -248,20 +258,24 @@ try {
   if (hasRule(await stylesheet(options), edited)) {
     throw new Error(`${edited} is served before any file holds it`);
   }
+  await sleep(quiet);
   restore = true;
   writeFileSync(options.edit, `${original}\nvoid ss({ md: "${edited.slice(3)}" });\n`);
   await waitFor(`${edited} after an edit adds it`, served(edited), timeout, server);
+  await sleep(quiet);
   writeFileSync(options.edit, original);
   restore = false;
   await waitFor(`${edited} gone once the edit is undone`, gone(edited), timeout, server);
 
   const created = `md:${fresh()}`;
+  await sleep(quiet);
   remove = true;
   writeFileSync(
     options.newFile,
     `import { ss } from "tailess";\n\nexport const probe = ss({ md: "${created.slice(3)}" });\n`,
   );
   await waitFor(`${created} from a file nothing imports`, served(created), timeout, server);
+  await sleep(quiet);
   rmSync(options.newFile);
   remove = false;
   await waitFor(`${created} gone with the file`, gone(created), timeout, server);

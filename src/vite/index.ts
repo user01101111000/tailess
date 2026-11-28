@@ -45,6 +45,8 @@ interface ViteServer {
     on(event: string, listener: (file: string) => void): unknown;
     /** Optional: absent when Vite runs with its watcher disabled. */
     emit?(event: string, file: string): unknown;
+    /** Optional, like `emit`: what watches a content root outside Vite's own. */
+    add?(paths: string[]): unknown;
   };
 }
 
@@ -83,6 +85,11 @@ const styleBlock = /&lang\.css(?:&|$)|[?&]index=\d+\.css$/;
 
 /** Coalesce bursts of file-system events (editors save in several steps). */
 const debounceMs = 25;
+
+/** Whether `path` is `base` or somewhere under it; both already `resolve`d. */
+function within(path: string, base: string): boolean {
+  return path === base || path.startsWith(base.endsWith(sep) ? base : base + sep);
+}
 
 /**
  * Vite plugin that bridges tailess to Tailwind v4 — the integration to use with
@@ -229,6 +236,16 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const scanRoots = roots().map((path) => resolve(path));
 
+      // Vite watches its own root. A content root outside it — a monorepo's shared
+      // package — was watched only file by file, through `addWatchFile`, so on Linux a
+      // *new* file there raised no event at all, and its classes waited for whatever
+      // rebuilt the stylesheet next. (Windows reports it anyway.) Tailwind's `@source`
+      // does not cover it either: it registers a glob, and Vite only watches a path that
+      // exists.
+      const own = resolve(root);
+      const outside = scanRoots.filter((base) => !within(base, own));
+      if (outside.length > 0) server.watcher.add?.(outside);
+
       /**
        * The class list this server's stylesheet was last told to rebuild for — not
        * whether this refresh is the one that rewrote the sidecar. The file is shared:
@@ -243,7 +260,7 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
       const onChange = (file: string): void => {
         const path = resolve(file);
         if (!isScannable(path, extensions)) return;
-        if (!scanRoots.some((base) => path === base || path.startsWith(base + sep))) return;
+        if (!scanRoots.some((base) => within(path, base))) return;
 
         clearTimeout(timer);
         timer = setTimeout(() => {
