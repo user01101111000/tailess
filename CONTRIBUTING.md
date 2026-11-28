@@ -124,6 +124,20 @@ skips itself when there is none, so running the suite first leaves the check gua
 string-named PostCSS entry green by never executing. CI builds first for the same reason,
 and that suite now fails loudly rather than skipping when it finds no build there.
 
+**Touching `src/vite`, `src/postcss` or `src/integration`?** The suites call the plugins'
+hooks directly, and a production build scans the source once, so neither shows that a save
+reaches the stylesheet while a dev server runs. `scripts/hmr-smoke.mjs` does: it starts one,
+adds a class by an edit and by a new file, and checks that each rule arrives and leaves
+again. CI runs it on the example's Vite server and on `next dev` with both bundlers. To run
+it yourself, after `npm run build` and an `npm install` in `examples/vite-react`:
+
+```sh
+cd examples/vite-react
+node ../../scripts/hmr-smoke.mjs --url http://127.0.0.1:5180/ --css src/app.css \
+  --expect md:space-y-8 --edit src/App.styles.ts --new-file src/HmrProbe.ts \
+  -- node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5180 --strictPort
+```
+
 Handy extras: `npm run lint:fix` (auto-fix formatting), `npm run test:coverage`,
 `npm run test:watch`, and `node dist/cli.js check --content src` to run the gate against
 this repo itself.
