@@ -40,6 +40,11 @@ enumerate nothing — so there is no candidate to fail and the gate exits 0 whil
 element is unstyled. The variable and the interpolated template *are* reported. Follow
 the rules; do not lean on the check to catch you.
 
+In development the browser covers what the gate cannot: a variant class on the page with
+no CSS rule prints `[tailess] No CSS rule for "…"` to the console a few seconds after it
+renders. It only knows what was rendered, so it is a last line, not a reason to write the
+shapes above.
+
 ## Working on this repository
 
 Read `CONTRIBUTING.md` first — in particular **The one invariant** and the

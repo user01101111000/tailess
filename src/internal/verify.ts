@@ -1,24 +1,21 @@
 import { isDev } from "./env.js";
-import { warn } from "./settings.js";
-
-/**
- * Custom property the build integration injects into your Tailwind stylesheet.
- * Its only job is to be observable from the browser, so a missing integration
- * fails loudly instead of silently producing classes that have no CSS.
- */
-export const markerProperty = "--tailess";
+import { markerProperty } from "./marker.js";
+import { firstTime, warn } from "./settings.js";
 
 let started = false;
 
 /**
- * Warn once, in dev, if the tailess build integration isn't wired up.
+ * Warn once, in dev, if the tailess build integration isn't wired up — and once it
+ * is, start checking that each variant class on the page has a rule.
  *
  * tailess builds variant prefixes (`md:`, `hover:`) at runtime, so those class
  * names never appear literally in your source and Tailwind's scanner can't find
  * them. The Vite/PostCSS integration is what tells Tailwind about them. Without
  * it everything *looks* fine — the right class lands on the element, there's just
  * no CSS rule behind it — which is a miserable thing to debug. So we check for the
- * marker the integration injects and say exactly what's missing.
+ * marker the integration injects and say exactly what's missing. With it, a class
+ * built from something the build cannot read fails the same quiet way, one class
+ * at a time; `rules.ts` names those.
  *
  * Called from {@link withPrefix}, i.e. only once a prefixed class is actually
  * produced. No-ops on the server and in production builds.
@@ -42,7 +39,18 @@ export function verifyIntegration(): void {
     const value = getComputedStyle(document.documentElement)
       .getPropertyValue(markerProperty)
       .trim();
-    if (value !== "") return;
+    if (value !== "") {
+      // Wired. Whether each class on the page got a rule is the next question, and the
+      // code that answers it is loaded only now: a chunk of its own, which a production
+      // bundle never requests. `CSS.escape` is what it matches a class to a rule with.
+      if (typeof CSS !== "undefined") {
+        import("./rules.js").then(
+          (rules) => rules.watch(markerProperty, warn, firstTime),
+          () => {},
+        );
+      }
+      return;
+    }
 
     warn(
       `[tailess] Your Tailwind CSS doesn't include tailess' generated classes, so

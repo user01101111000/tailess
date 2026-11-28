@@ -105,6 +105,11 @@ above it reports the variable, the interpolated template and the renamed import 
 enumerates nothing, so there is no candidate for `check` to compile and it exits 0. A
 green `tailess check` does not prove those three are styled. Do not write them.
 
+In development the browser names any variant class on the page with no CSS rule —
+`[tailess] No CSS rule for "md:p-6"` in the console, a few seconds after it renders —
+those three shapes included. It only knows what was rendered: a last line, not a reason
+to write them.
+
 The checks only speak about a file that imports from `"tailess"`. Reach the helpers
 through your own re-export and the classes are still enumerated and still verified by
 `check`, but the source-level warnings go quiet.

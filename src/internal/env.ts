@@ -42,6 +42,11 @@ export const isDev: boolean = (() => {
  *
  * Neither trade is worth 1 kB: one risks breaking the package outright, the other
  * taxes every server render. The warnings ship, unreachable, and that is deliberate.
+ *
+ * The one exception is the check that each class on the page has a rule, in
+ * `rules.ts`: code, not a message, and a fifth of `ss` + `cn` on its own. It is loaded
+ * with `import()` once a dev page finds the marker, so it is a chunk of its own, and a
+ * production page never requests it.
  * `test/internal/production-bundle.test.ts` pins the size so the cost cannot grow
  * unnoticed, and pins the messages so they cannot vanish from development builds.
  */

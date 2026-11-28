@@ -1521,6 +1521,30 @@ Scanned by default: `tsx ts mts cts jsx js mjs cjs mdx md html vue svelte astro`
 Markup files work the same as JS ones — an apostrophe in your prose or a `:class="…"`
 attribute won't throw the scanner off.
 
+#### When one slips through anyway
+
+In development, the browser checks the page. A class with a colon in it — every variant —
+that is on the page with no CSS rule behind it is named in the console:
+
+```txt
+[tailess] No CSS rule for "md:space-y-7", which the page uses. Either Tailwind does not
+know the class, or the build never read it: it reads only classes written as literals at
+the call site, not ones from a variable, a template, a spread or a computed key.
+```
+
+That covers the three shapes [`tailess check`](#checking-your-build) cannot see — a
+spread, a computed key, a computed prefix — and a typo in a hand-written `md:` class too.
+It speaks once a class has gone five seconds without a rule, because a save that adds one
+re-renders before the rebuilt stylesheet arrives, and it names each class once, through
+[`configure({ onWarn })`](#configure--the-two-things-that-depend-on-your-project) like
+every other warning.
+
+It only knows what rendered, and only once tailess has run in the browser: a page whose
+every call is in a server component never starts it. It stays quiet where it cannot read
+Tailwind's stylesheet — one served from another origin, as Laravel loads it from the Vite
+dev server. And production pays only for the `import()` that loads it in development: the
+check itself is a chunk a production page never requests.
+
 ## Build-time checks
 
 The plugin reports what it can prove wrong from your source, while the project builds:
@@ -1963,7 +1987,8 @@ On Vite with `@tailwindcss/vite`, `tailess/postcss` cannot work — use `tailess
 <summary><strong>One specific class has no styles</strong></summary>
 
 It's almost certainly not a literal at the call site — see
-[what the scanner can and cannot see](#what-the-scanner-can-and-cannot-see).
+[what the scanner can and cannot see](#what-the-scanner-can-and-cannot-see). In
+development the browser console names it: `[tailess] No CSS rule for "md:p-6"`.
 
 </details>
 

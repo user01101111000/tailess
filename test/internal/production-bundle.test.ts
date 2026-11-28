@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 
@@ -12,21 +13,52 @@ import { describe, expect, it } from "vitest";
  * should not be allowed to creep.
  */
 
+interface Bundle {
+  /** What a page loads up front: the entry, and each chunk it imports statically. */
+  initial: string;
+  /** Everything emitted, the chunks only an `import()` reaches included. */
+  all: string;
+}
+
 /** Bundle the public entry the way a consumer's bundler would. */
-async function bundleFor(mode: "production" | "development"): Promise<string> {
+async function bundleFor(mode: "production" | "development"): Promise<Bundle> {
   const result = await build({
     entryPoints: ["src/index.ts"],
     bundle: true,
     minify: true,
     format: "esm",
     write: false,
+    // Vite, webpack, Next and Turbopack each give an `import()` a chunk of its own, fetched
+    // only when the call runs. The dev-time rule check in `src/internal/rules.ts` is reached
+    // that way, so a single bundle would count code no production page ever downloads.
+    splitting: true,
+    outdir: "out",
+    metafile: true,
     // tailwind-merge is the consumer's to bundle; this is tailess' own cost. `clsx`
     // is no longer a dependency — `src/internal/join.ts` replaces it — so its bytes
     // are counted here rather than externalised.
     external: ["tailwind-merge"],
     define: { "process.env.NODE_ENV": JSON.stringify(mode) },
   });
-  return result.outputFiles?.[0]?.text ?? "";
+  const outputs = result.metafile?.outputs ?? {};
+  const text = new Map(
+    (result.outputFiles ?? []).map((file) => [
+      relative(process.cwd(), file.path).replaceAll("\\", "/"),
+      file.text,
+    ]),
+  );
+  const loaded = new Set<string>();
+  const load = (path: string): void => {
+    if (loaded.has(path)) return;
+    loaded.add(path);
+    for (const imported of outputs[path]?.imports ?? []) {
+      if (imported.kind === "import-statement" && !imported.external) load(imported.path);
+    }
+  };
+  const entry = Object.keys(outputs).find((path) => outputs[path]?.entryPoint);
+  if (entry) load(entry);
+  const read = (paths: Iterable<string>) => [...paths].map((path) => text.get(path)).join("\n");
+  return { initial: read(loaded), all: read(Object.keys(outputs)) };
 }
 
 /** A distinctive fragment of each warning, so a reworded message still matches. */
@@ -46,17 +78,29 @@ const warnings = [
   "which the build cannot carry",
   "not a config object",
   "names a recipe without slots",
+  "No CSS rule for",
 ];
 
 describe("the browser bundle", () => {
   it("keeps every dev warning in a development build", async () => {
-    const code = await bundleFor("development");
-    for (const fragment of warnings) expect(code).toContain(fragment);
-    expect(code).toContain("getComputedStyle");
+    const { all } = await bundleFor("development");
+    for (const fragment of warnings) expect(all).toContain(fragment);
+    expect(all).toContain("getComputedStyle");
+  });
+
+  it("keeps the rule check out of what a page loads up front", async () => {
+    // A class on the page with no rule is checked by `rules.ts`, behind an `import()` that
+    // only a development page runs. In the initial load it would cost every consumer
+    // 1,290 characters (574 gzipped) of code that never runs — a fifth of `ss` + `cn`.
+    const { initial, all } = await bundleFor("production");
+    expect(initial).not.toContain("No CSS rule for");
+    expect(all).toContain("No CSS rule for");
+    // The chunk itself: 1,654 characters (971 gzipped) when it moved out.
+    expect(all.length - initial.length).toBeLessThan(2_000);
   });
 
   it("stays within its size budget", async () => {
-    const code = await bundleFor("production");
+    const { initial: code } = await bundleFor("production");
     // 6,165 chars minified today (~2.8 kB gzipped), roughly a fifth of which is the
     // warning text that cannot be eliminated. Raise this deliberately, and only for
     // something worth shipping to every consumer's users. Raised from 5,500 for
@@ -204,17 +248,24 @@ describe("the browser bundle", () => {
     // someone remembered `defaults: { active: false }` — no error, no warning, an element
     // missing the classes written for exactly that state.
     //
+    // Not raised for the check that each variant class on the page has a rule — the
+    // silent failure `tailess check` cannot see, a class built from a spread or a computed
+    // key. 16,307 -> 16,407 chars (6,835 gzipped), all 100 of them in `ss` + `cn`: the
+    // `import()` that loads the check once the marker shows the integration is wired. The
+    // check itself is a chunk of its own, measured apart by the test above. Inline it was
+    // +1,290 (+574 gzipped), a fifth of `ss` + `cn`, for code no production page runs.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
-    // is the cost of importing *everything*. A consumer using only `ss` and `cn` bundles
-    // 6,123 chars (2,874 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 4,808 (10,931). Measured with the
+    // is the cost of importing *everything*. A consumer using only `ss` and `cn` loads
+    // 6,223 chars (2,929 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 4,808 (11,031). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
     expect(code.length).toBeLessThan(16_500);
   });
 
   it("pulls in no Node builtins", async () => {
     // This entry runs in the browser; a `node:` import here breaks web bundling.
-    const code = await bundleFor("production");
+    const { all: code } = await bundleFor("production");
     expect(code).not.toMatch(/require\(["']node:|from["']\s*node:/);
   });
 });
