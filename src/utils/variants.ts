@@ -582,15 +582,32 @@ type MergedSlots<A extends SlotDefaults, B extends SlotDefaults> = {
  */
 type KnownParts<V, S> = {
   [G in keyof V]: {
+    // `never`, rather than a message spelled as a string literal: `"text-xl" & "…"` is
+    // two literals that cannot meet, and TypeScript reduces an object holding such a
+    // property to `never` whole — which reports `root`, the part that was right, as well.
     [O in keyof V[G]]: { [K in keyof V[G][O]]: K extends keyof S ? unknown : never };
   };
 };
 
-// The overloads that take base classes first come first. TypeScript reports a call no
-// overload accepts against the *last* one it tried, and with `variants(base)` last a typo
+/**
+ * No more arguments for a flat config, and one nobody can pass when the config has `slots`.
+ *
+ * TypeScript drops an overload whose rest parameter, once instantiated, asks for more
+ * arguments than the call has — before it checks any of them. So a config with `slots`
+ * never reaches the flat overload, and a mistake in it is reported against the slotted one.
+ * Without this, TypeScript 7 reported every such mistake as the flat config's: a typo in a
+ * part name was "'root' does not exist in type 'SsInput'", pointing at the part that was
+ * right.
+ */
+type FlatOnly<S> = [S] extends [undefined] ? [] : [slots: never];
+
+// The overloads that take base classes first come first. A call no overload accepts is
+// reported against the *last* one TypeScript tried — always on TypeScript 7; on 6 unless
+// two or three failed, which it lists in full — and with `variants(base)` last a typo
 // anywhere in a flat recipe — `compound: [{ tones: … }]` — was "'variants' does not exist
 // in type 'SsInput'", pointing at `variants` and naming nothing that was wrong. With the
 // flat config last, the error is about the flat config, at the rule, with the typo in it.
+// A slotted config is kept from reaching it by `FlatOnly`, so its own errors are its own.
 // A config object is refused by the base overload by type rather than by excess-property
 // checking, so a config held in a variable cannot land there either.
 
@@ -647,7 +664,11 @@ export function variants<
 export function variants<
   const V extends VariantGroups = Empty,
   const E extends AnyRecipe | undefined = undefined,
->(config: VariantsConfig<V, Inherited<E>> & { extend?: E }): VariantComponent<V & Inherited<E>>;
+  S = undefined,
+>(
+  config: VariantsConfig<V, Inherited<E>> & { extend?: E; slots?: S },
+  ...slotted: FlatOnly<S>
+): VariantComponent<V & Inherited<E>>;
 
 /**
  * Build a component's `className` from a set of typed variants.

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { otherCompiler } from "../helpers/compiler.js";
 
 /**
  * The plugins' types under `moduleResolution: node10`, where TypeScript reads
@@ -18,6 +19,11 @@ import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const built = existsSync(join(root, "dist", "postcss", "index.d.cts"));
+/**
+ * Not asked of another compiler: TypeScript 7 refuses the option outright — "Option
+ * 'moduleResolution=node10' has been removed" — so no project on it resolves this way.
+ */
+const applies = built && otherCompiler === undefined;
 
 /** The compiler's messages for `source` as a CommonJS project resolving like Node 10. */
 async function errorsFor(source: string): Promise<string[]> {
@@ -47,7 +53,7 @@ async function errorsFor(source: string): Promise<string[]> {
   }
 }
 
-describe.runIf(built)("the plugins under node10 resolution without esModuleInterop", () => {
+describe.runIf(applies)("the plugins under node10 resolution without esModuleInterop", () => {
   it.each(["postcss", "vite"])("type-check tailess/%s the way it runs", async (entry) => {
     expect(
       await errorsFor(

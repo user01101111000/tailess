@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { diagnose } from "../helpers/compiler.js";
 
 /**
  * The published declarations under the compiler settings a consumer may have, not only the
@@ -43,22 +43,20 @@ button({ tones: "danger" });
 button({ tone: "huge" });
 `;
 
-async function compile(options: ts.CompilerOptions): Promise<string[]> {
+/** `options` as a tsconfig.json spells them, over the ones every case shares. */
+async function compile(options: Record<string, unknown>): Promise<string[]> {
   const dir = await mkdtemp(join(process.cwd(), "node_modules", ".tailess-types-"));
   try {
     await writeFile(join(dir, "button.ts"), fixture);
-    const program = ts.createProgram([join(dir, "button.ts")], {
+    return await diagnose(dir, ["button.ts"], {
       noEmit: true,
       skipLibCheck: true,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      target: ts.ScriptTarget.ES2022,
+      module: "esnext",
+      moduleResolution: "bundler",
+      target: "es2022",
       paths: { tailess: [declarations] },
       ...options,
     });
-    return ts
-      .getPreEmitDiagnostics(program)
-      .map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
