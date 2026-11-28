@@ -1,0 +1,27 @@
+{
+  "name": "tailess-example-sveltekit",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "prepare": "svelte-kit sync || echo ''",
+    "check": "tailess check --content src --strict",
+    "verify": "npm run build && npm run check",
+    "smoke": "node ../../scripts/hmr-smoke.mjs --url http://127.0.0.1:5190/ --css src/app.css --expect md:p-10 --edit src/lib/page.styles.ts --new-file src/lib/hmr-probe.ts -- node node_modules/vite/bin/vite.js dev --host 127.0.0.1 --port 5190 --strictPort"
+  },
+  "dependencies": {
+    "tailess": "file:../.."
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "^8.0.1",
+    "@sveltejs/kit": "^3.2.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "svelte": "^5.57.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8"
+  }
+}

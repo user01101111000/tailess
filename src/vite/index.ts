@@ -229,6 +229,17 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const scanRoots = roots().map((path) => resolve(path));
 
+      /**
+       * The class list this server's stylesheet was last told to rebuild for — not
+       * whether this refresh is the one that rewrote the sidecar. The file is shared:
+       * Nuxt runs a client and an SSR server off one plugin instance, and the transform
+       * hook refreshes too, so another refresh can write the new list first and leave
+       * this one reporting no change. Then nothing told this server, and its stylesheet
+       * kept the old list: under Nuxt 4, a class in a file nothing imports never reached
+       * the browser. Undefined until the first change, which is always passed on.
+       */
+      let told: string | undefined;
+
       const onChange = (file: string): void => {
         const path = resolve(file);
         if (!isScannable(path, extensions)) return;
@@ -237,8 +248,9 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
         clearTimeout(timer);
         timer = setTimeout(() => {
           refresh()
-            .then(({ changed }) => {
-              if (!changed) return;
+            .then(({ css }) => {
+              if (css === told) return;
+              told = css;
               // Rewriting the sidecar is what makes Tailwind rebuild; re-emitting the
               // entry is what makes Vite re-run this chain and push the new CSS. Vite
               // does not invalidate a stylesheet just because a scanned file changed

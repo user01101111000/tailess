@@ -217,9 +217,9 @@ jobs:
           done
 
   example:
-    # The only place a real Vite build runs. Everything else calls the plugin's hooks
-    # directly, which cannot catch a plugin that is shaped wrong for the host — and the
-    # gate itself is never dogfooded anywhere else either.
+    # A real Vite build, where everything but the `frameworks` job below calls the
+    # plugin's hooks directly — which cannot catch a plugin that is shaped wrong for the
+    # host — and the one place the gate is proved to fail when the plugin is missing.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -473,3 +473,43 @@ jobs:
           }
           probe
           if [ "${{ matrix.next }}" = 16 ]; then probe --webpack; else probe --turbopack; fi
+
+  frameworks:
+    # The frameworks a Tailwind project is most often built on besides Vite + React and
+    # Next.js, each a real app in examples/: SvelteKit, Nuxt, React Router, Astro. All four
+    # render on the server and three hydrate in the browser, so each also proves where its
+    # configure() goes. Every one runs its own production build, the gate, and the dev
+    # server probe — the three places a framework's own pipeline could lose a class. They
+    # install from ranges with no lockfile, so the weekly run meets each new release.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [sveltekit, nuxt, react-router, astro]
+    steps:
+      - uses: actions/checkout@v7
+
+      # 24: Astro 7 declares `node >= 22.23.4`, and one version for all four keeps the
+      # matrix about the frameworks rather than about Node.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install the example
+        run: npm install --no-audit --no-fund
+        working-directory: examples/${{ matrix.example }}
+
+      - name: Build it, then gate it
+        run: npm run verify
+        working-directory: examples/${{ matrix.example }}
+
+      - name: The stylesheet follows every save while the dev server runs
+        run: npm run smoke
+        working-directory: examples/${{ matrix.example }}
