@@ -101,6 +101,49 @@ describe("the dev-server watcher", () => {
     expect(await pickUpNewFile(["TSX"])).toBe(true);
   });
 
+  it("tells every server, though another refresh wrote the new list first", async () => {
+    // Nuxt runs a client and an SSR server off one plugin instance, and a CSS transform
+    // refreshes the list too. Under Nuxt 4 the transform got there first, both watchers'
+    // refreshes found the sidecar already written, neither re-emitted the stylesheet —
+    // and a class in a file nothing imports never reached the browser.
+    await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
+    const plugin = tailess();
+    plugin.configResolved({ root: dir, cacheDir: join(dir, ".vite") });
+    const entry = join(dir, "app.css");
+    const transform = () =>
+      plugin.transform.handler.call({ addWatchFile() {} }, '@import "tailwindcss";', entry);
+    await transform();
+
+    const client = fakeServer();
+    const ssr = fakeServer();
+    plugin.configureServer(client);
+    plugin.configureServer(ssr);
+
+    await writeFile(join(dir, "b.tsx"), `ss({ lg: "gap-7" })`);
+    await transform();
+    client.fire("add", join(dir, "b.tsx"));
+    ssr.fire("add", join(dir, "b.tsx"));
+    await settle(() => client.emitted.length > 0 && ssr.emitted.length > 0);
+    expect(client.emitted).toEqual([["change", entry]]);
+    expect(ssr.emitted).toEqual([["change", entry]]);
+
+    // Nothing new: neither is told again.
+    client.fire("change", join(dir, "b.tsx"));
+    ssr.fire("change", join(dir, "b.tsx"));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(client.emitted).toHaveLength(1);
+    expect(ssr.emitted).toHaveLength(1);
+
+    // Another class, written by the transform first again: both are told again.
+    await writeFile(join(dir, "c.tsx"), `ss({ xl: "gap-9" })`);
+    await transform();
+    client.fire("add", join(dir, "c.tsx"));
+    ssr.fire("add", join(dir, "c.tsx"));
+    await settle(() => client.emitted.length > 1 && ssr.emitted.length > 1);
+    expect(client.emitted).toHaveLength(2);
+    expect(ssr.emitted).toHaveLength(2);
+  });
+
   it("ignores a file whose extension is not scanned", async () => {
     await writeFile(join(dir, "a.tsx"), `ss({ md: "p-4" })`);
 

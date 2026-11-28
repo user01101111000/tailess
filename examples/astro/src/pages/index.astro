@@ -1,0 +1,27 @@
+---
+// First, so configure() has run before the styles module builds a class.
+import "../tailess.setup";
+import "../styles/global.css";
+import * as s from "../page.styles";
+
+const parts = s.panel({ tone: "info" });
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width" />
+		<link rel="icon" href="data:," />
+		<title>tailess on Astro</title>
+	</head>
+	<body>
+		<main class={s.page}>
+			<h1 class={s.title}>tailess on Astro</h1>
+			<a class={s.toggle} data-state="open" href="#details">Details</a>
+			<section id="details" class={parts.root}>
+				<h2 class={parts.heading}>Rendered once, on the server</h2>
+				<p class={s.note(true)}>Every class on this page comes from src/page.styles.ts.</p>
+			</section>
+		</main>
+	</body>
+</html>

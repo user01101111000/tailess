@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* A breakpoint of the project's own. ss() takes it as "3xl" through configure({ keys })
+   in src/tailess.setup.ts, and the CustomKeys declaration in src/tailess.d.ts. */
+@theme {
+  --breakpoint-3xl: 120rem;
+}

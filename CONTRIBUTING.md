@@ -138,6 +138,10 @@ node ../../scripts/hmr-smoke.mjs --url http://127.0.0.1:5180/ --css src/app.css 
   -- node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5180 --strictPort
 ```
 
+The SvelteKit, Nuxt, React Router and Astro apps beside it carry the same probe as
+`npm run smoke`, and `npm run verify` for the build and the gate — what CI's `frameworks`
+job runs in each.
+
 Handy extras: `npm run lint:fix` (auto-fix formatting), `npm run test:coverage`,
 `npm run test:watch`, and `node dist/cli.js check --content src` to run the gate against
 this repo itself.

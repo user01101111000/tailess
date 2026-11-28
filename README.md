@@ -1042,6 +1042,22 @@ call with only `onWarn`, and one in a test, a story or a test setup file, does n
 since neither is the app's own. The check starts once tailess builds a variant class in
 the browser.
 
+The same split exists in every framework that renders on the server. Where each one runs
+a module first, on each side — every row tried in a real app, where the page hydrated
+cleanly with the import in place and the browser named the missing call without it:
+
+| Framework | Server | Browser |
+| --- | --- | --- |
+| Next.js | first import in `app/layout.tsx` | `instrumentation-client.ts` |
+| SvelteKit | `src/hooks.server.ts` | `src/hooks.client.ts` |
+| Nuxt | a plugin, `app/plugins/tailess.ts`: Nuxt runs it on both | |
+| React Router | first import in `app/root.tsx`: loaded on both | |
+| Astro | the page's or layout's frontmatter | none: a page ships no JavaScript |
+
+An Astro island that builds classes in the browser is a side of its own, and imports the
+setup module too. The last four rows are the apps in
+[`examples/`](https://github.com/user01101111000/tailess/tree/main/examples).
+
 ### Keys your own CSS adds
 
 The built-in keys are a closed union on purpose — that is what makes a typo a compile
@@ -1458,6 +1474,16 @@ const props = defineProps<{ active: boolean }>();
 ```
 
 </details>
+
+Each of these is also a real app in
+[`examples/`](https://github.com/user01101111000/tailess/tree/main/examples) — Vite + React,
+[SvelteKit](https://github.com/user01101111000/tailess/tree/main/examples/sveltekit),
+[Nuxt](https://github.com/user01101111000/tailess/tree/main/examples/nuxt),
+[React Router](https://github.com/user01101111000/tailess/tree/main/examples/react-router) and
+[Astro](https://github.com/user01101111000/tailess/tree/main/examples/astro) — with the plugin
+wired, `configure()` on both sides, and a `*.styles.ts` beside the page. CI builds each one,
+runs the gate over it, and edits it under a live dev server until the stylesheet follows,
+on every push and again every week against whatever a fresh install resolves to.
 
 ---
 

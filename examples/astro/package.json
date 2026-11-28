@@ -1,0 +1,24 @@
+{
+  "name": "tailess-example-astro",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "check": "tailess check --content src --strict",
+    "verify": "npm run build && npm run check",
+    "smoke": "node ../../scripts/hmr-smoke.mjs --url http://127.0.0.1:5193/ --css src/styles/global.css --expect md:p-10 --edit src/page.styles.ts --new-file src/hmr-probe.ts -- node node_modules/astro/bin/astro.mjs dev --host 127.0.0.1 --port 5193"
+  },
+  "dependencies": {
+    "astro": "^7.4.13",
+    "tailess": "file:../.."
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3"
+  }
+}
