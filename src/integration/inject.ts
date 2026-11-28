@@ -1,4 +1,4 @@
-import { markerProperty } from "../internal/verify.js";
+import { markerProperty } from "../internal/marker.js";
 
 /**
  * Candidates per `@source inline(...)` directive. A single directive would work

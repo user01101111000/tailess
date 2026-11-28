@@ -140,6 +140,45 @@ describe("integration check", () => {
   });
 });
 
+describe("the check that each class on the page has a rule", () => {
+  // It lives in `rules.ts`, loaded with `import()` so a production bundle never requests
+  // it (`rules.test.ts` covers what it does). These cover when it is started at all.
+  afterEach(() => {
+    vi.doUnmock("../../src/internal/rules.js");
+  });
+
+  async function start(markerValue: string, hasEscape: boolean) {
+    const watch = vi.fn();
+    vi.doMock("../../src/internal/rules.js", () => ({ watch }));
+    setupDom(markerValue);
+    if (hasEscape) vi.stubGlobal("CSS", { escape: (value: string) => value });
+    const withPrefix = await loadWithPrefix();
+
+    withPrefix("md", "text-lg");
+    await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
+    return watch;
+  }
+
+  it("starts once the marker shows the integration is wired", async () => {
+    const watch = await start("1", true);
+    expect(watch).toHaveBeenCalledOnce();
+    expect(watch).toHaveBeenCalledWith("--tailess", expect.any(Function), expect.any(Function));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("is not loaded while the integration is missing, which is reported instead", async () => {
+    const watch = await start("", true);
+    expect(watch).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("is not loaded where there is no CSS.escape to match a class with", async () => {
+    const watch = await start("1", false);
+    expect(watch).not.toHaveBeenCalled();
+  });
+});
+
 describe("server-side rendering", () => {
   it("does not spend the one-shot check on a render that had no document", async () => {
     // SSR reaches withPrefix too. If the server pass claimed the flag, the browser
