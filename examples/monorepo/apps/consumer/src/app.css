@@ -1,0 +1,4 @@
+@import "tailwindcss";
+
+/* The one line a consumer adds: the classes @acme/ui's components use, literal and built. */
+@import "@acme/ui/styles.css";

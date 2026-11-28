@@ -1513,6 +1513,11 @@ wired, `configure()` on both sides, and a `*.styles.ts` beside the page. CI buil
 runs the gate over it, and edits it under a live dev server until the stylesheet follows,
 on every push and again every week against whatever a fresh install resolves to.
 
+A design system gets one too:
+[a monorepo](https://github.com/user01101111000/tailess/tree/main/examples/monorepo) whose
+`packages/ui` one app compiles from source and another uses from its build — the second
+with no plugin and no scan, only the package's stylesheet.
+
 ---
 
 ## What the scanner can and cannot see
@@ -1946,6 +1951,20 @@ tailess({
 });
 ```
 
+`content` is where tailess looks for the classes it builds — it does not tell Tailwind
+where to look. A folder outside your project's root, like `../ui/src` above or a
+monorepo's `packages/ui`, needs Tailwind's own `@source` as well. Without it every literal
+class there — a recipe's `base`, a plain `className` — gets no CSS, and the gate still
+passes, because it checks the classes tailess builds:
+
+```css
+@import "tailwindcss";
+@source "../ui/src";
+```
+
+[`examples/monorepo`](https://github.com/user01101111000/tailess/tree/main/examples/monorepo)
+does both, and also uses the same design system from its build, the way npm would serve it.
+
 `diagnostics` is what the build does about the [checks](#build-time-checks) the scanner
 can prove from your source. `"warn"` prints and keeps going, which is right in dev — a
 dead class should not stop you seeing the rest of the page. `"error"` prints the whole
@@ -2074,7 +2093,11 @@ Something else supplies the CSS (your own safelist, say). Declare the marker to 
 <details>
 <summary><strong>My classes live outside the scanned root</strong></summary>
 
-A monorepo package or shared UI folder — point `content` at it.
+A monorepo package or shared UI folder — point `content` at it, **and** add an `@source`
+for it to your CSS. `content` finds the classes tailess builds; the literal ones are
+Tailwind's to find, and its scan stops at your project's root. With `content` alone the
+gate passes while every `base` class in that folder is unstyled — see
+[Plugin options](#plugin-options).
 
 </details>
 
