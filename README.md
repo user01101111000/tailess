@@ -78,6 +78,7 @@ so wrap one in an array: `ss([{ "font-bold": isActive }])`.
   - [Vite](#vite)
   - [Next.js](#nextjs)
   - [Other PostCSS setups](#other-postcss-setups)
+- [The one rule](#the-one-rule)
 - [Sorting classes](#sorting-classes)
 - [Editor setup](#editor-setup)
 - [API](#api)
@@ -119,6 +120,7 @@ so wrap one in an array: `ss([{ "font-bold": isActive }])`.
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Upgrading from 0.8](#upgrading-from-08)
+- [Versioning](#versioning)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -296,6 +298,32 @@ That's the whole setup:
 ```tsx
 import { ss } from "tailess";
 ```
+
+## The one rule
+
+**Every class goes in as a literal, where you call the helper.** The runtime builds
+`md:p-6` while the page renders, so Tailwind never sees that string in your source; the
+plugin predicts it by reading the call site. A class the plugin cannot read still lands on
+the element, with no CSS behind it — no error anywhere, just an unstyled element.
+
+So never, however natural it looks:
+
+- pass a variable: `ss({ md: size })`
+- interpolate one: `` ss({ md: `text-${scale}` }) ``
+- spread into a bucket map, or compute a key: `ss({ ...buckets })`, `ss({ [key]: "grid" })`
+- rename the import: `import { ss as tw }` — the plugin finds the helpers by name
+
+And instead:
+
+- `match(value, { sm: "p-2", lg: "p-8" })` for a lookup — every branch is a literal
+- `ss({ md: open ? "p-4" : "p-2" })` — both branches are read
+- `` vars({ "--w": `${n}%` }) `` with `w-[var(--w)]` for a value that comes from data
+
+Two things catch the mistake when it happens anyway. [`tailess check`](#checking-your-build)
+in CI reports a variable or a template that builds a class. And in development, the browser
+console names any variant class on the page that has no CSS — a spread and a computed key
+included. The full list is in
+[what the scanner can and cannot see](#what-the-scanner-can-and-cannot-see).
 
 ## Sorting classes
 
@@ -2163,6 +2191,21 @@ Both plugin entries now have one shape: `require()` hands you the plugin creator
 this, a `vite.config.cjs` got a namespace object that Vite rejects.
 
 ---
+
+## Versioning
+
+tailess is `0.x`, which on its own promises nothing. What it does promise
+([the full table](https://github.com/user01101111000/tailess/blob/main/CONTRIBUTING.md#-what-counts-as-stable)):
+
+- A breaking change to a helper, a plugin or a plugin option comes only in a **minor**,
+  called out at the top of its changelog entry with the line to change. Fixes are patches.
+- Keys are only ever added. One goes away only if Tailwind removes the variant.
+- `tailess check` keeps its exit codes: `0`, `1` and `2` mean what this README says.
+- `tailess/build` is newer and may grow; anything removed from it gets a minor and a note.
+- Anything reachable only through `dist/` internals is not a surface, and may change in a
+  patch.
+
+Every release, and the reason for each change in it, is in [CHANGELOG.md](./CHANGELOG.md).
 
 ## Contributing
 
