@@ -11,6 +11,15 @@ on:
   # Called by release.yml, so the publish waits on this exact matrix rather than
   # running a subset of it concurrently.
   workflow_call:
+  # Weekly, against whatever a fresh install resolves to that day. The example and the
+  # Next.js app install from ranges with no lockfile, as a new user's project does, so a
+  # Tailwind, Vite or Next release that breaks the bridge reaches users the day it ships —
+  # and without this, CI would not run again until somebody pushed. Dependabot moves only
+  # the root lockfile, and monthly. A failed scheduled run mails whoever last edited the
+  # cron line; GitHub turns the schedule off after 60 days without activity in a public
+  # repository, and the Actions tab turns it back on.
+  schedule:
+    - cron: "17 6 * * 1"
 
 # Least privilege, on the workflows that write nothing back. Both run `npm ci` — every
 # install script in the dependency tree — on `push`, where the token is not the read-only
@@ -247,6 +256,18 @@ jobs:
         run: npm run check
         working-directory: examples/vite-react
 
+      # A build scans the source once. A dev server has to keep the stylesheet in step with
+      # every save — a class added, the same edit undone, a file nothing imports yet — and
+      # that rests on how Tailwind's compiler caches the `@source inline(...)` list, which
+      # is no documented contract. Nothing else here starts a dev server. It runs before
+      # the negative below, which takes the plugin out of `vite.config.ts`.
+      - name: The stylesheet follows every save while the dev server runs
+        working-directory: examples/vite-react
+        run: |
+          node ../../scripts/hmr-smoke.mjs --url http://127.0.0.1:5180/ --css src/app.css \
+            --expect md:space-y-8 --edit src/App.styles.ts --new-file src/HmrProbe.ts \
+            -- node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5180 --strictPort
+
       # The negative: with the plugin removed the build still succeeds and the page
       # renders the right class attributes with no styles behind them, so the gate has
       # to be what goes red. A green run here would mean the gate proves nothing.
@@ -437,3 +458,18 @@ jobs:
           rm -rf .next
           npx next build --webpack
           node verify.mjs
+
+      # A build scans the source once; `next dev` has to keep the stylesheet in step with
+      # every save. Each bundler gets there its own way — what it watches, and when it hands
+      # PostCSS the stylesheet again — so both run, on both majors: the major's default
+      # first, Turbopack on 16 and webpack on 15, then the other one.
+      - name: The stylesheet follows every save while next dev runs
+        run: |
+          cd /tmp/next-smoke
+          probe() {
+            node "$GITHUB_WORKSPACE/scripts/hmr-smoke.mjs" --url http://127.0.0.1:3100/ \
+              --expect md:p-10 --edit app/page.tsx --new-file app/hmr-probe.tsx \
+              -- node node_modules/next/dist/bin/next dev "$@" --hostname 127.0.0.1 --port 3100
+          }
+          probe
+          if [ "${{ matrix.next }}" = 16 ]; then probe --webpack; else probe --turbopack; fi
