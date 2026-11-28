@@ -35,6 +35,14 @@ describe("sidecar", () => {
     expect((await sidecar.refresh(["md:flex", "lg:grid"])).changed).toBe(true);
   });
 
+  it("marks an app that configures what renders, and rewrites when that changes", async () => {
+    const sidecar = createSidecar(dir);
+    await sidecar.refresh(["md:flex"]);
+    expect((await sidecar.refresh(["md:flex"], { configures: true })).changed).toBe(true);
+    expect(await readFile(sidecar.path, "utf8")).toContain("--tailess-configure:1");
+    expect((await sidecar.refresh(["md:flex"], { configures: true })).changed).toBe(false);
+  });
+
   it("rewrites when the file disappeared behind our back", async () => {
     // `vite --force` and clean scripts wipe the cache directory.
     const sidecar = createSidecar(dir);

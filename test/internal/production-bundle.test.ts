@@ -95,8 +95,9 @@ describe("the browser bundle", () => {
     const { initial, all } = await bundleFor("production");
     expect(initial).not.toContain("No CSS rule for");
     expect(all).toContain("No CSS rule for");
-    // The chunk itself: 1,654 characters (971 gzipped) when it moved out.
-    expect(all.length - initial.length).toBeLessThan(2_000);
+    // The chunk itself: 1,654 characters (971 gzipped) when it moved out, 2,264 (1,262)
+    // once it also said when the configure() the build saw never ran in the browser.
+    expect(all.length - initial.length).toBeLessThan(2_500);
   });
 
   it("stays within its size budget", async () => {
@@ -255,12 +256,19 @@ describe("the browser bundle", () => {
     // check itself is a chunk of its own, measured apart by the test above. Inline it was
     // +1,290 (+574 gzipped), a fifth of `ss` + `cn`, for code no production page runs.
     //
+    // Raised to 16,750 for the check that the browser ran the `configure()` the build saw:
+    // 16,407 -> 16,506 chars (6,890 gzipped). Called only in a root layout, it ran on the
+    // server alone; the browser merged with the defaults, and React's hydration error was
+    // all anyone saw of it. +62 in `ss` + `cn`, the `configured()` reader the lazy chunk
+    // is handed, and +37 in `configure` itself, which records that it set a merge or keys.
+    // The check and its message are in the lazy chunk.
+    //
     // Note what this number is and isn't: every module here is side-effect free, so it
     // is the cost of importing *everything*. A consumer using only `ss` and `cn` loads
-    // 6,223 chars (2,929 gzipped), which is the number worth watching, since it is what
-    // most projects actually pay; `variants` on top costs 4,808 (11,031). Measured with the
+    // 6,285 chars (2,952 gzipped), which is the number worth watching, since it is what
+    // most projects actually pay; `variants` on top costs 4,808 (11,093). Measured with the
     // same esbuild settings as `bundleFor`, over `export { ss, cn } from "src/index.ts"`.
-    expect(code.length).toBeLessThan(16_500);
+    expect(code.length).toBeLessThan(16_750);
   });
 
   it("pulls in no Node builtins", async () => {

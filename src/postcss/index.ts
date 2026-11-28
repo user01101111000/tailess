@@ -8,6 +8,7 @@ import { readOptions } from "../integration/options.js";
 import { type DiagnosticMode, reportDiagnostics, reportEmptyScan } from "../integration/report.js";
 import { createSidecar, importSpecifier } from "../integration/sidecar.js";
 import { collectTheme, themeDiagnostics } from "../integration/theme.js";
+import { configureProperty } from "../internal/marker.js";
 
 /**
  * Options for the tailess PostCSS plugin.
@@ -270,7 +271,7 @@ const tailessPostcss = Object.assign(
           return;
         }
 
-        const { classes, files, roots, extensions, diagnostics, keys } = await collect({
+        const { classes, files, roots, extensions, diagnostics, keys, configures } = await collect({
           roots: options.content?.length ? options.content : [process.cwd()],
           ignore: options.ignore,
           extensions: options.extensions,
@@ -308,7 +309,7 @@ const tailessPostcss = Object.assign(
 
         if (specifier !== null) {
           try {
-            await sidecar.refresh(classes);
+            await sidecar.refresh(classes, { configures });
             inject(root, [helpers.postcss.atRule({ name: "import", params: `"${specifier}"` })]);
           } catch {
             inline = true;
@@ -318,6 +319,9 @@ const tailessPostcss = Object.assign(
         if (inline) {
           const marker = helpers.postcss.rule({ selector: ":root" });
           marker.append(helpers.postcss.decl({ prop: "--tailess", value: "1" }));
+          if (configures) {
+            marker.append(helpers.postcss.decl({ prop: configureProperty, value: "1" }));
+          }
           inject(root, [
             marker,
             ...sourceLiterals(classes).map((chunk) =>

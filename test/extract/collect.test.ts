@@ -356,6 +356,32 @@ describe("keys the project declares", () => {
   });
 });
 
+describe("whether the app configures what renders", () => {
+  const call = (settings: string) =>
+    [`import { configure } from "tailess";`, `configure(${settings});`].join("\n");
+
+  it("is true when an app file sets keys or a merge", async () => {
+    await writeFile(join(dir, "tailess.setup.ts"), call(`{ keys: ["3xl"] }`));
+    expect((await collect({ roots: [dir] })).configures).toBe(true);
+  });
+
+  it("leaves out tests, stories and test setup, which never run in the app", async () => {
+    // A test that configures a merge to assert on it says nothing about the app's pages.
+    const merge = call("{ merge: (classes) => classes }");
+    await mkdir(join(dir, "__tests__"), { recursive: true });
+    await writeFile(join(dir, "Button.test.tsx"), merge);
+    await writeFile(join(dir, "Button.stories.tsx"), merge);
+    await writeFile(join(dir, "vitest.setup.ts"), merge);
+    await writeFile(join(dir, "__tests__", "merge.ts"), merge);
+    expect((await collect({ roots: [dir] })).configures).toBe(false);
+  });
+
+  it("is false for onWarn alone, which no render depends on", async () => {
+    await writeFile(join(dir, "dev.ts"), call("{ onWarn: () => {} }"));
+    expect((await collect({ roots: [dir] })).configures).toBe(false);
+  });
+});
+
 describe("the per-file cache", () => {
   it("rereads a same-size edit that kept its mtime", async () => {
     // NTFS left most back-to-back rewrites with the same mtime, and FAT's is 2 s: a

@@ -169,7 +169,7 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
     keys: string[];
   }> {
     const scanned = roots();
-    const { classes, files, diagnostics, keys } = await collect({
+    const { classes, files, diagnostics, keys, configures } = await collect({
       roots: scanned,
       ignore: options.ignore,
       extensions: options.extensions,
@@ -186,7 +186,7 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
     }
 
     try {
-      const { css, changed } = await sidecar.refresh(classes);
+      const { css, changed } = await sidecar.refresh(classes, { configures });
       return { files, css, changed, wrote: true, keys };
     } catch (error) {
       if (!warnedAboutSidecar) {
@@ -198,7 +198,13 @@ function tailess(given: TailessViteOptions = {}): TailessVitePlugin {
           error,
         );
       }
-      return { files, css: buildPrelude(classes), changed: false, wrote: false, keys };
+      return {
+        files,
+        css: buildPrelude(classes, { configures }),
+        changed: false,
+        wrote: false,
+        keys,
+      };
     }
   }
 

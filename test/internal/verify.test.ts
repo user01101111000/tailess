@@ -163,7 +163,12 @@ describe("the check that each class on the page has a rule", () => {
   it("starts once the marker shows the integration is wired", async () => {
     const watch = await start("1", true);
     expect(watch).toHaveBeenCalledOnce();
-    expect(watch).toHaveBeenCalledWith("--tailess", expect.any(Function), expect.any(Function));
+    expect(watch).toHaveBeenCalledWith(
+      "--tailess",
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
     expect(warn).not.toHaveBeenCalled();
   });
 

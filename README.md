@@ -1028,6 +1028,20 @@ import "./tailess.setup";
 static pages without calling its `register()`, so a static page would be built with the
 defaults.
 
+Miss the browser side and, in development, the browser says so. The build marks an app
+that calls `configure()` with a merge or keys, and a page where that call never ran
+prints:
+
+```txt
+[tailess] This project calls configure() with a merge or keys, but it has not run in this
+browser, so ss() and cn() here merge with the defaults and do not know your keys. …
+```
+
+The scanner reads the call off `configure({ … })` itself, imported from `"tailess"`. A
+call with only `onWarn`, and one in a test, a story or a test setup file, does not count,
+since neither is the app's own. The check starts once tailess builds a variant class in
+the browser.
+
 ### Keys your own CSS adds
 
 The built-in keys are a closed union on purpose — that is what makes a typo a compile

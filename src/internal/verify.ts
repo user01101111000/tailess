@@ -1,6 +1,6 @@
 import { isDev } from "./env.js";
 import { markerProperty } from "./marker.js";
-import { firstTime, warn } from "./settings.js";
+import { configured, firstTime, warn } from "./settings.js";
 
 let started = false;
 
@@ -45,7 +45,7 @@ export function verifyIntegration(): void {
       // bundle never requests. `CSS.escape` is what it matches a class to a rule with.
       if (typeof CSS !== "undefined") {
         import("./rules.js").then(
-          (rules) => rules.watch(markerProperty, warn, firstTime),
+          (rules) => rules.watch(markerProperty, warn, firstTime, configured),
           () => {},
         );
       }

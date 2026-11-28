@@ -8,3 +8,11 @@
  * the plugin and CLI bundles then emitted as a chunk nothing ever loads.
  */
 export const markerProperty = "--tailess";
+
+/**
+ * Set beside the marker when the build saw the project call `configure()` with a merge or
+ * keys — see `configuresRender`. A browser where that call never ran renders with the
+ * defaults instead, and `rules.ts` says so. Derived from the marker's name there, so the
+ * lazily loaded check needs no import to find it.
+ */
+export const configureProperty = `${markerProperty}-configure`;

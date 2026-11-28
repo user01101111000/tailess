@@ -80,4 +80,14 @@ describe("buildPrelude", () => {
   it("emits the marker plus a @source directive", () => {
     expect(buildPrelude(["md:flex"])).toBe(`${markerRule}\n@source inline("md:flex");\n`);
   });
+
+  it("marks an app that configures what renders, beside the marker", () => {
+    // The browser compares this with whether its own configure() ran — see rules.ts.
+    expect(buildPrelude(["md:flex"], { configures: true })).toBe(
+      ':root{--tailess:1;--tailess-configure:1}\n@source inline("md:flex");\n',
+    );
+    expect(buildPrelude(["md:flex"], { configures: false })).toBe(
+      `${markerRule}\n@source inline("md:flex");\n`,
+    );
+  });
 });

@@ -1,4 +1,4 @@
-import { markerProperty } from "../internal/marker.js";
+import { configureProperty, markerProperty } from "../internal/marker.js";
 
 /**
  * Candidates per `@source inline(...)` directive. A single directive would work
@@ -87,12 +87,24 @@ export function afterStatements(css: string): number {
   }
 }
 
+/** What the build knows about the project that the browser should, beyond its classes. */
+export interface PreludeOptions {
+  /**
+   * The app calls `configure()` with a merge or keys — `collect().configures`. Marked
+   * beside the marker, so a browser where that call never ran can say so rather than
+   * render with the defaults.
+   */
+  configures?: boolean | undefined;
+}
+
 /**
  * Build the CSS to prepend to a Tailwind stylesheet: the marker rule plus a
  * `@source inline(...)` directive for every class tailess builds at runtime.
  */
-export function buildPrelude(classes: readonly string[]): string {
-  let css = `${markerRule}\n`;
+export function buildPrelude(classes: readonly string[], options: PreludeOptions = {}): string {
+  let css = options.configures
+    ? `:root{${markerProperty}:1;${configureProperty}:1}\n`
+    : `${markerRule}\n`;
   for (const literal of sourceLiterals(classes)) css += `@source inline(${literal});\n`;
   return css;
 }

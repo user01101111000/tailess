@@ -18,6 +18,7 @@
 
 type Warn = (message: string) => void;
 type FirstTime = (seen: Set<string>, key: string) => boolean;
+type Configured = () => boolean;
 
 /**
  * How long a class has to be on the page without a rule before it is reported. A save
@@ -93,8 +94,32 @@ function readSheets(marker: string): Set<string>[] | undefined {
 /**
  * Check the page now and whenever it changes, and warn — once per class — about each
  * variant class that has been on it without a rule for {@link settle} milliseconds.
+ *
+ * And once, first: whether the `configure()` the build saw ran here too. The build marks
+ * an app that calls it with a merge or keys beside the marker (`marker.ts`); this runs
+ * after the page has loaded and rendered, so a call that has not run by now did not run
+ * before the render it was for. Called only on the server — a root layout alone — it
+ * leaves this side merging with the defaults and blind to the keys, and React's
+ * hydration error is all anyone saw of that.
  */
-export function watch(marker: string, warn: Warn, firstTime: FirstTime): void {
+export function watch(
+  marker: string,
+  warn: Warn,
+  firstTime: FirstTime,
+  configured: Configured,
+): void {
+  const wanted = getComputedStyle(document.documentElement).getPropertyValue(`${marker}-configure`);
+  if (wanted.trim() !== "" && !configured()) {
+    warn(
+      "[tailess] This project calls configure() with a merge or keys, but it has not run in " +
+        "this browser, so ss() and cn() here merge with the defaults and do not know your " +
+        "keys. Where a server rendered the page with your settings, the two differ, and " +
+        "React reports a hydration mismatch. Import the module that calls configure() in the " +
+        "browser too, before anything renders — on Next.js, from instrumentation-client.ts. " +
+        "https://github.com/user01101111000/tailess#on-nextjs-and-anywhere-else-that-renders-on-the-server",
+    );
+  }
+
   const reported = new Set<string>();
   const suspects = new Map<string, number>();
   // At most one check a second, however often the page changes.

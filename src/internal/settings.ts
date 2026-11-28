@@ -86,6 +86,22 @@ if (!store[slot]) {
 const settings = store[slot] as TailessSettings;
 
 /**
+ * The shared object, with what `configure()` records beside the settings: whether it set
+ * a merge or keys. Not a setting — `ConfigureOptions` is built from `TailessSettings` and
+ * must not offer it — and optional, so an object an older copy created reads as unset.
+ */
+type Shared = TailessSettings & { configured?: true };
+
+/**
+ * True once `configure()` has set a merge or keys in this JavaScript environment. A page
+ * rendered on a server needs that call on both sides, and the browser check in `rules.ts`
+ * reads this to tell whether its side ever made it.
+ */
+export function configured(): boolean {
+  return (settings as Shared).configured === true;
+}
+
+/**
  * What {@link configure} accepts.
  *
  * Spelled out rather than `Partial<TailessSettings>`, because under
@@ -119,6 +135,7 @@ export type ConfigureOptions = {
 export function configure(next: ConfigureOptions): void {
   if (next.merge) settings.merge = next.merge;
   if (next.keys) settings.keys = next.keys;
+  if (next.merge || next.keys) (settings as Shared).configured = true;
   if (next.onWarn) {
     settings.onWarn = next.onWarn;
     // Changing where warnings go is exactly the moment the dedup history stops meaning
