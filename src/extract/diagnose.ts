@@ -884,6 +884,65 @@ export function configuresMerge(source: string): boolean {
   return anyTailessImport.test(masked) && configureMerge.test(masked);
 }
 
+/** `configure` taken from `"tailess"` by name: `import { configure } from "tailess"`. */
+const configureImport = /\bimport\s*\{[^}]*\bconfigure\b[^}]*\}\s*from\s*["']tailess["']/;
+
+/** The binding of `import * as t from "tailess"`, through which `t.configure(` is the call. */
+const namespaceImport = /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*["']tailess["']/;
+
+/** A `configure({` call, and the object it is a member of when it is one. */
+const configureCall = /(?:([A-Za-z_$][\w$]*)\s*\.\s*)?\bconfigure\s*\(\s*\{/g;
+
+/**
+ * True when `source` calls tailess' `configure()` with a merge or keys of its own — the
+ * two settings a render depends on, so the two a browser that never ran the call renders
+ * differently. Read off the top level of the call's object: `configure({ onWarn })` next
+ * to some other object's `merge:` is not one, and a shorthand `{ merge }` is.
+ *
+ * Narrower than {@link configuresMerge} on purpose. A mistake there silences a check; a
+ * mistake here has the browser report that a call never ran, so it has to be the call —
+ * `configure` imported from `"tailess"`, not another library's — and a property name
+ * this cannot read, quoted or spread, counts as none.
+ */
+export function configuresRender(source: string): boolean {
+  const code = source.startsWith("﻿") ? source.slice(1) : source;
+  if (!code.includes("configure")) return false;
+  const masked = maskLiterals(code);
+  const named = configureImport.test(masked);
+  const namespace = namespaceImport.exec(masked)?.[1];
+  if (!named && !namespace) return false;
+  // Strings blanked too, so a quoted `"merge:"` or a brace inside one cannot pass for code.
+  const blank = maskLiterals(code, true);
+  for (const call of blank.matchAll(configureCall)) {
+    if (call[1] === undefined ? !named : call[1] !== namespace) continue;
+    let depth = 0;
+    let atKey = false;
+    for (let i = call.index + call[0].length - 1; i < blank.length; i += 1) {
+      const ch = blank[i] as string;
+      if (ch === "{" || ch === "(" || ch === "[") {
+        depth += 1;
+        atKey = depth === 1;
+      } else if (ch === "}" || ch === ")" || ch === "]") {
+        depth -= 1;
+        if (depth === 0) break;
+      } else if (depth !== 1) {
+        // Inside a value — a call, an array, a nested object.
+      } else if (ch === ",") {
+        atKey = true;
+      } else if (atKey && /[A-Za-z_$]/.test(ch)) {
+        const name = /^[A-Za-z_$][\w$]*/.exec(blank.slice(i, i + 64))?.[0] ?? "";
+        if (name === "merge" || name === "keys") return true;
+        atKey = false;
+        i += name.length - 1;
+      } else if (atKey && !/\s/.test(ch)) {
+        // A spread, a quoted or a computed key: nothing this can name.
+        atKey = false;
+      }
+    }
+  }
+  return false;
+}
+
 /** The array in `configure({ … keys: [ … ] })`. Bounded like {@link configureMerge}. */
 const configureKeys = /\bconfigure\s*\(\s*\{[\s\S]{0,2000}?\bkeys\s*:\s*\[([^\]]{0,2000})\]/g;
 

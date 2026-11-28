@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { buildPrelude } from "./inject.js";
+import { buildPrelude, type PreludeOptions } from "./inject.js";
 
 /**
  * The candidate list lives in a small generated stylesheet that your entry
@@ -23,7 +23,10 @@ export interface Sidecar {
    * Write the candidate list if it changed. Returns whether anything was written,
    * which is what callers use to decide if a dev-server update is worth pushing.
    */
-  refresh(classes: readonly string[]): Promise<{ css: string; changed: boolean }>;
+  refresh(
+    classes: readonly string[],
+    options?: PreludeOptions,
+  ): Promise<{ css: string; changed: boolean }>;
 }
 
 /**
@@ -105,8 +108,9 @@ export function createSidecar(cacheDir: string, scope?: string): Sidecar {
 
   async function refreshNow(
     classes: readonly string[],
+    options?: PreludeOptions,
   ): Promise<{ css: string; changed: boolean }> {
-    const css = buildPrelude(classes);
+    const css = buildPrelude(classes, options);
 
     // The file is the only truth. Memory of having written it is stale when the cache
     // directory was wiped (`vite --force`, a clean script) or another writer replaced it,
@@ -123,8 +127,8 @@ export function createSidecar(cacheDir: string, scope?: string): Sidecar {
 
   return {
     path,
-    refresh(classes) {
-      const result = queue.then(() => refreshNow(classes));
+    refresh(classes, options) {
+      const result = queue.then(() => refreshNow(classes, options));
       // The caller owns the error through `result`; the chain itself must stay
       // settled so one failed refresh can't reject every later one.
       queue = result.then(

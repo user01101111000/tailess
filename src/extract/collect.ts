@@ -3,7 +3,13 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { shared } from "../internal/shared.js";
-import { configuresMerge, type Diagnostic, declaredKeys, diagnose } from "./diagnose.js";
+import {
+  configuresMerge,
+  configuresRender,
+  type Diagnostic,
+  declaredKeys,
+  diagnose,
+} from "./diagnose.js";
 import { extractClasses } from "./extract.js";
 
 /** File extensions scanned by default. */
@@ -130,6 +136,13 @@ export interface CollectResult {
    */
   keys: string[];
   /**
+   * Whether the app calls `configure()` with a merge or keys — the settings a render
+   * depends on, and so the ones a server-rendered page needs in the browser too. The
+   * plugins mark it in the stylesheet, where the browser can tell whether the call ran.
+   * Tests, stories and test setup files are not the app and do not count.
+   */
+  configures: boolean;
+  /**
    * Class name to the absolute paths of the files that build it, present only when
    * `provenance` was asked for. Sorted, so a report reads the same on every run.
    */
@@ -149,11 +162,22 @@ interface CacheEntry {
   readAt: number;
   /** Whether the file configures a merge of its own; see `configuresMerge`. */
   merge: boolean;
+  /** Whether the file calls `configure()` with a merge or keys; see `configuresRender`. */
+  render: boolean;
   /** Keys the file declares; see `declaredKeys`. */
   keys: string[];
   classes: string[];
   diagnostics: Diagnostic[];
 }
+
+/**
+ * A test, a story, or a test runner's setup: code that runs under Vitest, Jest or
+ * Storybook, never in the app's own browser, so a `configure()` there is not one the
+ * app's pages were meant to run. Matched loosely — a miss here only means the browser
+ * check stays quiet, which is the safe way to be wrong.
+ */
+const outsideTheApp =
+  /(?:^|[\\/])(?:__tests__|__mocks__|tests?|e2e|\.storybook)[\\/]|\.(?:test|spec|stories)\.[cm]?[jt]sx?$|(?:^|[\\/])(?:setup-?tests|test-?setup|vitest\.setup|jest\.setup)\.[cm]?[jt]sx?$/i;
 
 /**
  * How close to the read an mtime has to be before it cannot vouch for the content.
@@ -176,7 +200,7 @@ const mtimeTick = 2000;
  * this module, so a module-level map left `clearCache()` from `tailess/build` unable to
  * reach the plugin's. The key names this entry shape.
  */
-const cache = shared("tailess.scan-cache.3", () => new Map<string, CacheEntry>());
+const cache = shared("tailess.scan-cache.4", () => new Map<string, CacheEntry>());
 
 /**
  * Scans already running, keyed by their options. A build with many stylesheets asks
@@ -304,6 +328,7 @@ async function scanFile(file: string): Promise<CacheEntry> {
     size: -1,
     readAt: 0,
     merge: false,
+    render: false,
     keys: [],
     classes: [],
     diagnostics: [],
@@ -338,6 +363,7 @@ async function scanFile(file: string): Promise<CacheEntry> {
     size,
     readAt,
     merge: configuresMerge(code),
+    render: configuresRender(code),
     keys: declaredKeys(code),
     classes: extractClasses(code),
     diagnostics: diagnose(code, file),
@@ -413,6 +439,9 @@ async function run(options: CollectOptions): Promise<CollectResult> {
     extensions: [...extensions],
     diagnostics,
     keys: [...keys].sort(),
+    configures: perFile.some(
+      (entry, index) => entry.render && !outsideTheApp.test(files[index] as string),
+    ),
     ...(sources ? { sources } : {}),
   };
 }

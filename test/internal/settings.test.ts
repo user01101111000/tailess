@@ -1,6 +1,6 @@
 import { twMerge } from "tailwind-merge";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { configure, firstTime } from "../../src/internal/settings.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configure, configured, firstTime } from "../../src/internal/settings.js";
 import { cn } from "../../src/utils/cn.js";
 import { withPrefix } from "../../src/utils/prefix.js";
 import { ss } from "../../src/utils/ss.js";
@@ -210,5 +210,33 @@ describe("resetWarnings from the public entry", () => {
     resetWarnings();
     withPrefix("has-[data-reset=a b]", "p-4");
     expect(seen).toHaveLength(2);
+  });
+});
+
+describe("configured()", () => {
+  // What the browser check reads to tell whether this side ran the app's configure(). The
+  // shared object outlives a module reload — that is its point — and the afterEach above
+  // configures a merge, so each case clears the record itself.
+  const shared = (globalThis as unknown as Record<symbol, { configured?: true } | undefined>)[
+    Symbol.for("tailess.settings.1")
+  ];
+  beforeEach(() => {
+    if (shared) delete shared.configured;
+  });
+
+  it("is false until configure() sets a merge or keys", () => {
+    expect(configured()).toBe(false);
+    configure({ onWarn: () => {} });
+    expect(configured()).toBe(false);
+  });
+
+  it("is true once configure() sets keys", () => {
+    configure({ keys: ["3xl"] });
+    expect(configured()).toBe(true);
+  });
+
+  it("is true once configure() sets a merge", () => {
+    configure({ merge: (classes) => classes });
+    expect(configured()).toBe(true);
   });
 });

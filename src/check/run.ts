@@ -637,7 +637,7 @@ function scanOptions(options: Options, roots: string[]) {
 /** `tailess emit` — write the stylesheet the plugins would have injected. */
 async function runEmit(options: Options): Promise<number> {
   const roots = rootsFor(options);
-  const { classes, files, sources } = await collect({
+  const { classes, files, sources, configures } = await collect({
     ...scanOptions(options, roots),
     provenance: options.json,
   });
@@ -694,7 +694,7 @@ async function runEmit(options: Options): Promise<number> {
     return 0;
   }
 
-  const css = buildPrelude(classes);
+  const css = buildPrelude(classes, { configures });
   const note =
     `[tailess] ${classes.length} runtime-built class${classes.length === 1 ? "" : "es"} ` +
     `from ${files.length} file${files.length === 1 ? "" : "s"}`;

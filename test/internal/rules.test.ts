@@ -64,10 +64,17 @@ function cssEscape(value: string): string {
   return out;
 }
 
-/** A page: its stylesheets, and the class list of each element on it. */
-function page(sheets: FakeSheet[], elements: string[][]) {
+/**
+ * A page: its stylesheets, the class list of each element on it, and the custom
+ * properties its root element computes — where the build marks what it saw.
+ */
+function page(sheets: FakeSheet[], elements: string[][], root: Record<string, string> = {}) {
   let notify: ((records: Array<{ type: string; addedNodes: unknown[] }>) => void) | undefined;
+  vi.stubGlobal("getComputedStyle", () => ({
+    getPropertyValue: (name: string) => root[name] ?? "",
+  }));
   vi.stubGlobal("document", {
+    documentElement: {},
     styleSheets: sheets,
     querySelectorAll: () =>
       elements
@@ -103,9 +110,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function start(): void {
-  watch("--tailess", warn as (message: string) => void, firstTime);
+/** Start the check; `configured` is whether `configure()` set a merge or keys here. */
+function start(configured = false): void {
+  watch("--tailess", warn as (message: string) => void, firstTime, () => configured);
 }
+
+describe("the configure() the build saw", () => {
+  // A root layout that calls it runs on the server alone. The browser then merges with
+  // the defaults and does not know the keys, and React's hydration error was all anyone
+  // saw of it.
+  it("is reported when it never ran in this browser, with where to call it", () => {
+    page([{ cssRules: [marker] }], [], { "--tailess-configure": "1" });
+    start(false);
+
+    expect(warn).toHaveBeenCalledOnce();
+    const message = String(warn.mock.calls[0]?.[0]);
+    expect(message).toContain("calls configure() with a merge or keys");
+    expect(message).toContain("has not run in this browser");
+    expect(message).toContain("instrumentation-client.ts");
+    expect(message).toContain("#on-nextjs-and-anywhere-else-that-renders-on-the-server");
+  });
+
+  it("is quiet once it ran here", () => {
+    page([{ cssRules: [marker] }], [], { "--tailess-configure": "1" });
+    start(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("is quiet when the build saw no such call", () => {
+    page([{ cssRules: [marker] }], []);
+    start(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
 
 describe("a class on the page with no rule", () => {
   it("is named, with the reason and where to read more", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { declaredKeys, diagnose } from "../../src/extract/diagnose.js";
+import { configuresRender, declaredKeys, diagnose } from "../../src/extract/diagnose.js";
 
 /**
  * These run on every file in a consumer's project, on every build. A false positive
@@ -912,5 +912,66 @@ describe("keys a project declares for its own CSS", () => {
 
   it("ignores a CustomKeys that does not add to tailess's types", () => {
     expect(declaredKeys(lines("// tailess", `interface CustomKeys { "3xl": true }`))).toEqual([]);
+  });
+});
+
+describe("configuresRender", () => {
+  // Whether an app calls configure() with what a render depends on. The browser reports
+  // a call like this that never ran there, so a false "yes" is a warning on working code:
+  // most of these are the cases that must read "no".
+  const withImport = (...lines: string[]) =>
+    [`import { configure } from "tailess";`, ...lines].join("\n");
+
+  it("reads a merge or keys at the top of the call's object", () => {
+    expect(configuresRender(withImport(`configure({ keys: ["3xl"] });`))).toBe(true);
+    expect(
+      configuresRender(withImport(`configure({ merge: extendTailwindMerge({ extend: {} }) });`)),
+    ).toBe(true);
+    expect(configuresRender(withImport(`configure({ onWarn, keys: ["3xl"] });`))).toBe(true);
+    expect(configuresRender(withImport(`configure({ merge });`))).toBe(true);
+  });
+
+  it("reads tailess' configure through a namespace import", () => {
+    const source = [`import * as t from "tailess";`, `t.configure({ keys: ["3xl"] });`].join("\n");
+    expect(configuresRender(source)).toBe(true);
+  });
+
+  it("is no for onWarn alone, which no render depends on", () => {
+    expect(configuresRender(withImport(`configure({ onWarn: () => {} });`))).toBe(false);
+  });
+
+  it("does not take another object's merge for the call's", () => {
+    // configuresMerge reads the first as a merge, and a mistake there only silences a check.
+    expect(
+      configuresRender(withImport(`configure({ onWarn });`, `const x = { merge: 1, keys: [] };`)),
+    ).toBe(false);
+    expect(configuresRender(withImport(`configure({ onWarn: pick({ merge: 1 }) });`))).toBe(false);
+    // A key after a comma inside a nested object is that object's, not the call's.
+    expect(
+      configuresRender(withImport(`configure({ onWarn: pick({ level: 1, merge: 1 }) });`)),
+    ).toBe(false);
+  });
+
+  it("is no for some other object's configure, though tailess' is imported", () => {
+    expect(configuresRender(withImport(`i18n.configure({ keys: ["en"] });`))).toBe(false);
+  });
+
+  it("is no for another library's configure", () => {
+    const source = [
+      `import { ss } from "tailess";`,
+      `import { configure } from "mobx";`,
+      `configure({ keys: 1 });`,
+    ].join("\n");
+    expect(configuresRender(source)).toBe(false);
+  });
+
+  it("reads no call out of a comment or a string", () => {
+    expect(configuresRender(withImport(`// configure({ keys: ["3xl"] });`))).toBe(false);
+    expect(configuresRender(withImport(`const s = "configure({ keys: [] })";`))).toBe(false);
+  });
+
+  it("counts nothing it cannot name: a spread, a quoted key", () => {
+    expect(configuresRender(withImport(`configure({ ...settings });`))).toBe(false);
+    expect(configuresRender(withImport(`configure({ "keys": ["3xl"] });`))).toBe(false);
   });
 });
